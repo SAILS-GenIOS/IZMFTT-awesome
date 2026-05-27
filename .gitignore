@@ -1,0 +1,27 @@
+# Build
+build/
+cmake-build-*/
+out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+compile_commands.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies (fetched by CMake)
+third_party/imgui/
+third_party/glfw/
+third_party/glm/
+
+# Python venv
+venv/
+__pycache__/
+.claude/
+dist/

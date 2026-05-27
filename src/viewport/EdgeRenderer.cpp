@@ -1,0 +1,191 @@
+#include "gl_common.h"
+#include "EdgeRenderer.h"
+
+#include <glm/gtc/type_ptr.hpp>
+
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Edge.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <GCPnts_TangentialDeflection.hxx>
+#include <BRep_Tool.hxx>
+#include <TopAbs_ShapeEnum.hxx>
+
+#include <cstdio>
+#include <vector>
+
+namespace materializr {
+
+static const char* s_edgeVertSource = R"(
+#version 330 core
+layout(location = 0) in vec3 a_position;
+uniform mat4 u_mvp;
+void main() {
+    gl_Position = u_mvp * vec4(a_position, 1.0);
+}
+)";
+
+static const char* s_edgeFragSource = R"(
+#version 330 core
+uniform vec3 u_color;
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(u_color, 1.0);
+}
+)";
+
+EdgeRenderer::EdgeRenderer() {}
+
+EdgeRenderer::~EdgeRenderer() {
+    clear();
+    if (m_program) glDeleteProgram(m_program);
+}
+
+bool EdgeRenderer::initialize() {
+    unsigned int vert = 0, frag = 0;
+    if (!compileShader(vert, GL_VERTEX_SHADER, s_edgeVertSource)) return false;
+    if (!compileShader(frag, GL_FRAGMENT_SHADER, s_edgeFragSource)) {
+        glDeleteShader(vert);
+        return false;
+    }
+
+    m_program = glCreateProgram();
+    glAttachShader(m_program, vert);
+    glAttachShader(m_program, frag);
+    glLinkProgram(m_program);
+    glDeleteShader(vert);
+    glDeleteShader(frag);
+
+    int success = 0;
+    glGetProgramiv(m_program, GL_LINK_STATUS, &success);
+    if (!success) {
+        char log[512];
+        glGetProgramInfoLog(m_program, 512, nullptr, log);
+        std::fprintf(stderr, "EdgeRenderer link error: %s\n", log);
+        return false;
+    }
+
+    m_locMVP = glGetUniformLocation(m_program, "u_mvp");
+    m_locColor = glGetUniformLocation(m_program, "u_color");
+
+    return true;
+}
+
+int EdgeRenderer::addShape(const TopoDS_Shape& shape, float deflection) {
+    if (shape.IsNull()) return -1;
+
+    std::vector<float> vertices;
+
+    for (TopExp_Explorer explorer(shape, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+        const TopoDS_Edge& edge = TopoDS::Edge(explorer.Current());
+
+        // Skip degenerated edges
+        if (BRep_Tool::Degenerated(edge)) continue;
+
+        try {
+            BRepAdaptor_Curve curve(edge);
+            GCPnts_TangentialDeflection discretizer(curve, deflection, 0.1);
+
+            int nbPoints = discretizer.NbPoints();
+            if (nbPoints < 2) continue;
+
+            for (int i = 1; i < nbPoints; ++i) {
+                gp_Pnt p1 = discretizer.Value(i);
+                gp_Pnt p2 = discretizer.Value(i + 1);
+
+                vertices.push_back(static_cast<float>(p1.X()));
+                vertices.push_back(static_cast<float>(p1.Y()));
+                vertices.push_back(static_cast<float>(p1.Z()));
+
+                vertices.push_back(static_cast<float>(p2.X()));
+                vertices.push_back(static_cast<float>(p2.Y()));
+                vertices.push_back(static_cast<float>(p2.Z()));
+            }
+        } catch (...) {
+            // Skip edges that cannot be discretized
+            continue;
+        }
+    }
+
+    if (vertices.empty()) return -1;
+
+    EdgeMesh mesh;
+    mesh.vertexCount = static_cast<int>(vertices.size() / 3);
+
+    glGenVertexArrays(1, &mesh.vao);
+    glGenBuffers(1, &mesh.vbo);
+
+    glBindVertexArray(mesh.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+    glBufferData(GL_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(vertices.size() * sizeof(float)),
+                 vertices.data(), GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(0);
+
+    glBindVertexArray(0);
+
+    int index = static_cast<int>(m_meshes.size());
+    m_meshes.push_back(mesh);
+    return index;
+}
+
+void EdgeRenderer::render(const glm::mat4& view, const glm::mat4& projection) {
+    if (m_meshes.empty() || !m_program) return;
+
+    glm::mat4 vp = projection * view;
+
+    glUseProgram(m_program);
+
+    // Dark gray edge color
+    glm::vec3 edgeColor(0.15f, 0.15f, 0.18f);
+    glUniform3fv(m_locColor, 1, glm::value_ptr(edgeColor));
+
+    // Enable depth test but apply a slight bias so edges render on top of faces
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_POLYGON_OFFSET_LINE);
+    glPolygonOffset(-1.0f, -1.0f);
+
+    glLineWidth(1.0f);
+
+    for (const auto& mesh : m_meshes) {
+        if (mesh.vertexCount == 0) continue;
+
+        glUniformMatrix4fv(m_locMVP, 1, GL_FALSE, glm::value_ptr(vp));
+
+        glBindVertexArray(mesh.vao);
+        glDrawArrays(GL_LINES, 0, mesh.vertexCount);
+    }
+
+    glDisable(GL_POLYGON_OFFSET_LINE);
+    glBindVertexArray(0);
+    glUseProgram(0);
+}
+
+void EdgeRenderer::clear() {
+    for (auto& mesh : m_meshes) {
+        if (mesh.vao) glDeleteVertexArrays(1, &mesh.vao);
+        if (mesh.vbo) glDeleteBuffers(1, &mesh.vbo);
+    }
+    m_meshes.clear();
+}
+
+bool EdgeRenderer::compileShader(unsigned int& shader, unsigned int type, const char* source) {
+    shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, nullptr);
+    glCompileShader(shader);
+    int success = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        char log[512];
+        glGetShaderInfoLog(shader, 512, nullptr, log);
+        std::fprintf(stderr, "EdgeRenderer shader error: %s\n", log);
+        glDeleteShader(shader);
+        shader = 0;
+        return false;
+    }
+    return true;
+}
+
+} // namespace materializr

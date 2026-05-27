@@ -1,0 +1,98 @@
+#include "AlignOp.h"
+#include <BRepBuilderAPI_Transform.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
+#include <imgui.h>
+
+AlignOp::AlignOp() = default;
+
+void AlignOp::setBodyId(int id) {
+    m_bodyId = id;
+}
+
+void AlignOp::setSourcePoint(const gp_Pnt& pt) {
+    m_source = pt;
+}
+
+void AlignOp::setTargetPoint(const gp_Pnt& pt) {
+    m_target = pt;
+}
+
+bool AlignOp::execute(Document& doc) {
+    if (m_bodyId < 0) {
+        return false;
+    }
+
+    try {
+        // Store previous shape for undo
+        m_previousShape = doc.getBody(m_bodyId);
+
+        // Compute translation vector from source to target
+        gp_Vec translation(m_source, m_target);
+
+        gp_Trsf trsf;
+        trsf.SetTranslation(translation);
+
+        BRepBuilderAPI_Transform transform(m_previousShape, trsf, true);
+        transform.Build();
+        if (!transform.IsDone()) {
+            return false;
+        }
+
+        doc.updateBody(m_bodyId, transform.Shape());
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool AlignOp::undo(Document& doc) {
+    if (m_bodyId < 0 || m_previousShape.IsNull()) {
+        return false;
+    }
+
+    try {
+        doc.updateBody(m_bodyId, m_previousShape);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+std::string AlignOp::description() const {
+    return "Align body " + std::to_string(m_bodyId) +
+           " from (" + std::to_string(m_source.X()) + ", " +
+           std::to_string(m_source.Y()) + ", " +
+           std::to_string(m_source.Z()) + ") to (" +
+           std::to_string(m_target.X()) + ", " +
+           std::to_string(m_target.Y()) + ", " +
+           std::to_string(m_target.Z()) + ")";
+}
+
+void AlignOp::renderProperties() {
+    ImGui::Text("Align");
+    ImGui::Separator();
+
+    ImGui::InputInt("Body ID", &m_bodyId);
+
+    double sx = m_source.X(), sy = m_source.Y(), sz = m_source.Z();
+    double tx = m_target.X(), ty = m_target.Y(), tz = m_target.Z();
+
+    ImGui::Text("Source Point");
+    if (ImGui::InputDouble("Src X", &sx, 0.1, 1.0, "%.3f") ||
+        ImGui::InputDouble("Src Y", &sy, 0.1, 1.0, "%.3f") ||
+        ImGui::InputDouble("Src Z", &sz, 0.1, 1.0, "%.3f")) {
+        m_source.SetCoord(sx, sy, sz);
+    }
+
+    ImGui::Text("Target Point");
+    if (ImGui::InputDouble("Tgt X", &tx, 0.1, 1.0, "%.3f") ||
+        ImGui::InputDouble("Tgt Y", &ty, 0.1, 1.0, "%.3f") ||
+        ImGui::InputDouble("Tgt Z", &tz, 0.1, 1.0, "%.3f")) {
+        m_target.SetCoord(tx, ty, tz);
+    }
+
+    // Show the computed translation
+    double dx = tx - sx, dy = ty - sy, dz = tz - sz;
+    ImGui::Text("Translation: (%.3f, %.3f, %.3f)", dx, dy, dz);
+}

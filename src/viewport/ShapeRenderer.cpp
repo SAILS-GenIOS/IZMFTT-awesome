@@ -1,0 +1,468 @@
+#include "gl_common.h"
+
+#include "ShapeRenderer.h"
+
+#include <glm/gtc/type_ptr.hpp>
+
+#include <TopoDS_Shape.hxx>
+#include <BRepMesh_IncrementalMesh.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Face.hxx>
+#include <BRep_Tool.hxx>
+#include <Poly_Triangulation.hxx>
+#include <TopLoc_Location.hxx>
+
+#include <cstdio>
+
+namespace materializr {
+
+// Embedded mesh shader sources
+static const char* s_meshVertSource = R"(
+#version 330 core
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
+
+uniform mat4 u_model;
+uniform mat4 u_view;
+uniform mat4 u_projection;
+
+out vec3 v_worldPos;
+out vec3 v_worldNormal;
+
+void main() {
+    vec4 worldPos = u_model * vec4(a_position, 1.0);
+    v_worldPos = worldPos.xyz;
+    mat3 normalMatrix = transpose(inverse(mat3(u_model)));
+    v_worldNormal = normalize(normalMatrix * a_normal);
+    gl_Position = u_projection * u_view * worldPos;
+}
+)";
+
+static const char* s_meshFragSource = R"(
+#version 330 core
+in vec3 v_worldPos;
+in vec3 v_worldNormal;
+
+uniform vec3 u_viewPos;
+uniform vec3 u_lightDir;
+uniform vec3 u_objectColor;
+uniform bool u_selected;
+
+out vec4 fragColor;
+
+void main() {
+    vec3 normal = normalize(v_worldNormal);
+    vec3 lightDir = normalize(u_lightDir);
+    vec3 viewDir = normalize(u_viewPos - v_worldPos);
+
+    float ambientStrength = 0.3;
+    vec3 ambient = ambientStrength * u_objectColor;
+
+    float diff = max(dot(normal, lightDir), 0.0);
+    vec3 diffuse = diff * u_objectColor;
+
+    float specularStrength = 0.5;
+    float shininess = 32.0;
+    vec3 halfwayDir = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(normal, halfwayDir), 0.0), shininess);
+    vec3 specular = specularStrength * spec * vec3(1.0);
+
+    vec3 result = ambient + diffuse + specular;
+
+    if (u_selected) {
+        result = mix(result, vec3(0.3, 0.5, 1.0), 0.3);
+    }
+
+    fragColor = vec4(result, 1.0);
+}
+)";
+
+// Embedded outline shader sources
+static const char* s_outlineVertSource = R"(
+#version 330 core
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
+
+uniform mat4 u_model;
+uniform mat4 u_view;
+uniform mat4 u_projection;
+uniform float u_outlineWidth;
+
+void main() {
+    vec3 expandedPos = a_position + normalize(a_normal) * u_outlineWidth;
+    gl_Position = u_projection * u_view * u_model * vec4(expandedPos, 1.0);
+}
+)";
+
+static const char* s_outlineFragSource = R"(
+#version 330 core
+uniform vec4 u_outlineColor;
+out vec4 fragColor;
+
+void main() {
+    fragColor = u_outlineColor;
+}
+)";
+
+ShapeRenderer::ShapeRenderer() {}
+
+ShapeRenderer::~ShapeRenderer()
+{
+    clear();
+    if (m_meshProgram) {
+        glDeleteProgram(m_meshProgram);
+        m_meshProgram = 0;
+    }
+    if (m_outlineProgram) {
+        glDeleteProgram(m_outlineProgram);
+        m_outlineProgram = 0;
+    }
+}
+
+bool ShapeRenderer::initialize()
+{
+    // Compile mesh shader
+    unsigned int meshVert = 0, meshFrag = 0;
+    if (!compileShader(meshVert, GL_VERTEX_SHADER, s_meshVertSource)) return false;
+    if (!compileShader(meshFrag, GL_FRAGMENT_SHADER, s_meshFragSource)) {
+        glDeleteShader(meshVert);
+        return false;
+    }
+    m_meshProgram = glCreateProgram();
+    if (!linkProgram(m_meshProgram, meshVert, meshFrag)) {
+        glDeleteShader(meshVert);
+        glDeleteShader(meshFrag);
+        return false;
+    }
+    glDeleteShader(meshVert);
+    glDeleteShader(meshFrag);
+
+    // Cache mesh uniform locations
+    m_meshLoc_model = glGetUniformLocation(m_meshProgram, "u_model");
+    m_meshLoc_view = glGetUniformLocation(m_meshProgram, "u_view");
+    m_meshLoc_projection = glGetUniformLocation(m_meshProgram, "u_projection");
+    m_meshLoc_viewPos = glGetUniformLocation(m_meshProgram, "u_viewPos");
+    m_meshLoc_lightDir = glGetUniformLocation(m_meshProgram, "u_lightDir");
+    m_meshLoc_objectColor = glGetUniformLocation(m_meshProgram, "u_objectColor");
+    m_meshLoc_selected = glGetUniformLocation(m_meshProgram, "u_selected");
+
+    // Compile outline shader
+    unsigned int outlineVert = 0, outlineFrag = 0;
+    if (!compileShader(outlineVert, GL_VERTEX_SHADER, s_outlineVertSource)) return false;
+    if (!compileShader(outlineFrag, GL_FRAGMENT_SHADER, s_outlineFragSource)) {
+        glDeleteShader(outlineVert);
+        return false;
+    }
+    m_outlineProgram = glCreateProgram();
+    if (!linkProgram(m_outlineProgram, outlineVert, outlineFrag)) {
+        glDeleteShader(outlineVert);
+        glDeleteShader(outlineFrag);
+        return false;
+    }
+    glDeleteShader(outlineVert);
+    glDeleteShader(outlineFrag);
+
+    // Cache outline uniform locations
+    m_outlineLoc_model = glGetUniformLocation(m_outlineProgram, "u_model");
+    m_outlineLoc_view = glGetUniformLocation(m_outlineProgram, "u_view");
+    m_outlineLoc_projection = glGetUniformLocation(m_outlineProgram, "u_projection");
+    m_outlineLoc_outlineColor = glGetUniformLocation(m_outlineProgram, "u_outlineColor");
+    m_outlineLoc_outlineWidth = glGetUniformLocation(m_outlineProgram, "u_outlineWidth");
+
+    return true;
+}
+
+int ShapeRenderer::tessellate(const TopoDS_Shape& shape, float deflection)
+{
+    // Perform tessellation
+    BRepMesh_IncrementalMesh meshGen(shape, deflection);
+    meshGen.Perform();
+
+    // Collect all triangle vertices (position + normal)
+    std::vector<float> vertices;
+
+    for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
+        const TopoDS_Face& face = TopoDS::Face(explorer.Current());
+        TopLoc_Location location;
+        Handle(Poly_Triangulation) triangulation = BRep_Tool::Triangulation(face, location);
+
+        if (triangulation.IsNull()) continue;
+
+        const gp_Trsf& trsf = location.Transformation();
+        bool hasTransform = !location.IsIdentity();
+
+        int nbTriangles = triangulation->NbTriangles();
+        for (int i = 1; i <= nbTriangles; ++i) {
+            const Poly_Triangle& tri = triangulation->Triangle(i);
+
+            int n1, n2, n3;
+            tri.Get(n1, n2, n3);
+
+            // Handle face orientation
+            if (face.Orientation() == TopAbs_REVERSED) {
+                std::swap(n1, n2);
+            }
+
+            // Get vertices
+            gp_Pnt p1 = triangulation->Node(n1);
+            gp_Pnt p2 = triangulation->Node(n2);
+            gp_Pnt p3 = triangulation->Node(n3);
+
+            // Apply location transformation if present
+            if (hasTransform) {
+                p1.Transform(trsf);
+                p2.Transform(trsf);
+                p3.Transform(trsf);
+            }
+
+            // Compute face normal from triangle vertices
+            gp_Vec v1(p1, p2);
+            gp_Vec v2(p1, p3);
+            gp_Vec normal = v1.Crossed(v2);
+            if (normal.Magnitude() > 1e-10) {
+                normal.Normalize();
+            } else {
+                normal = gp_Vec(0, 1, 0);
+            }
+
+            // If triangulation has per-vertex normals, use them
+            bool hasNormals = triangulation->HasNormals();
+
+            auto addVertex = [&](const gp_Pnt& p, int nodeIdx) {
+                vertices.push_back(static_cast<float>(p.X()));
+                vertices.push_back(static_cast<float>(p.Y()));
+                vertices.push_back(static_cast<float>(p.Z()));
+
+                if (hasNormals) {
+                    gp_Dir n = triangulation->Normal(nodeIdx);
+                    if (hasTransform) {
+                        n.Transform(trsf);
+                    }
+                    if (face.Orientation() == TopAbs_REVERSED) {
+                        vertices.push_back(static_cast<float>(-n.X()));
+                        vertices.push_back(static_cast<float>(-n.Y()));
+                        vertices.push_back(static_cast<float>(-n.Z()));
+                    } else {
+                        vertices.push_back(static_cast<float>(n.X()));
+                        vertices.push_back(static_cast<float>(n.Y()));
+                        vertices.push_back(static_cast<float>(n.Z()));
+                    }
+                } else {
+                    vertices.push_back(static_cast<float>(normal.X()));
+                    vertices.push_back(static_cast<float>(normal.Y()));
+                    vertices.push_back(static_cast<float>(normal.Z()));
+                }
+            };
+
+            addVertex(p1, n1);
+            addVertex(p2, n2);
+            addVertex(p3, n3);
+        }
+    }
+
+    if (vertices.empty()) {
+        return -1;
+    }
+
+    // Upload to GPU
+    MeshData mesh;
+    mesh.vertexCount = static_cast<int>(vertices.size() / 6); // 6 floats per vertex
+
+    glGenVertexArrays(1, &mesh.vao);
+    glGenBuffers(1, &mesh.vbo);
+
+    glBindVertexArray(mesh.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+    glBufferData(GL_ARRAY_BUFFER,
+                 vertices.size() * sizeof(float),
+                 vertices.data(),
+                 GL_STATIC_DRAW);
+
+    // Position attribute (location = 0)
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    // Normal attribute (location = 1)
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                          (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    glBindVertexArray(0);
+
+    int index = static_cast<int>(m_meshes.size());
+    m_meshes.push_back(mesh);
+    return index;
+}
+
+void ShapeRenderer::render(const glm::mat4& view, const glm::mat4& projection,
+                           const glm::vec3& viewPos)
+{
+    if (!m_meshProgram || m_meshes.empty()) return;
+
+    glEnable(GL_DEPTH_TEST);
+
+    // First pass: render all selected meshes with stencil write
+    // Then render the outline for selected meshes
+    // Finally render all meshes normally
+
+    // --- Outline pass for selected objects (stencil technique) ---
+    for (const auto& mesh : m_meshes) {
+        if (!mesh.selected) continue;
+        renderMeshOutline(mesh, view, projection);
+    }
+
+    // --- Main render pass ---
+    glUseProgram(m_meshProgram);
+    glUniformMatrix4fv(m_meshLoc_view, 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(m_meshLoc_projection, 1, GL_FALSE, glm::value_ptr(projection));
+    glUniform3fv(m_meshLoc_viewPos, 1, glm::value_ptr(viewPos));
+    glUniform3fv(m_meshLoc_lightDir, 1, glm::value_ptr(m_lightDir));
+
+    for (const auto& mesh : m_meshes) {
+        glUniformMatrix4fv(m_meshLoc_model, 1, GL_FALSE, glm::value_ptr(mesh.modelMatrix));
+        glUniform3fv(m_meshLoc_objectColor, 1, glm::value_ptr(mesh.color));
+        glUniform1i(m_meshLoc_selected, mesh.selected ? 1 : 0);
+
+        glBindVertexArray(mesh.vao);
+        glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
+    }
+
+    glBindVertexArray(0);
+    glUseProgram(0);
+}
+
+void ShapeRenderer::renderMeshOutline(const MeshData& mesh, const glm::mat4& view,
+                                      const glm::mat4& projection)
+{
+    // Stencil technique:
+    // 1. Draw the mesh into stencil buffer (marking pixels with 1)
+    // 2. Draw the expanded outline where stencil != 1
+
+    glEnable(GL_STENCIL_TEST);
+
+    // Step 1: Fill stencil with 1 where the mesh is drawn
+    glStencilFunc(GL_ALWAYS, 1, 0xFF);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+    glStencilMask(0xFF);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glDepthMask(GL_FALSE);
+
+    glUseProgram(m_meshProgram);
+    glUniformMatrix4fv(m_meshLoc_model, 1, GL_FALSE, glm::value_ptr(mesh.modelMatrix));
+    glUniformMatrix4fv(m_meshLoc_view, 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(m_meshLoc_projection, 1, GL_FALSE, glm::value_ptr(projection));
+
+    glBindVertexArray(mesh.vao);
+    glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
+
+    // Step 2: Draw outline where stencil != 1
+    glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
+    glStencilMask(0x00);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+
+    glUseProgram(m_outlineProgram);
+    glUniformMatrix4fv(m_outlineLoc_model, 1, GL_FALSE, glm::value_ptr(mesh.modelMatrix));
+    glUniformMatrix4fv(m_outlineLoc_view, 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(m_outlineLoc_projection, 1, GL_FALSE, glm::value_ptr(projection));
+    glUniform4fv(m_outlineLoc_outlineColor, 1, glm::value_ptr(m_outlineColor));
+    glUniform1f(m_outlineLoc_outlineWidth, m_outlineWidth);
+
+    glDrawArrays(GL_TRIANGLES, 0, mesh.vertexCount);
+    glBindVertexArray(0);
+
+    // Reset stencil state
+    glStencilMask(0xFF);
+    glStencilFunc(GL_ALWAYS, 0, 0xFF);
+    glDisable(GL_STENCIL_TEST);
+    glUseProgram(0);
+}
+
+void ShapeRenderer::setModelMatrix(int meshIndex, const glm::mat4& model)
+{
+    if (meshIndex >= 0 && meshIndex < static_cast<int>(m_meshes.size())) {
+        m_meshes[meshIndex].modelMatrix = model;
+    }
+}
+
+void ShapeRenderer::setColor(int meshIndex, glm::vec3 color)
+{
+    if (meshIndex >= 0 && meshIndex < static_cast<int>(m_meshes.size())) {
+        m_meshes[meshIndex].color = color;
+    }
+}
+
+void ShapeRenderer::setSelected(int meshIndex, bool selected)
+{
+    if (meshIndex >= 0 && meshIndex < static_cast<int>(m_meshes.size())) {
+        m_meshes[meshIndex].selected = selected;
+    }
+}
+
+void ShapeRenderer::clear()
+{
+    for (auto& mesh : m_meshes) {
+        if (mesh.vao) glDeleteVertexArrays(1, &mesh.vao);
+        if (mesh.vbo) glDeleteBuffers(1, &mesh.vbo);
+    }
+    m_meshes.clear();
+}
+
+glm::vec3 ShapeRenderer::bodyColor(int index)
+{
+    static const glm::vec3 palette[] = {
+        {0.60f, 0.65f, 0.75f},  // steel blue
+        {0.75f, 0.55f, 0.40f},  // copper
+        {0.50f, 0.70f, 0.50f},  // sage green
+        {0.70f, 0.50f, 0.65f},  // mauve
+        {0.65f, 0.65f, 0.45f},  // olive
+        {0.45f, 0.60f, 0.70f},  // teal
+        {0.72f, 0.58f, 0.55f},  // salmon
+        {0.55f, 0.55f, 0.70f},  // lavender
+    };
+    static const int paletteSize = static_cast<int>(sizeof(palette) / sizeof(palette[0]));
+
+    int i = index % paletteSize;
+    if (i < 0) i += paletteSize;
+    return palette[i];
+}
+
+bool ShapeRenderer::compileShader(unsigned int& shader, unsigned int type, const char* source)
+{
+    shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, nullptr);
+    glCompileShader(shader);
+
+    int success = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        char infoLog[512];
+        glGetShaderInfoLog(shader, 512, nullptr, infoLog);
+        std::fprintf(stderr, "ShapeRenderer shader compilation failed: %s\n", infoLog);
+        glDeleteShader(shader);
+        shader = 0;
+        return false;
+    }
+    return true;
+}
+
+bool ShapeRenderer::linkProgram(unsigned int program, unsigned int vertShader,
+                                unsigned int fragShader)
+{
+    glAttachShader(program, vertShader);
+    glAttachShader(program, fragShader);
+    glLinkProgram(program);
+
+    int success = 0;
+    glGetProgramiv(program, GL_LINK_STATUS, &success);
+    if (!success) {
+        char infoLog[512];
+        glGetProgramInfoLog(program, 512, nullptr, infoLog);
+        std::fprintf(stderr, "ShapeRenderer shader linking failed: %s\n", infoLog);
+        return false;
+    }
+    return true;
+}
+
+} // namespace materializr

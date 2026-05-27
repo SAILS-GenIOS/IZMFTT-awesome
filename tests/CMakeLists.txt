@@ -1,0 +1,70 @@
+cmake_minimum_required(VERSION 3.20)
+
+# ─── Google Test via FetchContent ────────────────────────────────────────────
+
+include(FetchContent)
+
+FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG        v1.14.0
+)
+# Prevent overriding the parent project's compiler/linker settings on Windows
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
+enable_testing()
+
+# ─── Core library (sources under test) ──────────────────────────────────────
+# OpenCASCADE and imgui_lib are already available from the parent CMakeLists.txt
+
+add_library(materializr_core STATIC
+    ${CMAKE_SOURCE_DIR}/src/core/Document.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/History.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/SelectionManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/ExtrudeOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/FilletOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/ChamferOp.cpp
+)
+
+target_include_directories(materializr_core PUBLIC
+    ${CMAKE_SOURCE_DIR}/src
+    ${OpenCASCADE_INCLUDE_DIR}
+)
+
+target_link_libraries(materializr_core PUBLIC
+    imgui_lib
+    TKernel
+    TKMath
+    TKG3d
+    TKBRep
+    TKGeomBase
+    TKTopAlgo
+    TKPrim
+    TKBool
+    TKFillet
+    TKOffset
+    TKBO
+)
+
+# ─── Test executables ────────────────────────────────────────────────────────
+
+# test_document
+add_executable(test_document test_document.cpp)
+target_link_libraries(test_document PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_document COMMAND test_document)
+
+# test_history
+add_executable(test_history test_history.cpp)
+target_link_libraries(test_history PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_history COMMAND test_history)
+
+# test_operations
+add_executable(test_operations test_operations.cpp)
+target_link_libraries(test_operations PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_operations COMMAND test_operations)
+
+# test_selection
+add_executable(test_selection test_selection.cpp)
+target_link_libraries(test_selection PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_selection COMMAND test_selection)

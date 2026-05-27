@@ -1,0 +1,198 @@
+#include "RevolveOp.h"
+#include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Common.hxx>
+#include <TopoDS.hxx>
+#include <imgui.h>
+#include <cmath>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+RevolveOp::RevolveOp() = default;
+
+void RevolveOp::setProfile(const TopoDS_Shape& profile) {
+    m_profile = profile;
+}
+
+void RevolveOp::setAxis(const gp_Ax1& axis) {
+    m_axis = axis;
+    m_axisOriginX = axis.Location().X();
+    m_axisOriginY = axis.Location().Y();
+    m_axisOriginZ = axis.Location().Z();
+    m_axisDirX = axis.Direction().X();
+    m_axisDirY = axis.Direction().Y();
+    m_axisDirZ = axis.Direction().Z();
+}
+
+void RevolveOp::setAngle(double degrees) {
+    m_angle = degrees;
+}
+
+void RevolveOp::setMode(RevolveMode mode) {
+    m_mode = mode;
+}
+
+void RevolveOp::setTargetBody(int bodyId) {
+    m_targetBodyId = bodyId;
+}
+
+bool RevolveOp::execute(Document& doc) {
+    if (m_profile.IsNull()) {
+        return false;
+    }
+
+    try {
+        // Convert degrees to radians
+        double angleRad = m_angle * M_PI / 180.0;
+
+        // Reconstruct axis from current UI values
+        gp_Pnt origin(m_axisOriginX, m_axisOriginY, m_axisOriginZ);
+        double mag = std::sqrt(m_axisDirX * m_axisDirX +
+                               m_axisDirY * m_axisDirY +
+                               m_axisDirZ * m_axisDirZ);
+        if (mag < 1e-10) {
+            return false;
+        }
+        gp_Dir dir(m_axisDirX, m_axisDirY, m_axisDirZ);
+        m_axis = gp_Ax1(origin, dir);
+
+        TopoDS_Shape revolvedShape;
+
+        if (std::abs(m_angle - 360.0) < 1e-6) {
+            // Full revolution
+            BRepPrimAPI_MakeRevol revol(m_profile, m_axis);
+            revol.Build();
+            if (!revol.IsDone()) {
+                return false;
+            }
+            revolvedShape = revol.Shape();
+        } else {
+            // Partial revolution
+            BRepPrimAPI_MakeRevol revol(m_profile, m_axis, angleRad);
+            revol.Build();
+            if (!revol.IsDone()) {
+                return false;
+            }
+            revolvedShape = revol.Shape();
+        }
+
+        // Apply boolean mode
+        switch (m_mode) {
+            case RevolveMode::NewBody: {
+                m_createdBodyId = doc.addBody(revolvedShape, "Revolve");
+                break;
+            }
+            case RevolveMode::Union: {
+                if (m_targetBodyId < 0) {
+                    return false;
+                }
+                m_previousTargetShape = doc.getBody(m_targetBodyId);
+                BRepAlgoAPI_Fuse fuse(m_previousTargetShape, revolvedShape);
+                fuse.Build();
+                if (!fuse.IsDone()) {
+                    return false;
+                }
+                doc.updateBody(m_targetBodyId, fuse.Shape());
+                m_createdBodyId = -1;
+                break;
+            }
+            case RevolveMode::Subtract: {
+                if (m_targetBodyId < 0) {
+                    return false;
+                }
+                m_previousTargetShape = doc.getBody(m_targetBodyId);
+                BRepAlgoAPI_Cut cut(m_previousTargetShape, revolvedShape);
+                cut.Build();
+                if (!cut.IsDone()) {
+                    return false;
+                }
+                doc.updateBody(m_targetBodyId, cut.Shape());
+                m_createdBodyId = -1;
+                break;
+            }
+            case RevolveMode::Intersect: {
+                if (m_targetBodyId < 0) {
+                    return false;
+                }
+                m_previousTargetShape = doc.getBody(m_targetBodyId);
+                BRepAlgoAPI_Common common(m_previousTargetShape, revolvedShape);
+                common.Build();
+                if (!common.IsDone()) {
+                    return false;
+                }
+                doc.updateBody(m_targetBodyId, common.Shape());
+                m_createdBodyId = -1;
+                break;
+            }
+        }
+
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool RevolveOp::undo(Document& doc) {
+    try {
+        if (m_mode == RevolveMode::NewBody) {
+            if (m_createdBodyId >= 0) {
+                doc.removeBody(m_createdBodyId);
+                m_createdBodyId = -1;
+            }
+        } else {
+            // Restore previous target shape for boolean operations
+            if (m_targetBodyId >= 0 && !m_previousTargetShape.IsNull()) {
+                doc.updateBody(m_targetBodyId, m_previousTargetShape);
+            }
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+std::string RevolveOp::description() const {
+    std::string desc = "Revolve " + std::to_string(static_cast<int>(m_angle)) + " deg";
+    switch (m_mode) {
+        case RevolveMode::NewBody:   desc += " (New Body)"; break;
+        case RevolveMode::Union:     desc += " (Union)"; break;
+        case RevolveMode::Subtract:  desc += " (Subtract)"; break;
+        case RevolveMode::Intersect: desc += " (Intersect)"; break;
+    }
+    return desc;
+}
+
+void RevolveOp::renderProperties() {
+    ImGui::Text("Revolve");
+    ImGui::Separator();
+
+    ImGui::InputDouble("Angle (deg)", &m_angle, 1.0, 10.0, "%.1f");
+    if (m_angle < 0.0) m_angle = 0.0;
+    if (m_angle > 360.0) m_angle = 360.0;
+
+    ImGui::Separator();
+    ImGui::Text("Axis Origin");
+    ImGui::InputDouble("Origin X", &m_axisOriginX, 0.1, 1.0, "%.3f");
+    ImGui::InputDouble("Origin Y", &m_axisOriginY, 0.1, 1.0, "%.3f");
+    ImGui::InputDouble("Origin Z", &m_axisOriginZ, 0.1, 1.0, "%.3f");
+
+    ImGui::Separator();
+    ImGui::Text("Axis Direction");
+    ImGui::InputDouble("Dir X", &m_axisDirX, 0.1, 1.0, "%.3f");
+    ImGui::InputDouble("Dir Y", &m_axisDirY, 0.1, 1.0, "%.3f");
+    ImGui::InputDouble("Dir Z", &m_axisDirZ, 0.1, 1.0, "%.3f");
+
+    ImGui::Separator();
+    const char* modeItems[] = { "New Body", "Union", "Subtract", "Intersect" };
+    int modeIndex = static_cast<int>(m_mode);
+    if (ImGui::Combo("Mode", &modeIndex, modeItems, 4)) {
+        m_mode = static_cast<RevolveMode>(modeIndex);
+    }
+
+    if (m_mode != RevolveMode::NewBody) {
+        ImGui::InputInt("Target Body ID", &m_targetBodyId);
+    }
+}

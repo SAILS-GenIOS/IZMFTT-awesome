@@ -1,0 +1,37 @@
+#pragma once
+#include "../core/Operation.h"
+#include "../core/Document.h"
+#include <TopoDS_Shape.hxx>
+#include <TopoDS_Edge.hxx>
+#include <vector>
+#include <string>
+
+class FilletOp : public Operation {
+public:
+    FilletOp();
+    ~FilletOp() override = default;
+
+    // Parameters
+    void setBody(int bodyId);
+    void setEdges(const std::vector<TopoDS_Edge>& edges);
+    void setRadius(double radius);
+
+    // Getters
+    int getBodyId() const { return m_bodyId; }
+    double getRadius() const { return m_radius; }
+    const std::vector<TopoDS_Edge>& getEdges() const { return m_edges; }
+
+    // Operation interface
+    bool execute(Document& doc) override;
+    bool undo(Document& doc) override;
+    std::string name() const override { return "Fillet"; }
+    std::string description() const override;
+    void renderProperties() override;
+    std::string typeId() const override { return "fillet"; }
+
+private:
+    int m_bodyId = -1;
+    std::vector<TopoDS_Edge> m_edges;
+    double m_radius = 1.0;
+    TopoDS_Shape m_previousShape; // for undo
+};

@@ -1,0 +1,89 @@
+#pragma once
+
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+namespace materializr {
+
+/// Arcball/orbit camera for the 3D viewport.
+class Camera {
+public:
+    Camera();
+
+    /// Rotate around target (arcball). Disables orthographic mode.
+    void orbit(float deltaX, float deltaY);
+
+    /// Rotate around target by an exact angle in radians. Disables orthographic mode.
+    /// Used by the ViewCube rotate buttons.
+    void rotateAroundTarget(float yawRadians, float pitchRadians);
+
+    /// Translate camera and target in screen-aligned plane.
+    void pan(float deltaX, float deltaY);
+
+    /// Dolly: move closer/further from target.
+    void zoom(float delta);
+
+    /// Compute the view matrix from current camera state.
+    glm::mat4 getViewMatrix() const;
+
+    /// Compute the perspective projection matrix.
+    glm::mat4 getProjectionMatrix() const;
+
+    /// Update the aspect ratio (e.g. on viewport resize).
+    void setAspect(float aspect);
+
+    /// Reset to default isometric-like view (looking at origin from (5,5,5)).
+    void reset();
+
+    /// Frame the camera to fit a bounding box in view.
+    void zoomToFit(glm::vec3 min, glm::vec3 max);
+
+    /// Get the current camera position.
+    glm::vec3 getPosition() const { return m_position; }
+
+    /// Get the current target point.
+    glm::vec3 getTarget() const { return m_target; }
+
+    /// Set the camera position.
+    void setPosition(glm::vec3 pos);
+
+    /// Set the camera target.
+    void setTarget(glm::vec3 target);
+
+    /// Set the camera up vector.
+    void setUp(glm::vec3 up);
+
+    /// Get the near clipping plane distance.
+    float getNearPlane() const { return m_nearPlane; }
+
+    /// Get the far clipping plane distance.
+    float getFarPlane() const { return m_farPlane; }
+
+    /// Toggle orthographic projection. Pan and zoom preserve this mode; orbit clears it.
+    void setOrthographic(bool ortho) { m_orthographic = ortho; }
+    bool isOrthographic() const { return m_orthographic; }
+
+    /// Half-height (world units) of the ortho view box. Width is derived from aspect.
+    void setOrthoSize(float halfHeight) { m_orthoSize = halfHeight; }
+    float getOrthoSize() const { return m_orthoSize; }
+
+private:
+    glm::vec3 m_position;
+    glm::vec3 m_target;
+    glm::vec3 m_up;
+
+    float m_fov;
+    float m_nearPlane;
+    float m_farPlane;
+    float m_aspect;
+
+    bool m_orthographic = false;
+    float m_orthoSize = 10.0f; // half-height in world units
+
+    // Orbit sensitivity
+    float m_orbitSpeed;
+    float m_panSpeed;
+    float m_zoomSpeed;
+};
+
+} // namespace materializr
