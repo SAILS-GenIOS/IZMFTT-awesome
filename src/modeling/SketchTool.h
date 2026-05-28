@@ -3,6 +3,7 @@
 #include "SketchSolver.h"
 #include <glm/glm.hpp>
 #include <functional>
+#include <set>
 
 namespace materializr {
 
@@ -18,10 +19,29 @@ public:
     void setMode(SketchToolMode mode);
     SketchToolMode getMode() const;
 
-    // Input events (in sketch 2D coordinates)
-    void onMouseDown(glm::vec2 pos);
+    // Input events (in sketch 2D coordinates). `addToSel` is the modifier state
+    // for Select-mode multi-pick (Ctrl held); ignored by other tools.
+    void onMouseDown(glm::vec2 pos, bool addToSel = false);
     void onMouseMove(glm::vec2 pos);
     void onMouseUp(glm::vec2 pos);
+
+    // --- Sketch-element selection (Select mode) ---
+    const std::set<int>& getSelectedPoints() const { return m_selectedPoints; }
+    const std::set<int>& getSelectedLines()  const { return m_selectedLines; }
+    void clearElementSelection() {
+        m_selectedPoints.clear();
+        m_selectedLines.clear();
+    }
+    bool hasElementSelection() const {
+        return !m_selectedPoints.empty() || !m_selectedLines.empty();
+    }
+    // Select every element in the active sketch (used by Ctrl+A / double-click).
+    void selectAll();
+    // Replace the current selection with the given ids.
+    void setSelection(const std::set<int>& pointIds, const std::set<int>& lineIds) {
+        m_selectedPoints = pointIds;
+        m_selectedLines = lineIds;
+    }
     void onConfirm(); // Enter/double-click to finish
     void onCancel();  // Escape to cancel
 
@@ -92,6 +112,9 @@ private:
     // Select/drag state
     int m_dragPointId = -1;
     bool m_isDragging = false;
+    bool m_lastDownAddedToSel = false; // Ctrl state for the current click
+    std::set<int> m_selectedPoints;
+    std::set<int> m_selectedLines;
 
     std::vector<int> m_splinePoints; // temp storage during spline creation
     int m_polygonSides = 6; // default hexagon

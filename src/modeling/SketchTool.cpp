@@ -38,8 +38,9 @@ SketchToolMode SketchTool::getMode() const {
     return m_mode;
 }
 
-void SketchTool::onMouseDown(glm::vec2 pos) {
+void SketchTool::onMouseDown(glm::vec2 pos, bool addToSel) {
     if (!m_sketch) return;
+    m_lastDownAddedToSel = addToSel;
 
     // Trim picks by proximity to existing geometry; snapping the cursor first
     // would pull the click toward unrelated nearby points/edges and pick wrong.
@@ -80,7 +81,9 @@ void SketchTool::onMouseDown(glm::vec2 pos) {
 void SketchTool::onMouseMove(glm::vec2 pos) {
     // Trim uses the raw cursor for picking; snapping would pull the click toward
     // unrelated nearby targets and pick the wrong element.
-    m_currentPos = (m_mode == SketchToolMode::Trim) ? pos : snap(pos);
+    glm::vec2 newPos = (m_mode == SketchToolMode::Trim) ? pos : snap(pos);
+    glm::vec2 delta  = newPos - m_currentPos;
+    m_currentPos = newPos;
 
     if (m_mode == SketchToolMode::Trim) {
         computeTrimHover(pos);
@@ -88,12 +91,26 @@ void SketchTool::onMouseMove(glm::vec2 pos) {
         m_trimHoverPoints.clear();
     }
 
-    // Drag point if active
-    if (m_isDragging && m_dragPointId >= 0 && m_sketch) {
-        m_sketch->movePoint(m_dragPointId, m_currentPos);
-        if (m_solver) {
-            m_solver->solve(*m_sketch);
+    // Drag the active selection (or the single dragged point if no broader
+    // selection exists) by the cursor delta each frame.
+    if (m_isDragging && m_sketch) {
+        std::set<int> pts = m_selectedPoints;
+        for (int lid : m_selectedLines) {
+            for (const auto& l : m_sketch->getLines()) {
+                if (l.id == lid) {
+                    pts.insert(l.startPointId);
+                    pts.insert(l.endPointId);
+                    break;
+                }
+            }
         }
+        if (pts.empty() && m_dragPointId >= 0) pts.insert(m_dragPointId);
+
+        for (int pid : pts) {
+            const SketchPoint* p = m_sketch->getPoint(pid);
+            if (p) m_sketch->movePoint(pid, p->pos + delta);
+        }
+        if (m_solver) m_solver->solve(*m_sketch);
     }
 }
 
@@ -368,13 +385,68 @@ void SketchTool::autoConstrain(int lineId) {
     }
 }
 
+void SketchTool::selectAll() {
+    if (!m_sketch) return;
+    m_selectedPoints.clear();
+    m_selectedLines.clear();
+    for (const auto& p : m_sketch->getPoints()) m_selectedPoints.insert(p.id);
+    for (const auto& l : m_sketch->getLines())  m_selectedLines.insert(l.id);
+}
+
 void SketchTool::handleSelectTool(glm::vec2 pos) {
     if (!m_sketch) return;
+
+    // Hit-test in order of priority: existing point first, then a nearby line.
     int nearPt = findCoincidentPoint(pos, -1);
-    if (nearPt >= 0) {
-        m_dragPointId = nearPt;
-        m_isDragging = true;
+
+    int nearLine = -1;
+    if (nearPt < 0) {
+        // Distance from `pos` to each line segment; pick the closest within tol.
+        float bestD = 0.0f;
+        const float tol = std::max(m_gridStep * 0.5f, 0.5f); // sketch units
+        const auto& lines = m_sketch->getLines();
+        for (const auto& l : lines) {
+            const SketchPoint* a = m_sketch->getPoint(l.startPointId);
+            const SketchPoint* b = m_sketch->getPoint(l.endPointId);
+            if (!a || !b) continue;
+            glm::vec2 ab = b->pos - a->pos;
+            float len2 = glm::dot(ab, ab);
+            if (len2 < 1e-12f) continue;
+            float t = glm::clamp(glm::dot(pos - a->pos, ab) / len2, 0.0f, 1.0f);
+            glm::vec2 proj = a->pos + ab * t;
+            float d = glm::distance(proj, pos);
+            if (d < tol && (nearLine < 0 || d < bestD)) {
+                nearLine = l.id;
+                bestD = d;
+            }
+        }
     }
+
+    // If the user clicked on something that's ALREADY part of the selection,
+    // start a drag of the whole selection in-place (don't replace the selection).
+    bool reclickedSelected = (nearPt >= 0 && m_selectedPoints.count(nearPt)) ||
+                             (nearLine >= 0 && m_selectedLines.count(nearLine));
+
+    if (!m_lastDownAddedToSel && !reclickedSelected) {
+        m_selectedPoints.clear();
+        m_selectedLines.clear();
+    }
+
+    if (nearPt >= 0) {
+        m_selectedPoints.insert(nearPt);
+        m_dragPointId = nearPt;
+        m_isDragging = true; // multi-point drag handled in onMouseMove
+    } else if (nearLine >= 0) {
+        if (m_lastDownAddedToSel) {
+            // Ctrl+click on a line: toggle.
+            if (m_selectedLines.count(nearLine)) m_selectedLines.erase(nearLine);
+            else m_selectedLines.insert(nearLine);
+        } else {
+            m_selectedLines.insert(nearLine);
+            m_isDragging = true; // dragging the line translates the whole selection
+        }
+    }
+    // Empty space + no modifier: selection already cleared above.
 }
 
 void SketchTool::handleLineTool(glm::vec2 pos) {

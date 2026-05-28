@@ -125,6 +125,38 @@ void SketchRenderer::render(const Sketch* sketch, const SketchTool* tool,
     drawPoints(sketch, vp);
     drawMidpointDots(sketch, vp);
 
+    // Selection highlight overlay: re-draw selected lines/points in a bright
+    // colour so the user can see what Mirror/Copy/Rotate will act on.
+    if (tool && tool->hasElementSelection()) {
+        const auto& selLines = tool->getSelectedLines();
+        const auto& selPoints = tool->getSelectedPoints();
+        if (!selLines.empty()) {
+            std::vector<float> lv;
+            for (const auto& l : sketch->getLines()) {
+                if (!selLines.count(l.id)) continue;
+                const SketchPoint* a = sketch->getPoint(l.startPointId);
+                const SketchPoint* b = sketch->getPoint(l.endPointId);
+                if (!a || !b) continue;
+                glm::vec3 wa = toWorld(sketch, a->pos);
+                glm::vec3 wb = toWorld(sketch, b->pos);
+                lv.push_back(wa.x); lv.push_back(wa.y); lv.push_back(wa.z);
+                lv.push_back(wb.x); lv.push_back(wb.y); lv.push_back(wb.z);
+            }
+            if (!lv.empty())
+                uploadAndDraw(lv, GL_LINES, glm::vec3(1.0f, 0.85f, 0.1f), vp, 3.5f);
+        }
+        if (!selPoints.empty()) {
+            std::vector<float> pv;
+            for (const auto& p : sketch->getPoints()) {
+                if (!selPoints.count(p.id)) continue;
+                glm::vec3 w = toWorld(sketch, p.pos);
+                pv.push_back(w.x); pv.push_back(w.y); pv.push_back(w.z);
+            }
+            if (!pv.empty())
+                uploadAndDraw(pv, GL_POINTS, glm::vec3(1.0f, 0.85f, 0.1f), vp, 8.0f);
+        }
+    }
+
     if (solver) drawConstraints(sketch, solver, vp);
     if (tool) {
         drawPreview(sketch, tool, vp);
@@ -780,6 +812,12 @@ void SketchRenderer::renderFaceGrid(const Sketch* sketch, float faceExtent, floa
 
     glm::mat4 vp = projection * view;
 
+    // Centre the grid on the host face's centroid in sketch-plane 2D — otherwise
+    // a face that doesn't straddle the sketch origin gets a grid that runs off
+    // to one side (it's still aligned to the ground grid, just not over the face).
+    glm::vec2 c{0.0f};
+    sketch->getSourceFaceCentroid(c);
+
     // Split lines into minor and every-10th major so the major lines read clearly.
     std::vector<float> minorVerts, majorVerts;
     int steps = static_cast<int>(std::floor(faceExtent / gridStep));
@@ -790,10 +828,10 @@ void SketchRenderer::renderFaceGrid(const Sketch* sketch, float faceExtent, floa
     for (int i = -steps; i <= steps; ++i) {
         float t = i * gridStep;
         std::vector<float>& dst = (i % 10 == 0) ? majorVerts : minorVerts;
-        pushLine(dst, toWorld(sketch, glm::vec2(t, -faceExtent)),
-                      toWorld(sketch, glm::vec2(t,  faceExtent)));
-        pushLine(dst, toWorld(sketch, glm::vec2(-faceExtent, t)),
-                      toWorld(sketch, glm::vec2( faceExtent, t)));
+        pushLine(dst, toWorld(sketch, glm::vec2(c.x + t, c.y - faceExtent)),
+                      toWorld(sketch, glm::vec2(c.x + t, c.y + faceExtent)));
+        pushLine(dst, toWorld(sketch, glm::vec2(c.x - faceExtent, c.y + t)),
+                      toWorld(sketch, glm::vec2(c.x + faceExtent, c.y + t)));
     }
 
     glDisable(GL_DEPTH_TEST);

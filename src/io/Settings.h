@@ -13,6 +13,7 @@ struct AppSettings {
     bool levelOrbit         = true; // turntable (level) vs free trackball orbit
     bool autosaveEnabled    = false;
     int  autosaveIntervalSec = 120;
+    bool invertCubeDrag     = false; // ViewCube drag-to-orbit direction
 };
 
 // Reads/writes AppSettings as a simple `key = value` text file. The reader is

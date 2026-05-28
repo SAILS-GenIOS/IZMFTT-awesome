@@ -87,6 +87,7 @@ AppSettings SettingsIO::load(const std::string& path) {
     readBool(kv, "levelOrbit",           s.levelOrbit);
     readBool(kv, "autosaveEnabled",      s.autosaveEnabled);
     readInt (kv, "autosaveIntervalSec",  s.autosaveIntervalSec);
+    readBool(kv, "invertCubeDrag",       s.invertCubeDrag);
 
     return s;
 }
@@ -111,6 +112,7 @@ bool SettingsIO::save(const std::string& path, const AppSettings& s) {
     ofs << "levelOrbit = "          << (s.levelOrbit ? "true" : "false") << "\n";
     ofs << "autosaveEnabled = "     << (s.autosaveEnabled ? "true" : "false") << "\n";
     ofs << "autosaveIntervalSec = " << s.autosaveIntervalSec << "\n";
+    ofs << "invertCubeDrag = "      << (s.invertCubeDrag ? "true" : "false") << "\n";
 
     return ofs.good();
 }

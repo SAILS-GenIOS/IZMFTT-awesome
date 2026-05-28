@@ -99,17 +99,21 @@ void main() {
     float dist = length(fragPos3D - u_fadeCenter);
     float fade = clamp(1.0 - dist / max(u_fadeDistance, 1e-3), 0.0, 1.0);
 
-    // Minor lines every 1/u_scale units; major lines every 10× brighter so the
-    // every-10th line reads clearly. Major also gets an alpha boost so it stays
-    // prominent where it coincides with a minor line.
-    vec4 minorColor = grid(uv, u_scale, vec4(0.34, 0.34, 0.38, 1.0));
-    vec4 majorColor = grid(uv, u_scale * 0.1, vec4(0.85, 0.87, 0.95, 1.0));
+    // Three tiers: minor (every 1), major (every 10), mega (every 100). Each
+    // blends over the lower tier by its coverage so dense grids still read
+    // clearly when several tiers coincide.
+    vec4 minorColor = grid(uv, u_scale,        vec4(0.34, 0.34, 0.38, 1.0));
+    vec4 majorColor = grid(uv, u_scale * 0.1,  vec4(0.85, 0.87, 0.95, 1.0));
+    vec4 megaColor  = grid(uv, u_scale * 0.01, vec4(1.00, 1.00, 1.00, 1.0));
 
     vec4 color = minorColor;
     if (majorColor.a > 0.0) {
-        // Blend toward the brighter major line by its coverage so it dominates.
-        color.rgb = mix(minorColor.rgb, majorColor.rgb, majorColor.a);
-        color.a = max(minorColor.a, majorColor.a);
+        color.rgb = mix(color.rgb, majorColor.rgb, majorColor.a);
+        color.a = max(color.a, majorColor.a);
+    }
+    if (megaColor.a > 0.0) {
+        color.rgb = mix(color.rgb, megaColor.rgb, megaColor.a);
+        color.a = max(color.a, megaColor.a);
     }
 
     color.a *= fade;

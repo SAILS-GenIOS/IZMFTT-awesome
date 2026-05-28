@@ -108,6 +108,7 @@ ToolAction Toolbar::renderSketchTools() {
     }
     ImGui::Separator();
 
+    if (ImGui::Button("Select / Move", ImVec2(-1, 30))) action = ToolAction::SelectSketch;
     if (ImGui::Button("Line", ImVec2(-1, 30)))      action = ToolAction::Line;
     if (ImGui::Button("Circle", ImVec2(-1, 30)))    action = ToolAction::Circle;
     if (ImGui::Button("Rectangle", ImVec2(-1, 30))) action = ToolAction::Rectangle;
@@ -115,6 +116,13 @@ ToolAction Toolbar::renderSketchTools() {
     if (ImGui::Button("Spline", ImVec2(-1, 30)))    action = ToolAction::Spline;
     if (ImGui::Button("Polygon", ImVec2(-1, 30)))   action = ToolAction::Polygon;
     if (ImGui::Button("Trim", ImVec2(-1, 30)))      action = ToolAction::Trim;
+
+    // Transforms operate on the current sketch-element selection (Select tool +
+    // click/Ctrl+click on points and lines). No-op if nothing is selected.
+    ImGui::Separator();
+    if (ImGui::Button("Copy",   ImVec2(-1, 28))) action = ToolAction::SketchCopy;
+    if (ImGui::Button("Mirror", ImVec2(-1, 28))) action = ToolAction::SketchMirror;
+    if (ImGui::Button("Rotate", ImVec2(-1, 28))) action = ToolAction::SketchRotate;
 
     if (!m_cameraOrtho) {
         ImGui::Separator();

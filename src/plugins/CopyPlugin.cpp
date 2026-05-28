@@ -13,7 +13,9 @@ REGISTER_PLUGIN(Copy, [](materializr::PluginContext& ctx) {
             if (!sel.empty() && sel[0].bodyId >= 0) {
                 auto op = std::make_unique<CopyOp>();
                 op->setSourceBodyId(sel[0].bodyId);
-                op->setOffset(2.0, 0.0, 0.0);
+                // No offset — the duplicate lands exactly on the original.
+                // Use the Move gizmo (now multi-body-aware) to reposition it.
+                op->setOffset(0.0, 0.0, 0.0);
                 if (ctx.history().pushOperation(std::move(op), ctx.document())) {
                     ctx.markMeshesDirty();
                 }

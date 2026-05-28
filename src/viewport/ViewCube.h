@@ -10,6 +10,7 @@ class Camera;
 enum class ViewCubeAction {
     None, Front, Back, Left, Right, Top, Bottom,
     FrontTopRight, FrontTopLeft, BackTopRight, BackTopLeft,
+    FrontBottomRight, FrontBottomLeft, BackBottomRight, BackBottomLeft,
     RotateLeft, RotateRight, RotateUp, RotateDown
 };
 
@@ -17,13 +18,23 @@ class ViewCube {
 public:
     ViewCube();
 
-    // Render the view cube overlay. Call inside an ImGui window.
-    // Returns the action if a face was clicked.
-    ViewCubeAction render(Camera& camera);
+    // Render the view cube overlay. Call inside an ImGui window. Returns the
+    // action if a face was clicked. `invertDrag` flips the orbit sign when the
+    // user drags the cube body (configurable in Settings).
+    ViewCubeAction render(Camera& camera, bool invertDrag = false);
+
+    // True while the mouse is over the cube/ring widget — the viewport uses
+    // this to suppress its own selection logic so cube clicks don't pass through.
+    bool wasHovered() const { return m_lastHovered; }
 
 private:
-    void drawCubeFace(const char* label, ImVec2 pos, ImVec2 size, bool hovered);
     float m_size = 120.0f;
+    bool  m_lastHovered = false;
+    // Cube drag-to-orbit state: a press on a face arms a pending snap; if the
+    // user drags before releasing, treat it as a free orbit instead and
+    // suppress the snap on release.
+    bool           m_cubeDragging = false;
+    ViewCubeAction m_pendingClick = ViewCubeAction::None;
 };
 
 } // namespace materializr

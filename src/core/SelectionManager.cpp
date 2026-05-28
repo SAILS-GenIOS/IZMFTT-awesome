@@ -131,11 +131,21 @@ bool SelectionManager::hasSelectedSketchRegions() const {
 int SelectionManager::findEntry(const SelectionEntry& entry) const {
     for (int i = 0; i < static_cast<int>(m_selection.size()); ++i) {
         const auto& e = m_selection[i];
-        if (e.type == entry.type && e.bodyId == entry.bodyId &&
-            e.subShapeIndex == entry.subShapeIndex &&
-            e.sketchId == entry.sketchId) {
-            return i;
+        if (e.type != entry.type || e.bodyId != entry.bodyId ||
+            e.subShapeIndex != entry.subShapeIndex ||
+            e.sketchId != entry.sketchId) {
+            continue;
         }
+        // Edge picks share subShapeIndex (-1) on the same body — and so would
+        // any future selection type that doesn't carry a sub-shape index — so
+        // also disambiguate by shape identity when both shapes are present.
+        // Otherwise Ctrl+clicking a second edge on the same body would look
+        // "already selected" and silently get dropped.
+        if (!e.shape.IsNull() && !entry.shape.IsNull() &&
+            !e.shape.IsSame(entry.shape)) {
+            continue;
+        }
+        return i;
     }
     return -1;
 }

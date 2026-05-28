@@ -23,6 +23,7 @@ class ViewCube;
 class Picker;
 class Gizmo;
 class SelectionHighlight;
+class BoxSelect;
 class Toolbar;
 class HistoryPanel;
 class ItemsPanel;
@@ -134,6 +135,7 @@ private:
     std::unique_ptr<Picker> m_picker;
     std::unique_ptr<Gizmo> m_gizmo;
     std::unique_ptr<SelectionHighlight> m_selectionHighlight;
+    std::unique_ptr<BoxSelect> m_boxSelect;
     std::unique_ptr<Document> m_document;
     std::unique_ptr<History> m_history;
     std::unique_ptr<SelectionManager> m_selection;
@@ -151,6 +153,19 @@ private:
 
     // Sketch
     std::shared_ptr<Sketch> m_activeSketch;
+    // Snapshot taken at left-mouse-down in Select mode so a point/line drag
+    // (which only moves positions, no structural change) can be committed to
+    // history on mouse-up.
+    std::shared_ptr<Sketch> m_sketchDragBefore;
+
+    // Interactive sketch-rotate state: while active, mouse movement around
+    // m_sketchRotateCenter rotates the affected points from their original
+    // positions; left-click commits, Esc cancels.
+    bool m_sketchRotating = false;
+    std::shared_ptr<Sketch> m_sketchRotateBefore;
+    glm::vec2 m_sketchRotateCenter{0.0f};
+    glm::vec2 m_sketchRotateAnchor{0.0f};
+    std::vector<std::pair<int, glm::vec2>> m_sketchRotateOriginals; // (pointId, origPos)
     std::unique_ptr<SketchSolver> m_sketchSolver;
     std::unique_ptr<SketchTool> m_sketchTool;
     bool m_inSketchMode = false;
@@ -195,6 +210,9 @@ private:
     bool m_autosaveEnabled = false;
     float m_autosaveIntervalSec = 120.0f;
     double m_lastAutosaveTime = 0.0;
+
+    // Invert the cube-drag → orbit direction (Settings).
+    bool m_invertCubeDrag = false;
     // Each entry: a separate region operation to perform on commit
     struct PushPullTarget {
         int sketchId;
@@ -213,8 +231,11 @@ private:
 
     // Gizmo drag state for history commit
     bool m_gizmoDragging = false;
-    int m_gizmoDragBodyId = -1;
-    TopoDS_Shape m_gizmoDragOriginalShape;
+    int m_gizmoDragBodyId = -1;            // primary (for Rotate/Scale + readouts)
+    TopoDS_Shape m_gizmoDragOriginalShape; // primary's original
+    // For multi-body Move: all selected bodies' originals captured at drag start.
+    // (Rotate/Scale still operate on the primary body for now.)
+    std::vector<std::pair<int, TopoDS_Shape>> m_gizmoDragOriginals;
     // Accumulated delta from drag start (translate only). Used so snap-to-grid
     // can snap the absolute position rather than each per-frame increment.
     glm::vec3 m_gizmoTotalDelta{0.0f};

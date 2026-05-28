@@ -12,6 +12,7 @@
 #include "viewport/Picker.h"
 #include "viewport/Gizmo.h"
 #include "viewport/SelectionHighlight.h"
+#include "viewport/BoxSelect.h"
 #include "viewport/EdgeRenderer.h"
 #include "viewport/PlaneRenderer.h"
 #include "viewport/BackgroundRenderer.h"
@@ -102,6 +103,7 @@ Application::Application() {
     m_picker = std::make_unique<Picker>();
     m_gizmo = std::make_unique<Gizmo>();
     m_selectionHighlight = std::make_unique<SelectionHighlight>();
+    m_boxSelect = std::make_unique<BoxSelect>();
     m_statusBar = std::make_unique<StatusBar>();
     m_themeManager = std::make_unique<ThemeManager>();
     m_propertiesPanel = std::make_unique<PropertiesPanel>();
@@ -285,6 +287,9 @@ void Application::initRenderers() {
     if (!m_selectionHighlight->initialize()) {
         std::fprintf(stderr, "Failed to initialize selection highlight\n");
     }
+    if (!m_boxSelect->initialize()) {
+        std::fprintf(stderr, "Failed to initialize box select\n");
+    }
     if (!m_gizmo->initialize()) {
         std::fprintf(stderr, "Failed to initialize gizmo\n");
     }
@@ -453,6 +458,7 @@ void Application::loadAppSettings() {
     m_viewport->getCamera().setLevelOrbit(s.levelOrbit);
     m_autosaveEnabled = s.autosaveEnabled;
     m_autosaveIntervalSec = static_cast<float>(s.autosaveIntervalSec);
+    m_invertCubeDrag = s.invertCubeDrag;
 }
 
 void Application::saveAppSettings() {
@@ -463,6 +469,7 @@ void Application::saveAppSettings() {
     s.levelOrbit = m_viewport->getCamera().isLevelOrbit();
     s.autosaveEnabled = m_autosaveEnabled;
     s.autosaveIntervalSec = static_cast<int>(m_autosaveIntervalSec);
+    s.invertCubeDrag = m_invertCubeDrag;
     SettingsIO::save(SettingsIO::defaultPath(), s);
 }
 
@@ -489,12 +496,22 @@ void Application::renderSettings() {
         auto toCombo = [](int b) { return b == 0 ? 0 : (b == 2 ? 1 : 2); };
         auto fromCombo = [](int c) { return c == 0 ? 0 : (c == 1 ? 2 : 1); };
 
+        // Trackpad preset: both orbit and pan on the left button (with Shift
+        // toggling between them). Mirrors what most laptops without a middle
+        // mouse button can reach. Editing the combos manually disables the box.
+        bool trackpad = (m_settingsOrbitButton == 0 && m_settingsPanButton == 0);
+        if (ImGui::Checkbox("Trackpad mode (left-drag = orbit, Shift+left = pan)",
+                            &trackpad)) {
+            if (trackpad) { m_settingsOrbitButton = 0; m_settingsPanButton = 0; }
+            else          { m_settingsOrbitButton = 2; m_settingsPanButton = 1; }
+        }
+
         int orbitC = toCombo(m_settingsOrbitButton);
         if (ImGui::Combo("Orbit", &orbitC, buttons, 3)) m_settingsOrbitButton = fromCombo(orbitC);
         int panC = toCombo(m_settingsPanButton);
         if (ImGui::Combo("Pan", &panC, buttons, 3)) m_settingsPanButton = fromCombo(panC);
 
-        if (m_settingsOrbitButton == 0 || m_settingsPanButton == 0) {
+        if (!trackpad && (m_settingsOrbitButton == 0 || m_settingsPanButton == 0)) {
             ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
                 "Note: Left is also used to select; assigning it here may conflict.");
         }
@@ -507,6 +524,11 @@ void Application::renderSettings() {
         }
         ImGui::TextWrapped("On: orbiting is a level turntable. Off: free trackball "
                            "that can tumble in any direction.");
+
+        // Invert the cube-drag → orbit direction.
+        if (ImGui::Checkbox("Invert ViewCube drag direction", &m_invertCubeDrag)) {
+            changed = true;
+        }
 
         ImGui::Spacing();
         ImGui::SeparatorText("Autosave");
@@ -725,14 +747,13 @@ void Application::renderViewport() {
         glm::mat4 view = cam.getViewMatrix();
         glm::mat4 proj = cam.getProjectionMatrix();
 
-        // Grid: on a from-scratch (no-face) sketch, lay the world grid on the
-        // sketch plane so it shows face-on; otherwise use the XZ ground plane.
-        // Face-based sketches get their own face grid (drawn below) instead.
+        // Grid: in any sketch mode (whether on a face or from scratch), lay the
+        // infinite world grid on the sketch plane so it shows face-on and any
+        // nearby face can be referenced. Outside sketch mode, use the XZ ground.
         {
             Grid::Plane gp; // defaults to the XZ ground
-            bool baseSketch = m_inSketchMode && m_activeSketch &&
-                              m_activeSketch->getSourceFace().IsNull();
-            if (baseSketch) {
+            bool sketching = m_inSketchMode && m_activeSketch;
+            if (sketching) {
                 const gp_Ax3& ax = m_activeSketch->getPlane().Position();
                 auto v3 = [](const gp_Dir& d){ return glm::vec3(d.X(), d.Y(), d.Z()); };
                 gp.origin = glm::vec3(ax.Location().X(), ax.Location().Y(), ax.Location().Z());
@@ -788,19 +809,11 @@ void Application::renderViewport() {
             }
         }
         if (m_inSketchMode && m_activeSketch) {
-            // Keep the tool's snap step in sync with the user-chosen grid
+            // Keep the tool's snap step in sync with the user-chosen grid. The
+            // grid itself is the infinite world grid above (now aligned to the
+            // sketch plane), so face sketches no longer need a separate per-face
+            // grid — drawing across to neighbouring faces just works.
             m_sketchTool->setGridStep(m_sketchGridStep);
-            // Face-based sketches get a face-local measurement grid bounded to the
-            // host face. From-scratch (no-face) sketches instead use the world grid
-            // laid on the sketch plane (set up where m_grid is rendered above), so
-            // we only draw the face grid here when there is a source face.
-            if (!m_activeSketch->getSourceFace().IsNull()) {
-                float extent = std::max(20.0f, m_sketchGridStep * 40.0f);
-                m_sketchRenderer->renderFaceGrid(m_activeSketch.get(),
-                                                 extent,
-                                                 m_sketchGridStep,
-                                                 view, proj);
-            }
             m_sketchRenderer->render(m_activeSketch.get(), m_sketchTool.get(), view, proj,
                                      m_sketchSolver.get());
         }
@@ -824,6 +837,11 @@ void Application::renderViewport() {
         // Hovered region in cyan (drawn last so it's on top)
         highlightRegion(m_hoveredSketchId, m_hoveredRegionIndex,
                         glm::vec3(0.2f, 0.9f, 1.0f), 3.0f);
+
+        // Box-select rectangle (screen-space, drawn last so it's on top).
+        if (m_boxSelect && m_boxSelect->isActive()) {
+            m_boxSelect->render(contentSize.x, contentSize.y);
+        }
 
         m_viewport->unbind();
 
@@ -1008,8 +1026,15 @@ void Application::renderViewport() {
                 cam.pan(io.MouseDelta.x, io.MouseDelta.y);
             }
 
+            // Pause interactive operations while a camera button is also being
+            // dragged — otherwise the changing view matrix re-projects the same
+            // mouse motion onto a moving target each frame and the value jolts.
+            bool camDragging = ImGui::IsMouseDragging(m_orbitButton) ||
+                (m_panButton != m_orbitButton && ImGui::IsMouseDragging(m_panButton));
+
             // Interactive extrude drag: left-drag moves distance along normal
-            if (m_extruding && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            if (m_extruding && !camDragging &&
+                ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
                 glm::vec2 md(io.MouseDelta.x, io.MouseDelta.y);
                 m_extrudeDistance += projectDragOntoNormal(m_extrudeOrigin, m_extrudeNormal,
                                                            md, proj * view);
@@ -1018,12 +1043,11 @@ void Application::renderViewport() {
             }
 
             // Push/Pull face arrow: left-drag moves the distance along the face normal.
-            if (m_pushPullActive && m_pushPullHasArrow &&
+            if (m_pushPullActive && m_pushPullHasArrow && !camDragging &&
                 ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
                 glm::vec2 md(io.MouseDelta.x, io.MouseDelta.y);
-                // Half the extrude drag speed — push/pull felt too twitchy.
                 m_pushPullDistance += projectDragOntoNormal(m_pushPullOrigin, m_pushPullNormal,
-                                                            md, proj * view) * 0.5f;
+                                                            md, proj * view);
                 std::snprintf(m_pushPullInputBuf, sizeof(m_pushPullInputBuf), "%.1f", m_pushPullDistance);
                 updatePushPull();
             }
@@ -1031,7 +1055,7 @@ void Application::renderViewport() {
             // Fillet/Chamfer drag handle: left-drag sets the radius/distance to the
             // perpendicular distance from the edge to the cursor (on a plane through
             // the edge midpoint facing the camera).
-            if (m_edgeOpActive && m_edgeOpHasHandle &&
+            if (m_edgeOpActive && m_edgeOpHasHandle && !camDragging &&
                 ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
                 ImVec2 mp = ImGui::GetMousePos();
                 ImVec2 wp = ImGui::GetItemRectMin();
@@ -1085,18 +1109,26 @@ void Application::renderViewport() {
                         return (std::abs(deg - n) < 7.0f) ? n : deg; // free, snaps near 45°
                     };
 
-                    // Start drag: save original shape and reset accumulators
+                    // Start drag: save originals for every selected body (so Move
+                    // can apply to all of them) and reset accumulators.
                     if (gResult.activeAxis != GizmoAxis::None && !m_gizmoDragging) {
-                        int bodyId = m_selection->getSelection()[0].bodyId;
-                        try {
-                            m_gizmoDragOriginalShape = m_document->getBody(bodyId);
-                            m_gizmoDragBodyId = bodyId;
+                        m_gizmoDragOriginals.clear();
+                        for (const auto& sel : m_selection->getSelection()) {
+                            if (sel.type != SelectionType::Body) continue;
+                            try {
+                                m_gizmoDragOriginals.push_back(
+                                    {sel.bodyId, m_document->getBody(sel.bodyId)});
+                            } catch (...) {}
+                        }
+                        if (!m_gizmoDragOriginals.empty()) {
+                            m_gizmoDragBodyId = m_gizmoDragOriginals.front().first;
+                            m_gizmoDragOriginalShape = m_gizmoDragOriginals.front().second;
                             m_gizmoDragging = true;
                             m_gizmoTotalDelta = glm::vec3(0.0f);
                             m_gizmoTotalAngle = 0.0f;
                             m_gizmoScaleAccum = glm::vec3(0.0f);
                             m_gizmoTotalScale = glm::vec3(1.0f);
-                        } catch (...) {}
+                        }
                     }
 
                     // During drag: accumulate totals and (re)apply to the ORIGINAL
@@ -1119,8 +1151,14 @@ void Application::renderViewport() {
                                     d.x = s1(d.x); d.y = s1(d.y); d.z = s1(d.z);
                                 }
                                 gp_Trsf trsf; trsf.SetTranslation(gp_Vec(d.x, d.y, d.z));
-                                BRepBuilderAPI_Transform xf(m_gizmoDragOriginalShape, trsf, true);
-                                if (xf.IsDone()) { result = xf.Shape(); applied = true; }
+                                // Apply the same translation to every selected body,
+                                // each from its own original shape.
+                                for (auto& [id, orig] : m_gizmoDragOriginals) {
+                                    BRepBuilderAPI_Transform xf(orig, trsf, true);
+                                    if (xf.IsDone()) m_document->updateBody(id, xf.Shape());
+                                }
+                                m_meshesDirty = true;
+                                applied = false; // already handled per-body above
                             } else if (gResult.mode == GizmoMode::Rotate) {
                                 glm::vec3 ad = axisDirOf(gResult.activeAxis);
                                 m_gizmoRotAxis = ad;
@@ -1167,47 +1205,65 @@ void Application::renderViewport() {
                         gizmoConsumedInput = true;
                     }
 
-                    // End drag: commit the right TransformOp for the gizmo's mode.
+                    // End drag: commit the right TransformOp(s) for the gizmo's mode.
                     if (m_gizmoDragging && gResult.activeAxis == GizmoAxis::None && !mouseDown) {
                         try {
-                            // Restore original so the op's execute() saves it for undo.
-                            m_document->updateBody(m_gizmoDragBodyId, m_gizmoDragOriginalShape);
-                            Bnd_Box ob; BRepBndLib::Add(m_gizmoDragOriginalShape, ob);
-                            double ox1,oy1,oz1,ox2,oy2,oz2; ob.Get(ox1,oy1,oz1,ox2,oy2,oz2);
-                            gp_Pnt center((ox1+ox2)/2,(oy1+oy2)/2,(oz1+oz2)/2);
-
-                            auto op = std::make_unique<TransformOp>();
-                            op->setBodyId(m_gizmoDragBodyId);
-                            op->setCenter(center.X(), center.Y(), center.Z());
-                            bool valid = true;
                             GizmoMode gm = m_gizmo->getMode();
                             if (gm == GizmoMode::Translate) {
-                                glm::vec3 d = m_gizmoTotalDelta; // match the snapped drag
+                                // Multi-body Move: restore every body's original so
+                                // each TransformOp captures the right previousShape,
+                                // then push one Translate op per body.
+                                for (auto& [id, orig] : m_gizmoDragOriginals) {
+                                    m_document->updateBody(id, orig);
+                                }
+                                glm::vec3 d = m_gizmoTotalDelta;
                                 if (m_snapToGrid && m_sketchGridStep > 0.0f) {
                                     float step = m_sketchGridStep, thr = step * 0.4f;
                                     auto s1 = [&](float v){ float n=std::round(v/step)*step; return std::abs(v-n)<thr?n:v; };
                                     d.x = s1(d.x); d.y = s1(d.y); d.z = s1(d.z);
                                 }
-                                op->setType(TransformType::Translate);
-                                op->setTranslation(d.x, d.y, d.z);
-                                valid = glm::length(d) > 1e-4f;
-                            } else if (gm == GizmoMode::Rotate) {
-                                float ang = softSnap45(m_gizmoTotalAngle);
-                                op->setType(TransformType::Rotate);
-                                op->setRotation(m_gizmoRotAxis.x, m_gizmoRotAxis.y, m_gizmoRotAxis.z, ang);
-                                valid = std::abs(ang) > 1e-3f;
+                                if (glm::length(d) > 1e-4f) {
+                                    for (auto& [id, orig] : m_gizmoDragOriginals) {
+                                        Bnd_Box bb; BRepBndLib::Add(orig, bb);
+                                        double x0,y0,z0,x1,y1,z1; bb.Get(x0,y0,z0,x1,y1,z1);
+                                        auto op = std::make_unique<TransformOp>();
+                                        op->setBodyId(id);
+                                        op->setCenter((x0+x1)/2,(y0+y1)/2,(z0+z1)/2);
+                                        op->setType(TransformType::Translate);
+                                        op->setTranslation(d.x, d.y, d.z);
+                                        m_history->pushOperation(std::move(op), *m_document);
+                                    }
+                                }
                             } else {
-                                op->setType(TransformType::Scale);
-                                op->setScaleXYZ(m_gizmoTotalScale.x, m_gizmoTotalScale.y, m_gizmoTotalScale.z);
-                                valid = glm::length(m_gizmoTotalScale - glm::vec3(1.0f)) > 1e-3f;
+                                // Rotate/Scale: single-body path (primary only).
+                                m_document->updateBody(m_gizmoDragBodyId, m_gizmoDragOriginalShape);
+                                Bnd_Box ob; BRepBndLib::Add(m_gizmoDragOriginalShape, ob);
+                                double ox1,oy1,oz1,ox2,oy2,oz2; ob.Get(ox1,oy1,oz1,ox2,oy2,oz2);
+                                gp_Pnt center((ox1+ox2)/2,(oy1+oy2)/2,(oz1+oz2)/2);
+
+                                auto op = std::make_unique<TransformOp>();
+                                op->setBodyId(m_gizmoDragBodyId);
+                                op->setCenter(center.X(), center.Y(), center.Z());
+                                bool valid = true;
+                                if (gm == GizmoMode::Rotate) {
+                                    float ang = softSnap45(m_gizmoTotalAngle);
+                                    op->setType(TransformType::Rotate);
+                                    op->setRotation(m_gizmoRotAxis.x, m_gizmoRotAxis.y, m_gizmoRotAxis.z, ang);
+                                    valid = std::abs(ang) > 1e-3f;
+                                } else {
+                                    op->setType(TransformType::Scale);
+                                    op->setScaleXYZ(m_gizmoTotalScale.x, m_gizmoTotalScale.y, m_gizmoTotalScale.z);
+                                    valid = glm::length(m_gizmoTotalScale - glm::vec3(1.0f)) > 1e-3f;
+                                }
+                                if (valid) m_history->pushOperation(std::move(op), *m_document);
                             }
-                            if (valid) m_history->pushOperation(std::move(op), *m_document);
                             m_meshesDirty = true;
                         } catch (...) {}
 
                         m_gizmoDragging = false;
                         m_gizmoDragOriginalShape.Nullify();
                         m_gizmoDragBodyId = -1;
+                        m_gizmoDragOriginals.clear();
                     }
 
                     if (gResult.activeAxis != GizmoAxis::None) {
@@ -1215,7 +1271,7 @@ void Application::renderViewport() {
                     }
                 }
 
-                if (!gizmoConsumedInput) {
+                if (!gizmoConsumedInput && !m_viewCube->wasHovered()) {
                     auto result = m_picker->pick(localX, localY,
                         contentSize.x, contentSize.y, cam, *m_document);
 
@@ -1326,11 +1382,90 @@ void Application::renderViewport() {
                                 m_selection->select(entry);
                             }
                         } else {
-                            m_selection->clear();
+                            // Empty-space click: begin a box-select drag instead of
+                            // clearing immediately. The release handler below decides
+                            // whether to multi-select bodies (drag had area) or treat
+                            // it as a plain click and clear.
+                            bool boxEligible = !m_inSketchMode && !m_extruding &&
+                                !m_pushPullActive && !m_edgeOpActive && !m_gizmoDragging &&
+                                m_orbitButton != ImGuiMouseButton_Left &&
+                                m_panButton  != ImGuiMouseButton_Left;
+                            if (boxEligible && m_boxSelect) {
+                                ImVec2 mp = ImGui::GetMousePos();
+                                ImVec2 wp = ImGui::GetItemRectMin();
+                                m_boxSelect->begin(glm::vec2(mp.x - wp.x, mp.y - wp.y));
+                            } else if (!io.KeyCtrl) {
+                                m_selection->clear();
+                            }
                         }
                         // Open the owning fillet/chamfer in the History editor, or
                         // close that editor when clicking anything else.
                         m_historyPanel->setEditingStep(ownerStep);
+                    }
+
+                    // Box-select drag + release. Update while LEFT is held; on
+                    // release, intersect bodies' screen-space bboxes with the
+                    // rectangle and add them to selection (Ctrl preserves the
+                    // existing selection).
+                    if (m_boxSelect && m_boxSelect->isActive()) {
+                        ImVec2 mp = ImGui::GetMousePos();
+                        ImVec2 wp = ImGui::GetItemRectMin();
+                        glm::vec2 curScreen(mp.x - wp.x, mp.y - wp.y);
+                        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+                            m_boxSelect->update(curScreen);
+                        }
+                        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                            glm::vec2 mn = m_boxSelect->getMin();
+                            glm::vec2 mx = m_boxSelect->getMax();
+                            m_boxSelect->end();
+
+                            // Tiny rectangle = treat as a plain click → clear.
+                            if (glm::distance(mn, mx) < 4.0f) {
+                                if (!io.KeyCtrl) m_selection->clear();
+                            } else {
+                                if (!io.KeyCtrl) m_selection->clear();
+                                glm::mat4 vp = proj * view;
+                                for (int id : m_document->getAllBodyIds()) {
+                                    if (!m_document->isBodyVisible(id)) continue;
+                                    try {
+                                        const TopoDS_Shape& shape = m_document->getBody(id);
+                                        Bnd_Box bb; BRepBndLib::Add(shape, bb);
+                                        if (bb.IsVoid()) continue;
+                                        double x0,y0,z0,x1,y1,z1;
+                                        bb.Get(x0,y0,z0,x1,y1,z1);
+                                        // Project the 8 bbox corners into screen pixels,
+                                        // skipping any behind the camera (w<=0).
+                                        glm::vec2 bMin( FLT_MAX,  FLT_MAX);
+                                        glm::vec2 bMax(-FLT_MAX, -FLT_MAX);
+                                        bool any = false;
+                                        for (int c = 0; c < 8; ++c) {
+                                            glm::vec4 p((c & 1) ? x1 : x0,
+                                                        (c & 2) ? y1 : y0,
+                                                        (c & 4) ? z1 : z0, 1.0f);
+                                            glm::vec4 cp = vp * p;
+                                            if (cp.w <= 0.0f) continue;
+                                            glm::vec2 ndc(cp.x / cp.w, cp.y / cp.w);
+                                            glm::vec2 sp(
+                                                (ndc.x * 0.5f + 0.5f) * contentSize.x,
+                                                (1.0f - (ndc.y * 0.5f + 0.5f)) * contentSize.y);
+                                            bMin = glm::min(bMin, sp);
+                                            bMax = glm::max(bMax, sp);
+                                            any = true;
+                                        }
+                                        if (!any) continue;
+                                        // AABB overlap test against the box rect.
+                                        if (bMax.x >= mn.x && bMin.x <= mx.x &&
+                                            bMax.y >= mn.y && bMin.y <= mx.y) {
+                                            SelectionEntry e;
+                                            e.type = SelectionType::Body;
+                                            e.bodyId = id;
+                                            e.shape = shape;
+                                            m_selection->addToSelection(e);
+                                        }
+                                    } catch (...) {}
+                                }
+                            }
+                        }
                     }
 
                     // Right click on a face: context menu (only if not a pan drag)
@@ -1346,19 +1481,75 @@ void Application::renderViewport() {
                 }
             }
 
-            // Sketch mode mouse input — ray-plane intersection
-            if (m_inSketchMode && m_activeSketch) {
+            // Sketch mode mouse input — ray-plane intersection. Skipped while
+            // the camera is being dragged so the in-progress preview (e.g. the
+            // line endpoint following the cursor) doesn't jolt as the view moves.
+            if (m_inSketchMode && m_activeSketch && !camDragging) {
                 ImVec2 mousePos = ImGui::GetMousePos();
                 ImVec2 winPos = ImGui::GetItemRectMin();
                 float localX = mousePos.x - winPos.x;
                 float localY = mousePos.y - winPos.y;
                 glm::vec2 sketchCoord = screenToSketch(localX, localY, contentSize.x, contentSize.y);
 
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                    recordSketchMutation([&]{ m_sketchTool->onMouseDown(sketchCoord); });
+                // Interactive sketch-rotate takes over input while active: the
+                // cursor angle around the pivot drives the rotation; left-click
+                // commits, Esc (handled in handleShortcuts) cancels.
+                if (m_sketchRotating) {
+                    glm::vec2 v0 = m_sketchRotateAnchor - m_sketchRotateCenter;
+                    glm::vec2 v1 = sketchCoord          - m_sketchRotateCenter;
+                    if (glm::length(v0) > 1e-4f && glm::length(v1) > 1e-4f) {
+                        float ang = std::atan2(v1.y, v1.x) - std::atan2(v0.y, v0.x);
+                        float ca = std::cos(ang), sa = std::sin(ang);
+                        for (auto& [id, op] : m_sketchRotateOriginals) {
+                            glm::vec2 d = op - m_sketchRotateCenter;
+                            glm::vec2 r(d.x * ca - d.y * sa, d.x * sa + d.y * ca);
+                            m_activeSketch->movePoint(id, m_sketchRotateCenter + r);
+                        }
+                    }
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                        auto after = std::make_shared<Sketch>(*m_activeSketch);
+                        auto op = std::make_unique<SketchEditOp>(
+                            m_activeSketch, m_sketchRotateBefore, after);
+                        m_history->pushExecuted(std::move(op));
+                        m_sketchRotating = false;
+                        m_sketchRotateBefore.reset();
+                        m_sketchRotateOriginals.clear();
+                    }
+                    // Skip the normal sketch-tool input while rotating.
+                } else if (m_sketchTool->getMode() == SketchToolMode::Select &&
+                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    // Double-click in Select mode → select every element in the
+                    // sketch (saves a Ctrl+click marathon to grab everything).
+                    m_sketchTool->selectAll();
+                    m_sketchDragBefore.reset(); // not a drag
+                } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    // Select/drag mutates point positions only — no structural
+                    // change — so recordSketchMutation's signature wouldn't see
+                    // it. Snapshot manually for the drag-commit on mouse-up.
+                    if (m_sketchTool->getMode() == SketchToolMode::Select) {
+                        m_sketchDragBefore = std::make_shared<Sketch>(*m_activeSketch);
+                    }
+                    recordSketchMutation([&]{ m_sketchTool->onMouseDown(sketchCoord, io.KeyCtrl); });
                 }
                 if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                     m_sketchTool->onMouseUp(sketchCoord);
+                    if (m_sketchDragBefore) {
+                        // Compare point positions; commit a SketchEditOp if any moved.
+                        const auto& before = m_sketchDragBefore->getPoints();
+                        const auto& after  = m_activeSketch->getPoints();
+                        bool changed = (before.size() != after.size());
+                        for (size_t i = 0; !changed && i < before.size(); ++i) {
+                            if (glm::distance(before[i].pos, after[i].pos) > 1e-5f)
+                                changed = true;
+                        }
+                        if (changed) {
+                            auto after_ptr = std::make_shared<Sketch>(*m_activeSketch);
+                            auto op = std::make_unique<SketchEditOp>(
+                                m_activeSketch, m_sketchDragBefore, after_ptr);
+                            m_history->pushExecuted(std::move(op));
+                        }
+                        m_sketchDragBefore.reset();
+                    }
                 }
                 m_sketchTool->onMouseMove(sketchCoord);
             }
@@ -1366,7 +1557,7 @@ void Application::renderViewport() {
     }
 
     // ViewCube overlay
-    ViewCubeAction vcAction = m_viewCube->render(m_viewport->getCamera());
+    ViewCubeAction vcAction = m_viewCube->render(m_viewport->getCamera(), m_invertCubeDrag);
     if (vcAction != ViewCubeAction::None) {
         handleViewCubeAction(static_cast<int>(vcAction));
     }
@@ -1721,6 +1912,9 @@ void Application::handleToolAction(int action) {
             alignCameraToActiveSketch();
             break;
         }
+        case ToolAction::SelectSketch:
+            if (m_inSketchMode) m_sketchTool->setMode(SketchToolMode::Select);
+            break;
         case ToolAction::Line:
             if (m_inSketchMode) m_sketchTool->setMode(SketchToolMode::Line);
             break;
@@ -1742,6 +1936,110 @@ void Application::handleToolAction(int action) {
         case ToolAction::Trim:
             if (m_inSketchMode) m_sketchTool->setMode(SketchToolMode::Trim);
             break;
+
+        // --- Sketch element transforms (operate on the Select-mode selection) ---
+        case ToolAction::SketchCopy:
+        case ToolAction::SketchMirror:
+        case ToolAction::SketchRotate: {
+            if (!m_inSketchMode || !m_activeSketch || !m_sketchTool) break;
+
+            // Operate on the current sketch-element selection, or — if nothing
+            // is selected (the common case when the user hasn't switched into
+            // Select mode yet) — on the whole sketch.
+            std::set<int> involved;
+            std::set<int> selLines;
+            if (m_sketchTool->hasElementSelection()) {
+                involved.insert(m_sketchTool->getSelectedPoints().begin(),
+                                m_sketchTool->getSelectedPoints().end());
+                selLines = m_sketchTool->getSelectedLines();
+                for (int lid : selLines) {
+                    for (const auto& l : m_activeSketch->getLines()) {
+                        if (l.id == lid) {
+                            involved.insert(l.startPointId);
+                            involved.insert(l.endPointId);
+                            break;
+                        }
+                    }
+                }
+            } else {
+                // No selection → entire sketch.
+                for (const auto& p : m_activeSketch->getPoints()) involved.insert(p.id);
+                for (const auto& l : m_activeSketch->getLines())  selLines.insert(l.id);
+            }
+            if (involved.empty()) break;
+            // Centroid of the involved points — used as the mirror/rotate pivot
+            // so the transform happens "in place" near the selection rather than
+            // about the sketch origin.
+            glm::vec2 c{0.0f};
+            int n = 0;
+            for (int id : involved) {
+                if (auto* p = m_activeSketch->getPoint(id)) { c += p->pos; ++n; }
+            }
+            if (n > 0) c /= static_cast<float>(n);
+
+            if (a == ToolAction::SketchRotate) {
+                // Enter interactive rotate mode: spin the affected points around
+                // the centroid based on cursor angle, commit on left-click.
+                m_sketchRotating = true;
+                m_sketchRotateBefore = std::make_shared<Sketch>(*m_activeSketch);
+                m_sketchRotateCenter = c;
+                m_sketchRotateAnchor = m_sketchTool->getCurrentPos();
+                m_sketchRotateOriginals.clear();
+                for (int id : involved) {
+                    if (auto* p = m_activeSketch->getPoint(id))
+                        m_sketchRotateOriginals.push_back({id, p->pos});
+                }
+                // Don't push a history op yet; that happens on commit.
+                break;
+            }
+
+            // Copy / Mirror: create new points (transformed copies) and new
+            // lines connecting them, then SELECT the new ones and switch to
+            // Select mode so the user can immediately drag them to position.
+            auto before = std::make_shared<Sketch>(*m_activeSketch);
+            std::unordered_map<int, int> remap;
+            for (int oldId : involved) {
+                auto* p = m_activeSketch->getPoint(oldId);
+                if (!p) continue;
+                glm::vec2 np = p->pos;
+                if (a == ToolAction::SketchCopy) {
+                    // Land the duplicate exactly on the original; the user can
+                    // immediately drag the now-selected copy to place it.
+                    np = p->pos;
+                } else { // Mirror across vertical line through centroid (flips X).
+                    np = glm::vec2(2.0f * c.x - p->pos.x, p->pos.y);
+                }
+                int newId = m_activeSketch->addPoint(np);
+                remap[oldId] = newId;
+            }
+            std::set<int> newLineIds;
+            for (int lid : selLines) {
+                for (const auto& l : m_activeSketch->getLines()) {
+                    if (l.id != lid) continue;
+                    auto sIt = remap.find(l.startPointId);
+                    auto eIt = remap.find(l.endPointId);
+                    if (sIt != remap.end() && eIt != remap.end()) {
+                        int newLine = m_activeSketch->addLine(sIt->second, eIt->second);
+                        newLineIds.insert(newLine);
+                    }
+                    break;
+                }
+            }
+            // Record + select the duplicates.
+            std::set<int> newPointIds;
+            for (auto& kv : remap) newPointIds.insert(kv.second);
+            m_sketchTool->setSelection(newPointIds, newLineIds);
+            m_sketchTool->setMode(SketchToolMode::Select);
+
+            auto after = std::make_shared<Sketch>(*m_activeSketch);
+            if (before->getPoints().size() != after->getPoints().size() ||
+                before->getLines().size()  != after->getLines().size()) {
+                auto op = std::make_unique<SketchEditOp>(m_activeSketch, before, after);
+                m_history->pushExecuted(std::move(op));
+            }
+            break;
+        }
+
         case ToolAction::ResetCamera: m_viewport->getCamera().reset(); break;
 
         case ToolAction::Move: {
@@ -1840,7 +2138,16 @@ void Application::handleShortcuts() {
         loadProject();
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        if (m_mirrorPickFace) {
+        if (m_sketchRotating) {
+            // Revert the sketch to its pre-rotate state.
+            if (m_sketchRotateBefore && m_activeSketch) {
+                for (auto& [id, op] : m_sketchRotateOriginals)
+                    m_activeSketch->movePoint(id, op);
+            }
+            m_sketchRotating = false;
+            m_sketchRotateBefore.reset();
+            m_sketchRotateOriginals.clear();
+        } else if (m_mirrorPickFace) {
             m_mirrorPickFace = false; // cancel "mirror across a face" mode
         } else if (m_gizmoDragging) {
             // Revert the body to where the drag started — same idea as cancelling
@@ -1951,38 +2258,62 @@ void Application::rebuildMeshes() {
 }
 
 void Application::handleViewCubeAction(int action) {
-    // ViewCube::render() has already moved the camera. For absolute-direction
-    // actions (Front/Back/Top/Bottom/Left/Right and the corner views) we also
-    // re-frame the model so it actually appears on screen from the new angle.
-    // Rotate* actions are incremental — skip the zoom-fit there, it would yank
-    // the target around mid-rotation.
     ViewCubeAction a = static_cast<ViewCubeAction>(action);
-    switch (a) {
-        case ViewCubeAction::RotateLeft:
-        case ViewCubeAction::RotateRight:
-        case ViewCubeAction::RotateUp:
-        case ViewCubeAction::RotateDown:
-            return;
-        default:
-            break;
-    }
-
     Camera& cam = m_viewport->getCamera();
 
+    // Incremental rotations: 90° around the camera's current axes (FreeCAD-like).
+    constexpr float kRot = static_cast<float>(M_PI * 0.5);
+    switch (a) {
+        case ViewCubeAction::RotateLeft:  cam.rotateAroundTarget(-kRot, 0.0f); return;
+        case ViewCubeAction::RotateRight: cam.rotateAroundTarget( kRot, 0.0f); return;
+        case ViewCubeAction::RotateUp:    cam.rotateAroundTarget(0.0f, -kRot); return;
+        case ViewCubeAction::RotateDown:  cam.rotateAroundTarget(0.0f,  kRot); return;
+        default: break;
+    }
+
+    // Compute model bbox to centre and size the view.
     Bnd_Box bbox;
     for (int id : m_document->getAllBodyIds()) {
         if (!m_document->isBodyVisible(id)) continue;
-        try {
-            BRepBndLib::Add(m_document->getBody(id), bbox);
-        } catch (...) {}
+        try { BRepBndLib::Add(m_document->getBody(id), bbox); } catch (...) {}
     }
+    glm::vec3 cmin(-1.0f), cmax(1.0f);
     if (!bbox.IsVoid()) {
-        double xmin, ymin, zmin, xmax, ymax, zmax;
-        bbox.Get(xmin, ymin, zmin, xmax, ymax, zmax);
-        cam.zoomToFit(
-            glm::vec3(static_cast<float>(xmin), static_cast<float>(ymin), static_cast<float>(zmin)),
-            glm::vec3(static_cast<float>(xmax), static_cast<float>(ymax), static_cast<float>(zmax)));
+        double x0,y0,z0,x1,y1,z1; bbox.Get(x0,y0,z0,x1,y1,z1);
+        cmin = glm::vec3(static_cast<float>(x0), static_cast<float>(y0), static_cast<float>(z0));
+        cmax = glm::vec3(static_cast<float>(x1), static_cast<float>(y1), static_cast<float>(z1));
     }
+    glm::vec3 center = (cmin + cmax) * 0.5f;
+    float radius = glm::length(cmax - cmin) * 0.5f;
+    if (radius < 1.0f) radius = 1.0f;
+
+    // Direction the camera looks FROM (model→camera) and its up vector. World is
+    // Y-up, so Top/Bottom views need a non-Y up vector to be defined.
+    glm::vec3 dir(0.0f), up(0.0f, 1.0f, 0.0f);
+    switch (a) {
+        case ViewCubeAction::Front:  dir = { 0, 0, 1}; up = {0, 1, 0}; break;
+        case ViewCubeAction::Back:   dir = { 0, 0,-1}; up = {0, 1, 0}; break;
+        case ViewCubeAction::Right:  dir = { 1, 0, 0}; up = {0, 1, 0}; break;
+        case ViewCubeAction::Left:   dir = {-1, 0, 0}; up = {0, 1, 0}; break;
+        case ViewCubeAction::Top:    dir = { 0, 1, 0}; up = {0, 0,-1}; break;
+        case ViewCubeAction::Bottom: dir = { 0,-1, 0}; up = {0, 0, 1}; break;
+        case ViewCubeAction::FrontTopRight:    dir = { 1, 1, 1}; break;
+        case ViewCubeAction::FrontTopLeft:     dir = {-1, 1, 1}; break;
+        case ViewCubeAction::BackTopRight:     dir = { 1, 1,-1}; break;
+        case ViewCubeAction::BackTopLeft:      dir = {-1, 1,-1}; break;
+        case ViewCubeAction::FrontBottomRight: dir = { 1,-1, 1}; break;
+        case ViewCubeAction::FrontBottomLeft:  dir = {-1,-1, 1}; break;
+        case ViewCubeAction::BackBottomRight:  dir = { 1,-1,-1}; break;
+        case ViewCubeAction::BackBottomLeft:   dir = {-1,-1,-1}; break;
+        default: return;
+    }
+    dir = glm::normalize(dir);
+
+    cam.setOrthographic(false);
+    cam.setTarget(center);
+    cam.setPosition(center + dir * (radius * 3.0f)); // approx; zoomToFit refines
+    cam.setUp(up);
+    cam.zoomToFit(cmin, cmax);
 }
 
 void Application::saveProject() {
@@ -2313,7 +2644,10 @@ void Application::editSketch(int sketchId) {
 
     m_sketchTool->setSketch(m_activeSketch.get());
     m_sketchTool->setSolver(m_sketchSolver.get());
-    m_sketchTool->setMode(SketchToolMode::Line);
+    // When re-entering an existing sketch the user is much more likely to want
+    // to tweak it than draw fresh geometry; start in Select/Move mode so they
+    // can immediately click & drag points/lines.
+    m_sketchTool->setMode(SketchToolMode::Select);
     m_inSketchMode = true;
     m_toolbar->setSketchMode(true);
     m_selection->clear();
