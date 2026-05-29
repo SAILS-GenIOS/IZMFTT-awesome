@@ -85,7 +85,8 @@ void Toolbar::renderGeneralSection() {
     ImGui::Separator();
 
     if (ImGui::Button("Measure", ImVec2(-1, 30)))
-        ; // ToolAction::Measure handled elsewhere
+        ; // intentional no-op — dead code; real Measure button lives in
+          // renderNoSelectionTools / renderSketchTools.
     if (ImGui::Button("Reset Camera", ImVec2(-1, 30)))
         ; // handled via shortcut / command palette
 }
@@ -119,10 +120,14 @@ ToolAction Toolbar::renderSketchTools() {
 
     // Transforms operate on the current sketch-element selection (Select tool +
     // click/Ctrl+click on points and lines). No-op if nothing is selected.
+    // Rotate is the gizmo's ring handle (drag = 15° snap, popup for exact value),
+    // so it doesn't get its own button.
     ImGui::Separator();
     if (ImGui::Button("Copy",   ImVec2(-1, 28))) action = ToolAction::SketchCopy;
     if (ImGui::Button("Mirror", ImVec2(-1, 28))) action = ToolAction::SketchMirror;
-    if (ImGui::Button("Rotate", ImVec2(-1, 28))) action = ToolAction::SketchRotate;
+
+    ImGui::Separator();
+    if (ImGui::Button("Measure", ImVec2(-1, 28))) action = ToolAction::Measure;
 
     if (!m_cameraOrtho) {
         ImGui::Separator();
@@ -151,6 +156,11 @@ ToolAction Toolbar::renderNoSelectionTools() {
     if (ImGui::Button("Sketch on XY", ImVec2(-1, 30))) action = ToolAction::StartSketchXY;
     if (ImGui::Button("Sketch on XZ", ImVec2(-1, 30))) action = ToolAction::StartSketchXZ;
     if (ImGui::Button("Sketch on YZ", ImVec2(-1, 30))) action = ToolAction::StartSketchYZ;
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Inspect");
+    ImGui::Separator();
+    if (ImGui::Button("Measure", ImVec2(-1, 30))) action = ToolAction::Measure;
 
     // Plugin buttons: NoSelection + Always
     int mask = (1 << static_cast<int>(SelectionContext::NoSelection))

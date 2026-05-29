@@ -148,12 +148,20 @@ glm::mat4 Camera::getViewMatrix() const
 
 glm::mat4 Camera::getProjectionMatrix() const
 {
+    // Scale clip planes with the camera distance to the target so far-zoomed
+    // views of large models (e.g. a 2 m part viewed from across the room) keep
+    // showing geometry instead of getting clipped at the legacy 1000 mm far
+    // plane, while close-up sketch work still gets fine depth precision.
+    float ref = m_orthographic ? m_orthoSize
+                               : glm::length(m_position - m_target);
+    float n = std::max(m_nearPlane, ref * 0.001f);
+    float f = std::max(m_farPlane,  ref * 200.0f);
     if (m_orthographic) {
         float h = m_orthoSize;
         float w = h * m_aspect;
-        return glm::ortho(-w, w, -h, h, m_nearPlane, m_farPlane);
+        return glm::ortho(-w, w, -h, h, n, f);
     }
-    return glm::perspective(glm::radians(m_fov), m_aspect, m_nearPlane, m_farPlane);
+    return glm::perspective(glm::radians(m_fov), m_aspect, n, f);
 }
 
 void Camera::setAspect(float aspect)

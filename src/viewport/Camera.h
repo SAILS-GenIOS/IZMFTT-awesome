@@ -44,6 +44,9 @@ public:
     /// Get the current target point.
     glm::vec3 getTarget() const { return m_target; }
 
+    /// Get the current up vector.
+    glm::vec3 getUp() const { return m_up; }
+
     /// Set the camera position.
     void setPosition(glm::vec3 pos);
 

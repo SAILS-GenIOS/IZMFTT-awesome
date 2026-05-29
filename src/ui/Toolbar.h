@@ -14,7 +14,7 @@ enum class ToolAction {
     StartSketch, StartSketchXY, StartSketchXZ, StartSketchYZ,
     SketchOnFace, SelectSketch, Line, Circle, Rectangle, Arc, Spline, Polygon, Trim,
     FinishSketch, EditSketch, ExtrudeSketch, PushPull, LookAtSketch,
-    SketchCopy, SketchMirror, SketchRotate,
+    SketchCopy, SketchMirror,
     // 3D tools that still need the old dispatch path
     Extrude, Fillet, Chamfer,
     // Gizmo modes + Mirror

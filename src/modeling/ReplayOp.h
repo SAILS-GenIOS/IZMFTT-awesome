@@ -15,7 +15,7 @@ public:
     using BodyState = std::vector<std::pair<int, TopoDS_Shape>>;
 
     ReplayOp(std::string typeId, std::string name, std::string description,
-             BodyState before, BodyState after);
+             BodyState before, BodyState after, bool fromReload = true);
 
     bool execute(Document& doc) override; // redo  -> restore the "after" state
     bool undo(Document& doc) override;     // undo  -> restore the "before" state
@@ -23,11 +23,16 @@ public:
     std::string description() const override { return m_description; }
     void renderProperties() override;
     std::string typeId() const override { return m_typeId; }
-    bool isReloaded() const override { return true; }
+    // Only reloaded (project-restored) instances should report as such — fresh
+    // in-session batch ops (e.g. multi-body Move/Rotate/Scale) use the same
+    // snapshot machinery but should not be marked "(reloaded; not editable)".
+    bool isReloaded() const override { return m_fromReload; }
 
 private:
-    static void restore(Document& doc, const BodyState& state);
+    static void restore(Document& doc, const BodyState& state,
+                        bool removeUnlisted);
 
     std::string m_typeId, m_name, m_description;
     BodyState m_before, m_after;
+    bool m_fromReload = true;
 };

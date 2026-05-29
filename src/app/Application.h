@@ -29,6 +29,7 @@ class HistoryPanel;
 class AboutDialog;
 class ShortcutsPanel;
 class HelpPanel;
+class MeasureTool;
 class ItemsPanel;
 class CommandPalette;
 class StatusBar;
@@ -73,6 +74,8 @@ private:
     void saveAppSettings();   // write persisted preferences
     void renderMirrorPopup();
     void renderUpdatePopup();
+    void renderMultiTransformPanel();
+    void applyMultiBodyRotation();
     void renderScalePanel();
     void handleToolAction(int action);
     void handleShortcuts();
@@ -157,6 +160,7 @@ private:
     std::unique_ptr<AboutDialog> m_aboutDialog;
     std::unique_ptr<ShortcutsPanel> m_shortcutsPanel;
     std::unique_ptr<HelpPanel> m_helpPanel;
+    std::unique_ptr<MeasureTool> m_measureTool;
 
     // Update-check popup state (Help → Check for Updates).
     bool m_showUpdatePopup = false;
@@ -167,6 +171,22 @@ private:
     std::string m_updateReleaseUrl;
     bool m_updateAvailable = false;
 
+public:
+    // Camera state captured at sketch entry so exitSketchMode can put the user
+    // back where they were instead of leaving them inside/behind the face.
+    // Public so a file-scope helper in Application.cpp can populate it.
+    struct SavedCamera {
+        bool valid = false;
+        glm::vec3 position{0.0f};
+        glm::vec3 target{0.0f};
+        glm::vec3 up{0.0f, 1.0f, 0.0f};
+        bool ortho = false;
+        float orthoSize = 10.0f;
+    };
+
+private:
+    SavedCamera m_savedCameraForSketch;
+
     // Sketch
     std::shared_ptr<Sketch> m_activeSketch;
     // Snapshot taken at left-mouse-down in Select mode so a point/line drag
@@ -174,14 +194,30 @@ private:
     // history on mouse-up.
     std::shared_ptr<Sketch> m_sketchDragBefore;
 
-    // Interactive sketch-rotate state: while active, mouse movement around
-    // m_sketchRotateCenter rotates the affected points from their original
-    // positions; left-click commits, Esc cancels.
-    bool m_sketchRotating = false;
-    std::shared_ptr<Sketch> m_sketchRotateBefore;
-    glm::vec2 m_sketchRotateCenter{0.0f};
-    glm::vec2 m_sketchRotateAnchor{0.0f};
-    std::vector<std::pair<int, glm::vec2>> m_sketchRotateOriginals; // (pointId, origPos)
+    // Sketch Move/Rotate gizmo (drawn on the selection centroid in Select mode):
+    // axis arrows + free-move dot + rotate ring. Held-drag — clicking a handle
+    // arms the corresponding op, releasing commits. Rotate also pops a small
+    // type-in panel on release so the angle can be set exactly.
+    enum class SketchGizmoHandle { None, MoveX, MoveY, MoveFree, Rotate };
+    SketchGizmoHandle m_sketchGizmoHandle = SketchGizmoHandle::None;
+    glm::vec2 m_sketchGizmoCenter{0.0f};   // centroid at drag start (rotate pivot)
+    glm::vec2 m_sketchGizmoAnchor{0.0f};   // cursor sketch pos at drag start
+    std::shared_ptr<Sketch> m_sketchGizmoBefore;
+    std::vector<std::pair<int, glm::vec2>> m_sketchGizmoOriginals;
+    // Rotate handle: snap drag to 15°; on release enter "adjusting" mode where
+    // the popup is shown with the current angle pre-filled. Apply (or Enter)
+    // commits the typed angle; Cancel / Esc reverts.
+    bool m_sketchGizmoRotateAdjusting = false;
+    float m_sketchGizmoRotateDegrees = 0.0f;
+    char m_sketchGizmoRotateBuf[32] = "0.0";
+
+    // Sketch box-select: when in Select mode and the user clicks on empty space,
+    // begin a rectangle drag; on release, sketch elements whose screen-space
+    // projection lies inside the rectangle are added to the selection. Reuses
+    // the shared m_boxSelect overlay so the rectangle visuals are identical to
+    // the 3D mode's.
+    bool m_sketchBoxSelectActive = false;
+
     std::unique_ptr<SketchSolver> m_sketchSolver;
     std::unique_ptr<SketchTool> m_sketchTool;
     bool m_inSketchMode = false;
@@ -249,9 +285,22 @@ private:
     bool m_gizmoDragging = false;
     int m_gizmoDragBodyId = -1;            // primary (for Rotate/Scale + readouts)
     TopoDS_Shape m_gizmoDragOriginalShape; // primary's original
-    // For multi-body Move: all selected bodies' originals captured at drag start.
-    // (Rotate/Scale still operate on the primary body for now.)
+    // For multi-body Move/Rotate/Scale: all selected bodies' originals captured
+    // at drag start. Cached pivot avoids recomputing 65 bboxes every frame for
+    // a single rotation around the selection centroid.
     std::vector<std::pair<int, TopoDS_Shape>> m_gizmoDragOriginals;
+    glm::vec3 m_gizmoSharedPivot{0.0f};
+
+    // Multi-body Rotate type-in panel. When the Rotate gizmo is active and 2+
+    // bodies are selected, this panel offers per-axis sliders + numeric input
+    // so the user can apply an exact rotation in a single commit, bypassing the
+    // per-frame lag of the live gizmo path on large selections.
+    float m_multiRotate[3] = {0.0f, 0.0f, 0.0f};
+    // The Close button hides the panel; it auto-reopens the next time the
+    // conditions (Rotate gizmo + multi-body) are freshly satisfied, so the
+    // user can dismiss it without losing access to it.
+    bool m_multiTransformPanelOpen = true;
+    bool m_multiTransformConditionsMet = false;
     // Accumulated delta from drag start (translate only). Used so snap-to-grid
     // can snap the absolute position rather than each per-frame increment.
     glm::vec3 m_gizmoTotalDelta{0.0f};

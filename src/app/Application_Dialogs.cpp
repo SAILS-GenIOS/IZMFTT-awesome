@@ -302,6 +302,156 @@ void Application::renderUpdatePopup() {
     }
 }
 
+// Multi-body Rotate type-in panel. Visible only when the Rotate gizmo is the
+// active mode AND 2+ bodies are selected — the case where the live gizmo path
+// gets pathologically slow on big selections. The user can dial in an exact
+// per-axis rotation and click Apply to commit it in a single frame, instead of
+// dragging through many laggy preview frames.
+void Application::renderMultiTransformPanel() {
+    // Track whether the panel's display conditions are currently met. When the
+    // conditions transition from "not met" to "met", reopen the panel so the
+    // user can dismiss it once and still get it back next time they enter the
+    // state — without having to dig through menus.
+    bool conditionsMet = m_gizmo && m_gizmo->getMode() == GizmoMode::Rotate &&
+                         m_selection && m_selection->selectedBodyCount() >= 2;
+    if (conditionsMet && !m_multiTransformConditionsMet) {
+        m_multiTransformPanelOpen = true;
+    }
+    m_multiTransformConditionsMet = conditionsMet;
+    if (!conditionsMet || !m_multiTransformPanelOpen) return;
+
+    int n = m_selection->selectedBodyCount();
+    char title[64];
+    std::snprintf(title, sizeof(title), "Rotate %d Bodies###MultiTransform", n);
+
+    ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
+    // The window-titlebar X also closes the panel — same state as the Close
+    // button below, so either way auto-reopen logic above takes effect.
+    if (!ImGui::Begin(title, &m_multiTransformPanelOpen)) { ImGui::End(); return; }
+
+    ImGui::TextWrapped("Type exact angles instead of dragging the gizmo — useful "
+                       "when the selection is too large for a smooth live drag. "
+                       "Rotation is composed X → Y → Z around the selection centroid.");
+    ImGui::Spacing();
+
+    const char* axisLabels[3] = { "X", "Y", "Z" };
+    const ImVec4 axisColors[3] = {
+        ImVec4(1.00f, 0.35f, 0.35f, 1.0f),  // red    (X)
+        ImVec4(0.35f, 1.00f, 0.35f, 1.0f),  // green  (Y)
+        ImVec4(0.40f, 0.55f, 1.00f, 1.0f),  // blue   (Z)
+    };
+
+    for (int i = 0; i < 3; ++i) {
+        ImGui::PushID(i);
+        ImGui::TextColored(axisColors[i], "%s", axisLabels[i]);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(180);
+        ImGui::SliderFloat("##slider", &m_multiRotate[i], -180.0f, 180.0f, "%.1f°");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80);
+        ImGui::InputFloat("##input", &m_multiRotate[i], 0.0f, 0.0f, "%.3f");
+        ImGui::PopID();
+    }
+
+    ImGui::Separator();
+    ImGui::Spacing();
+    bool anyNonZero = std::abs(m_multiRotate[0]) > 1e-3f ||
+                      std::abs(m_multiRotate[1]) > 1e-3f ||
+                      std::abs(m_multiRotate[2]) > 1e-3f;
+
+    ImGui::BeginDisabled(!anyNonZero);
+    if (ImGui::Button("Apply", ImVec2(100, 0))) {
+        applyMultiBodyRotation();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Reset", ImVec2(100, 0))) {
+        m_multiRotate[0] = m_multiRotate[1] = m_multiRotate[2] = 0.0f;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Close", ImVec2(100, 0))) {
+        m_multiTransformPanelOpen = false;
+    }
+
+    ImGui::End();
+}
+
+void Application::applyMultiBodyRotation() {
+    if (!m_selection || !m_document || !m_history) return;
+
+    // Snapshot every selected body's current state.
+    std::vector<std::pair<int, TopoDS_Shape>> bodies;
+    for (const auto& sel : m_selection->getSelection()) {
+        if (sel.type != SelectionType::Body) continue;
+        try {
+            bodies.push_back({sel.bodyId, m_document->getBody(sel.bodyId)});
+        } catch (...) {}
+    }
+    if (bodies.size() < 2) return;
+
+    // Pivot = selection centroid (matches the gizmo's drag behaviour).
+    glm::vec3 pivot(0.0f);
+    int np = 0;
+    for (auto& [id, orig] : bodies) {
+        try {
+            Bnd_Box bb; BRepBndLib::Add(orig, bb);
+            if (bb.IsVoid()) continue;
+            double x0,y0,z0,x1,y1,z1; bb.Get(x0,y0,z0,x1,y1,z1);
+            pivot += glm::vec3((x0+x1)*0.5f, (y0+y1)*0.5f, (z0+z1)*0.5f);
+            ++np;
+        } catch (...) {}
+    }
+    if (np > 0) pivot /= static_cast<float>(np);
+
+    // Compose X → Y → Z rotation about the pivot. Each rotation is a discrete
+    // gp_Trsf; multiplication composes them in OCCT.
+    const double d2r = M_PI / 180.0;
+    gp_Pnt p(pivot.x, pivot.y, pivot.z);
+    gp_Trsf trsf;
+    if (std::abs(m_multiRotate[0]) > 1e-3f) {
+        gp_Trsf rx; rx.SetRotation(gp_Ax1(p, gp_Dir(1, 0, 0)), m_multiRotate[0] * d2r);
+        trsf = rx * trsf;
+    }
+    if (std::abs(m_multiRotate[1]) > 1e-3f) {
+        gp_Trsf ry; ry.SetRotation(gp_Ax1(p, gp_Dir(0, 1, 0)), m_multiRotate[1] * d2r);
+        trsf = ry * trsf;
+    }
+    if (std::abs(m_multiRotate[2]) > 1e-3f) {
+        gp_Trsf rz; rz.SetRotation(gp_Ax1(p, gp_Dir(0, 0, 1)), m_multiRotate[2] * d2r);
+        trsf = rz * trsf;
+    }
+
+    // Apply and capture before/after snapshots for a single ReplayOp commit.
+    ReplayOp::BodyState beforeState, afterState;
+    for (auto& [id, orig] : bodies) {
+        beforeState.push_back({id, orig});
+        try {
+            BRepBuilderAPI_Transform xf(orig, trsf, /*copy=*/true);
+            if (xf.IsDone()) {
+                m_document->updateBody(id, xf.Shape());
+                afterState.push_back({id, xf.Shape()});
+            }
+        } catch (...) {}
+    }
+
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "Rotate %d bodies by X %.2f° Y %.2f° Z %.2f° around centroid",
+                  static_cast<int>(bodies.size()),
+                  m_multiRotate[0], m_multiRotate[1], m_multiRotate[2]);
+    auto op = std::make_unique<ReplayOp>(
+        "multirotate",
+        std::string("Rotate (") + std::to_string(bodies.size()) + " bodies)",
+        std::string(buf),
+        std::move(beforeState), std::move(afterState),
+        /*fromReload=*/false);
+    m_history->pushExecuted(std::move(op));
+    m_meshesDirty = true;
+
+    // Zero the sliders so the next Apply is relative to the new orientation.
+    m_multiRotate[0] = m_multiRotate[1] = m_multiRotate[2] = 0.0f;
+}
+
 void Application::renderScalePanel() {
     // Shown only while the Scale gizmo is active with a body selected.
     if (m_inSketchMode || !m_selection->hasSelectedBodies()) return;

@@ -14,280 +14,234 @@
 #include <imgui.h>
 #include <cmath>
 #include <cstdio>
+#include <set>
 
 namespace materializr {
 
 MeasureTool::MeasureTool() = default;
 
-void MeasureTool::setDocument(const Document* doc) {
-    m_document = doc;
+void MeasureTool::setDocument(const Document* doc)        { m_document  = doc; }
+void MeasureTool::setSelectionManager(const SelectionManager* sel) { m_selection = sel; }
+
+void MeasureTool::setMode(MeasureMode m) {
+    m_mode = m;
+    m_pointsCaptured = 0;
+    m_results.clear();
 }
 
-void MeasureTool::setSelectionManager(const SelectionManager* sel) {
-    m_selection = sel;
+void MeasureTool::capturePoint(glm::vec3 p) {
+    if (m_mode != MeasureMode::Line) return;
+    if (m_pointsCaptured >= 2) {
+        // Third click after a completed measurement: start over with this as
+        // point 1, so the user can keep measuring without resetting manually.
+        m_point1 = p;
+        m_point2 = glm::vec3(0.0f);
+        m_pointsCaptured = 1;
+        m_results.clear();
+        return;
+    }
+    if (m_pointsCaptured == 0) { m_point1 = p; m_pointsCaptured = 1; }
+    else                       { m_point2 = p; m_pointsCaptured = 2; }
+}
+
+void MeasureTool::resetPointCapture() {
+    m_pointsCaptured = 0;
+    m_point1 = m_point2 = glm::vec3(0.0f);
+    if (m_mode == MeasureMode::Line) m_results.clear();
 }
 
 void MeasureTool::update() {
     m_results.clear();
-
-    if (!m_active || !m_document || !m_selection || !m_selection->hasSelection()) {
-        return;
-    }
-
-    const auto& sel = m_selection->getSelection();
-
-    if (sel.size() == 1) {
-        const auto& entry = sel[0];
-
-        switch (entry.type) {
-            case SelectionType::Body:
-                if (entry.bodyId >= 0) {
-                    measureBodyBounds(entry.bodyId);
-                }
-                break;
-
-            case SelectionType::Edge:
-                if (!entry.shape.IsNull()) {
-                    measureEdgeLength(entry.shape);
-                }
-                break;
-
-            case SelectionType::Face:
-                if (!entry.shape.IsNull()) {
-                    measureFaceArea(entry.shape);
-                }
-                break;
-
-            default:
-                break;
-        }
-    } else if (sel.size() == 2) {
-        // Measure distance between two selected items
-        const auto& a = sel[0];
-        const auto& b = sel[1];
-
-        TopoDS_Shape shapeA, shapeB;
-
-        // Resolve the shape for each selection entry
-        if (a.type == SelectionType::Body && a.bodyId >= 0) {
-            try {
-                shapeA = m_document->getBody(a.bodyId);
-            } catch (...) {}
-        } else if (!a.shape.IsNull()) {
-            shapeA = a.shape;
-        }
-
-        if (b.type == SelectionType::Body && b.bodyId >= 0) {
-            try {
-                shapeB = m_document->getBody(b.bodyId);
-            } catch (...) {}
-        } else if (!b.shape.IsNull()) {
-            shapeB = b.shape;
-        }
-
-        if (!shapeA.IsNull() && !shapeB.IsNull()) {
-            measureDistance(shapeA, shapeB);
-        }
+    switch (m_mode) {
+        case MeasureMode::Object:        measureObjects();      break;
+        case MeasureMode::Edge:          measureEdges();        break;
+        case MeasureMode::Line:  measureLine(); break;
+        default: break;
     }
 }
 
-void MeasureTool::measureBodyBounds(int bodyId) {
-    try {
-        const TopoDS_Shape& shape = m_document->getBody(bodyId);
-        if (shape.IsNull()) return;
-
-        Bnd_Box box;
-        BRepBndLib::Add(shape, box);
-
-        if (box.IsVoid()) return;
-
-        double xMin, yMin, zMin, xMax, yMax, zMax;
-        box.Get(xMin, yMin, zMin, xMax, yMax, zMax);
-
-        double width  = xMax - xMin;
-        double height = yMax - yMin;
-        double depth  = zMax - zMin;
-
-        MeasureResult result;
-        result.type = MeasureResult::BoundingBox;
-        result.label = "Bounding Box";
-        result.dimX = width;
-        result.dimY = height;
-        result.dimZ = depth;
-        result.pointA = glm::vec3(static_cast<float>(xMin),
-                                   static_cast<float>(yMin),
-                                   static_cast<float>(zMin));
-        result.pointB = glm::vec3(static_cast<float>(xMax),
-                                   static_cast<float>(yMax),
-                                   static_cast<float>(zMax));
-
-        m_results.push_back(result);
-    } catch (...) {
-        // Body not found or other error
+void MeasureTool::measureObjects() {
+    if (!m_document || !m_selection) return;
+    // Combined bbox of every body referenced by the selection. A single click
+    // on a body in the viewport selects its FACE — for the user this still
+    // intuitively means "I picked that body", so we deduplicate body ids
+    // across any selection type (Body / Face / Edge / Vertex) and bbox each.
+    std::set<int> uniqueBodyIds;
+    for (const auto& e : m_selection->getSelection()) {
+        if (e.bodyId >= 0) uniqueBodyIds.insert(e.bodyId);
     }
+    Bnd_Box bb;
+    int count = 0;
+    for (int bodyId : uniqueBodyIds) {
+        try {
+            const TopoDS_Shape& shape = m_document->getBody(bodyId);
+            if (shape.IsNull()) continue;
+            BRepBndLib::Add(shape, bb);
+            ++count;
+        } catch (...) {}
+    }
+    if (count == 0 || bb.IsVoid()) return;
+
+    double x0,y0,z0,x1,y1,z1;
+    bb.Get(x0,y0,z0,x1,y1,z1);
+
+    MeasureResult r;
+    r.type   = MeasureResult::BoundingBox;
+    r.label  = (count == 1) ? "Bounding Box"
+                            : "Bounding Box (" + std::to_string(count) + " bodies)";
+    r.dimX   = x1 - x0;
+    r.dimY   = y1 - y0;
+    r.dimZ   = z1 - z0;
+    r.pointA = glm::vec3((float)x0,(float)y0,(float)z0);
+    r.pointB = glm::vec3((float)x1,(float)y1,(float)z1);
+    m_results.push_back(r);
 }
 
-void MeasureTool::measureEdgeLength(const TopoDS_Shape& edge) {
-    try {
-        BRepAdaptor_Curve curve(TopoDS::Edge(edge));
-        double length = GCPnts_AbscissaPoint::Length(curve);
-
-        // Get start and end points of the curve
-        gp_Pnt startPt = curve.Value(curve.FirstParameter());
-        gp_Pnt endPt   = curve.Value(curve.LastParameter());
-
-        MeasureResult result;
-        result.type = MeasureResult::EdgeLength;
-        result.value = length;
-        result.label = "Edge Length";
-        result.pointA = glm::vec3(static_cast<float>(startPt.X()),
-                                   static_cast<float>(startPt.Y()),
-                                   static_cast<float>(startPt.Z()));
-        result.pointB = glm::vec3(static_cast<float>(endPt.X()),
-                                   static_cast<float>(endPt.Y()),
-                                   static_cast<float>(endPt.Z()));
-
-        m_results.push_back(result);
-    } catch (...) {
-        // Invalid edge
+void MeasureTool::measureEdges() {
+    if (!m_selection) return;
+    double total = 0.0;
+    int count = 0;
+    for (const auto& e : m_selection->getSelection()) {
+        if (e.type != SelectionType::Edge || e.shape.IsNull()) continue;
+        try {
+            BRepAdaptor_Curve curve(TopoDS::Edge(e.shape));
+            total += GCPnts_AbscissaPoint::Length(curve);
+            ++count;
+        } catch (...) {}
     }
+    if (count == 0) return;
+
+    MeasureResult r;
+    r.type  = MeasureResult::EdgeLength;
+    r.value = total;
+    r.label = (count == 1) ? "Edge Length"
+                           : "Total Edge Length (" + std::to_string(count) + " edges)";
+    m_results.push_back(r);
 }
 
-void MeasureTool::measureFaceArea(const TopoDS_Shape& face) {
-    try {
-        GProp_GProps props;
-        BRepGProp::SurfaceProperties(face, props);
-        double area = props.Mass();
-
-        // Get the center of mass of the face
-        gp_Pnt center = props.CentreOfMass();
-
-        MeasureResult result;
-        result.type = MeasureResult::FaceArea;
-        result.value = area;
-        result.label = "Face Area";
-        result.pointA = glm::vec3(static_cast<float>(center.X()),
-                                   static_cast<float>(center.Y()),
-                                   static_cast<float>(center.Z()));
-
-        m_results.push_back(result);
-    } catch (...) {
-        // Invalid face
-    }
-}
-
-void MeasureTool::measureDistance(const TopoDS_Shape& a, const TopoDS_Shape& b) {
-    try {
-        BRepExtrema_DistShapeShape distCalc(a, b);
-        if (!distCalc.IsDone() || distCalc.NbSolution() == 0) {
-            return;
-        }
-
-        double dist = distCalc.Value();
-
-        gp_Pnt ptA = distCalc.PointOnShape1(1);
-        gp_Pnt ptB = distCalc.PointOnShape2(1);
-
-        MeasureResult result;
-        result.type = MeasureResult::Distance;
-        result.value = dist;
-        result.label = "Distance";
-        result.pointA = glm::vec3(static_cast<float>(ptA.X()),
-                                   static_cast<float>(ptA.Y()),
-                                   static_cast<float>(ptA.Z()));
-        result.pointB = glm::vec3(static_cast<float>(ptB.X()),
-                                   static_cast<float>(ptB.Y()),
-                                   static_cast<float>(ptB.Z()));
-
-        m_results.push_back(result);
-    } catch (...) {
-        // Distance computation failed
-    }
+void MeasureTool::measureLine() {
+    if (m_pointsCaptured < 2) return;
+    glm::vec3 d = m_point2 - m_point1;
+    MeasureResult r;
+    r.type   = MeasureResult::Distance;
+    r.value  = static_cast<double>(glm::length(d));
+    r.label  = "Distance";
+    r.pointA = m_point1;
+    r.pointB = m_point2;
+    r.dimX   = std::abs(d.x);
+    r.dimY   = std::abs(d.y);
+    r.dimZ   = std::abs(d.z);
+    m_results.push_back(r);
 }
 
 void MeasureTool::renderPanel() {
-    if (!m_active) return;
+    if (m_mode == MeasureMode::Inactive) return;
 
-    ImGui::Begin("Measure", &m_active);
+    bool open = true;
+    ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Measure", &open)) { ImGui::End(); return; }
 
-    if (!m_selection || !m_selection->hasSelection()) {
-        ImGui::TextWrapped("Select geometry to measure.\n\n"
-                           "- 1 body: bounding box dimensions\n"
-                           "- 1 edge: curve length\n"
-                           "- 1 face: surface area\n"
-                           "- 2 items: minimum distance");
+    // Mode selector — three buttons at the top, current mode highlighted.
+    auto modeButton = [&](const char* label, MeasureMode m) {
+        bool isCurrent = (m_mode == m);
+        if (isCurrent)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.45f, 0.85f, 1.0f));
+        if (ImGui::Button(label, ImVec2(95, 28))) setMode(m);
+        if (isCurrent) ImGui::PopStyleColor();
+        ImGui::SameLine();
+    };
+    modeButton("Object",     MeasureMode::Object);
+    modeButton("Edge",       MeasureMode::Edge);
+    modeButton("Line",   MeasureMode::Line);
+    ImGui::NewLine();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Live selection counts so the user can see the tool is actually noticing
+    // what they pick.
+    int bodyIds = 0, edges = 0;
+    if (m_selection) {
+        std::set<int> b;
+        for (const auto& e : m_selection->getSelection()) {
+            if (e.bodyId >= 0) b.insert(e.bodyId);
+            if (e.type == SelectionType::Edge && !e.shape.IsNull()) ++edges;
+        }
+        bodyIds = static_cast<int>(b.size());
     }
 
-    if (m_results.empty() && m_selection && m_selection->hasSelection()) {
-        ImGui::Text("No measurements available for this selection.");
+    // Prompt + results per mode.
+    switch (m_mode) {
+        case MeasureMode::PickMode:
+            ImGui::TextWrapped("Pick a measurement mode above.");
+            break;
+        case MeasureMode::Object:
+            ImGui::TextWrapped("Click a body in the viewport — clicking a face counts. "
+                               "Ctrl+click to add more bodies, or use box-select.");
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.75f, 0.85f, 1.0f, 1.0f),
+                               "Selected: %d %s", bodyIds, bodyIds == 1 ? "body" : "bodies");
+            break;
+        case MeasureMode::Edge:
+            ImGui::TextWrapped("Click within ~8 px of an edge to pick it. "
+                               "Ctrl+click to add more edges to the sum.");
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0.75f, 0.85f, 1.0f, 1.0f),
+                               "Selected: %d %s", edges, edges == 1 ? "edge" : "edges");
+            break;
+        case MeasureMode::Line:
+            if (m_pointsCaptured == 0)
+                ImGui::TextDisabled("Click the first point in the viewport…");
+            else if (m_pointsCaptured == 1)
+                ImGui::TextDisabled("…now click the second point.");
+            else
+                ImGui::TextDisabled("Click again to start a new measurement.");
+            break;
+        default: break;
     }
 
+    if (m_results.empty()) {
+        ImGui::End();
+        if (!open) m_mode = MeasureMode::Inactive;
+        return;
+    }
+
+    ImGui::Spacing();
     for (const auto& r : m_results) {
         ImGui::Separator();
-
         switch (r.type) {
             case MeasureResult::Distance:
-                ImGui::Text("Distance: %.2f mm", r.value);
-                ImGui::Text("  From: (%.2f, %.2f, %.2f)",
-                            r.pointA.x, r.pointA.y, r.pointA.z);
-                ImGui::Text("  To:   (%.2f, %.2f, %.2f)",
-                            r.pointB.x, r.pointB.y, r.pointB.z);
+                ImGui::Text("Distance: %.3f mm", r.value);
+                ImGui::Text("  ΔX %.3f   ΔY %.3f   ΔZ %.3f", r.dimX, r.dimY, r.dimZ);
+                ImGui::Text("  From: (%.2f, %.2f, %.2f)", r.pointA.x, r.pointA.y, r.pointA.z);
+                ImGui::Text("  To:   (%.2f, %.2f, %.2f)", r.pointB.x, r.pointB.y, r.pointB.z);
                 break;
-
             case MeasureResult::EdgeLength:
-                ImGui::Text("Length: %.2f mm", r.value);
-                ImGui::Text("  Start: (%.2f, %.2f, %.2f)",
-                            r.pointA.x, r.pointA.y, r.pointA.z);
-                ImGui::Text("  End:   (%.2f, %.2f, %.2f)",
-                            r.pointB.x, r.pointB.y, r.pointB.z);
+                ImGui::Text("%s: %.3f mm", r.label.c_str(), r.value);
                 break;
-
             case MeasureResult::FaceArea:
-                ImGui::Text("Area: %.2f mm%s", r.value, "\xC2\xB2");
-                ImGui::Text("  Center: (%.2f, %.2f, %.2f)",
-                            r.pointA.x, r.pointA.y, r.pointA.z);
+                ImGui::Text("Area: %.3f mm\xC2\xB2", r.value);
                 break;
-
             case MeasureResult::BoundingBox:
-                ImGui::Text("Bounding Box:");
-                ImGui::Text("  Width (X):  %.2f mm", r.dimX);
-                ImGui::Text("  Height (Y): %.2f mm", r.dimY);
-                ImGui::Text("  Depth (Z):  %.2f mm", r.dimZ);
-                ImGui::Text("  Min: (%.2f, %.2f, %.2f)",
-                            r.pointA.x, r.pointA.y, r.pointA.z);
-                ImGui::Text("  Max: (%.2f, %.2f, %.2f)",
-                            r.pointB.x, r.pointB.y, r.pointB.z);
+                ImGui::Text("%s", r.label.c_str());
+                ImGui::Text("  X: %.3f mm", r.dimX);
+                ImGui::Text("  Y: %.3f mm", r.dimY);
+                ImGui::Text("  Z: %.3f mm", r.dimZ);
+                ImGui::Text("  Min: (%.2f, %.2f, %.2f)", r.pointA.x, r.pointA.y, r.pointA.z);
+                ImGui::Text("  Max: (%.2f, %.2f, %.2f)", r.pointB.x, r.pointB.y, r.pointB.z);
                 break;
-
-            case MeasureResult::Angle:
-                ImGui::Text("Angle: %.2f deg", r.value);
-                break;
-
-            default:
-                break;
+            default: break;
         }
     }
 
     ImGui::End();
+    if (!open) m_mode = MeasureMode::Inactive;
 }
 
-const std::vector<MeasureResult>& MeasureTool::getResults() const {
-    return m_results;
-}
+const std::vector<MeasureResult>& MeasureTool::getResults() const { return m_results; }
 
 void MeasureTool::clear() {
     m_results.clear();
-}
-
-bool MeasureTool::isActive() const {
-    return m_active;
-}
-
-void MeasureTool::setActive(bool active) {
-    m_active = active;
-    if (!active) {
-        m_results.clear();
-    }
+    m_pointsCaptured = 0;
 }
 
 } // namespace materializr

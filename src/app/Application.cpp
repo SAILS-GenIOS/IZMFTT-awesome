@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <map>
+#include <set>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -36,6 +37,7 @@
 #include "ui/AboutDialog.h"
 #include "ui/ShortcutsPanel.h"
 #include "ui/HelpPanel.h"
+#include "ui/MeasureTool.h"
 #include "ui/UpdateChecker.h"
 #include "modeling/Sketch.h"
 #include "modeling/SketchSolver.h"
@@ -74,6 +76,7 @@ namespace materializr { namespace force_link { void linkAll(); } }
 #include <BRepBndLib.hxx>
 #include <BRepGProp_Face.hxx>
 #include <BRepAdaptor_Curve.hxx>
+#include <TopExp_Explorer.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_GTransform.hxx>
 #include <gp_GTrsf.hxx>
@@ -121,6 +124,9 @@ Application::Application() {
     m_aboutDialog = std::make_unique<AboutDialog>();
     m_shortcutsPanel = std::make_unique<ShortcutsPanel>();
     m_helpPanel = std::make_unique<HelpPanel>();
+    m_measureTool = std::make_unique<MeasureTool>();
+    m_measureTool->setDocument(m_document.get());
+    m_measureTool->setSelectionManager(m_selection.get());
 
     // Wire up references
     m_toolbar->setSelectionManager(m_selection.get());
@@ -613,9 +619,10 @@ void Application::handleToolAction(int action) {
             break;
 
         // --- Sketch element transforms (operate on the Select-mode selection) ---
+        // Rotate is handled by the sketch gizmo's ring handle (see Application_
+        // Viewport.cpp), not as a toolbar action.
         case ToolAction::SketchCopy:
-        case ToolAction::SketchMirror:
-        case ToolAction::SketchRotate: {
+        case ToolAction::SketchMirror: {
             if (!m_inSketchMode || !m_activeSketch || !m_sketchTool) break;
 
             // Operate on the current sketch-element selection, or — if nothing
@@ -651,22 +658,6 @@ void Application::handleToolAction(int action) {
                 if (auto* p = m_activeSketch->getPoint(id)) { c += p->pos; ++n; }
             }
             if (n > 0) c /= static_cast<float>(n);
-
-            if (a == ToolAction::SketchRotate) {
-                // Enter interactive rotate mode: spin the affected points around
-                // the centroid based on cursor angle, commit on left-click.
-                m_sketchRotating = true;
-                m_sketchRotateBefore = std::make_shared<Sketch>(*m_activeSketch);
-                m_sketchRotateCenter = c;
-                m_sketchRotateAnchor = m_sketchTool->getCurrentPos();
-                m_sketchRotateOriginals.clear();
-                for (int id : involved) {
-                    if (auto* p = m_activeSketch->getPoint(id))
-                        m_sketchRotateOriginals.push_back({id, p->pos});
-                }
-                // Don't push a history op yet; that happens on commit.
-                break;
-            }
 
             // Copy / Mirror: create new points (transformed copies) and new
             // lines connecting them, then SELECT the new ones and switch to
@@ -716,6 +707,14 @@ void Application::handleToolAction(int action) {
         }
 
         case ToolAction::ResetCamera: m_viewport->getCamera().reset(); break;
+        case ToolAction::Measure:
+            if (m_measureTool) {
+                // Activating the tool drops the user at the mode picker. The
+                // panel renders three mode buttons (Object / Edge / Point-to-
+                // Point) and waits for them to pick one.
+                m_measureTool->setMode(MeasureMode::PickMode);
+            }
+            break;
 
         case ToolAction::Move: {
             if (!m_selection->hasSelectedBodies()) break;
@@ -800,6 +799,59 @@ void Application::handleShortcuts() {
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_K)) {
         m_commandPalette->toggle();
     }
+
+    // Ctrl+A: context-aware select-all. Skipped when ImGui has text-input focus
+    // so the standard "select all text" behaviour in input fields still works.
+    if (ctrlHeld && ImGui::IsKeyPressed(ImGuiKey_A, false) && !io.WantTextInput) {
+        if (m_inSketchMode && m_activeSketch && m_sketchTool) {
+            // In a sketch: hand off to the sketch tool's selectAll (also wired
+            // to the double-click shortcut).
+            m_sketchTool->setMode(SketchToolMode::Select);
+            m_sketchTool->selectAll();
+        } else if (m_selection && m_selection->hasSelection() &&
+                   (m_selection->primaryType() == SelectionType::Edge ||
+                    m_selection->primaryType() == SelectionType::Face)) {
+            // Extend an edge/face selection to every edge/face on the same
+            // body (or bodies) that already contributes to the selection.
+            SelectionType targetType = m_selection->primaryType();
+            std::set<int> bodyIds;
+            for (const auto& entry : m_selection->getSelection()) {
+                if (entry.type == targetType && entry.bodyId >= 0) {
+                    bodyIds.insert(entry.bodyId);
+                }
+            }
+            for (int bodyId : bodyIds) {
+                try {
+                    const TopoDS_Shape& shape = m_document->getBody(bodyId);
+                    TopAbs_ShapeEnum kind = (targetType == SelectionType::Edge)
+                                                ? TopAbs_EDGE : TopAbs_FACE;
+                    int idx = 0;
+                    for (TopExp_Explorer it(shape, kind); it.More(); it.Next(), ++idx) {
+                        SelectionEntry e;
+                        e.type = targetType;
+                        e.bodyId = bodyId;
+                        // subShapeIndex isn't strictly needed for findEntry —
+                        // it falls back to IsSame(shape) — but populating it
+                        // for faces matches what the picker does.
+                        if (targetType == SelectionType::Face) e.subShapeIndex = idx;
+                        e.shape = it.Current();
+                        m_selection->addToSelection(e);
+                    }
+                } catch (...) {}
+            }
+        } else if (m_document) {
+            // No useful sub-shape context: select every visible body.
+            m_selection->clear();
+            for (int bodyId : m_document->getAllBodyIds()) {
+                if (!m_document->isBodyVisible(bodyId)) continue;
+                SelectionEntry e;
+                e.type = SelectionType::Body;
+                e.bodyId = bodyId;
+                try { e.shape = m_document->getBody(bodyId); } catch (...) {}
+                m_selection->addToSelection(e);
+            }
+        }
+    }
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_I)) {
         importStepFile();
     }
@@ -813,15 +865,17 @@ void Application::handleShortcuts() {
         loadProject();
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        if (m_sketchRotating) {
-            // Revert the sketch to its pre-rotate state.
-            if (m_sketchRotateBefore && m_activeSketch) {
-                for (auto& [id, op] : m_sketchRotateOriginals)
-                    m_activeSketch->movePoint(id, op);
+        if (m_sketchGizmoHandle != SketchGizmoHandle::None) {
+            // Revert each involved point to its drag-start position and exit
+            // the gizmo drag (or popup adjust) without pushing a history op.
+            if (m_activeSketch) {
+                for (auto& [id, orig] : m_sketchGizmoOriginals)
+                    m_activeSketch->movePoint(id, orig);
             }
-            m_sketchRotating = false;
-            m_sketchRotateBefore.reset();
-            m_sketchRotateOriginals.clear();
+            m_sketchGizmoHandle = SketchGizmoHandle::None;
+            m_sketchGizmoBefore.reset();
+            m_sketchGizmoOriginals.clear();
+            m_sketchGizmoRotateAdjusting = false;
         } else if (m_mirrorPickFace) {
             m_mirrorPickFace = false; // cancel "mirror across a face" mode
         } else if (m_gizmoDragging) {
@@ -1213,6 +1267,18 @@ void Application::exportStlFile() {
         });
 }
 
+// Snapshot the current camera so exitSketchMode can put the user back where
+// they were instead of leaving them looking at the sketch plane from a fixed
+// angle (which often ends up "inside" or "behind" the body for face sketches).
+static void saveCameraInto(Application::SavedCamera& dst, materializr::Camera& cam) {
+    dst.position  = cam.getPosition();
+    dst.target    = cam.getTarget();
+    dst.up        = cam.getUp();
+    dst.ortho     = cam.isOrthographic();
+    dst.orthoSize = cam.getOrthoSize();
+    dst.valid     = true;
+}
+
 void Application::enterSketchMode() {
     // If a planar face is selected, route through enterSketchOnFace for consistency
     if (m_selection && m_selection->hasSelectedFaces()) {
@@ -1224,6 +1290,8 @@ void Application::enterSketchMode() {
             }
         }
     }
+
+    saveCameraInto(m_savedCameraForSketch, m_viewport->getCamera());
 
     m_activeSketch = std::make_shared<Sketch>();
     m_sketchSolver = std::make_unique<SketchSolver>();
@@ -1238,6 +1306,8 @@ void Application::enterSketchMode() {
 }
 
 void Application::enterSketchOnPlane(const gp_Pln& plane) {
+    saveCameraInto(m_savedCameraForSketch, m_viewport->getCamera());
+
     // Start a fresh, freestanding sketch on a world base plane (no source face),
     // so the user can model from scratch with no existing body. Drawing tools,
     // the adjustable grid and the ortho camera all come from the shared sketch
@@ -1257,6 +1327,8 @@ void Application::enterSketchOnPlane(const gp_Pln& plane) {
 }
 
 void Application::enterSketchOnFace(const TopoDS_Face& face) {
+    saveCameraInto(m_savedCameraForSketch, m_viewport->getCamera());
+
     m_activeSketch = std::make_shared<Sketch>();
     m_sketchSolver = std::make_unique<SketchSolver>();
     m_activeSketchId = -1;
@@ -1264,7 +1336,16 @@ void Application::enterSketchOnFace(const TopoDS_Face& face) {
     Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
     if (!surf.IsNull() && surf->IsKind(STANDARD_TYPE(Geom_Plane))) {
         Handle(Geom_Plane) geomPlane = Handle(Geom_Plane)::DownCast(surf);
-        m_activeSketch->setPlane(geomPlane->Pln());
+        gp_Pln pln = geomPlane->Pln();
+        // Honour the face's topological orientation: a REVERSED face's outward
+        // normal is opposite to its surface normal, so flip the sketch plane so
+        // the camera lands on the visible side of the face.
+        if (face.Orientation() == TopAbs_REVERSED) {
+            gp_Ax3 ax = pln.Position();
+            ax.ZReverse();
+            pln = gp_Pln(ax);
+        }
+        m_activeSketch->setPlane(pln);
         m_activeSketch->setSourceFace(face);
     } else {
         // Fallback to default XY plane if face is non-planar
@@ -1353,9 +1434,11 @@ void Application::alignCameraToActiveSketch() {
     glm::vec3 normal(static_cast<float>(n.X()), static_cast<float>(n.Y()), static_cast<float>(n.Z()));
     glm::vec3 up(static_cast<float>(y.X()), static_cast<float>(y.Y()), static_cast<float>(y.Z()));
 
-    // Pick an ortho size that frames the source face if present, otherwise default
-    // to something readable. Use the current sketch grid step's scale as a hint.
+    // Frame the host face when one is present: target the face's 3D centre
+    // (the plane origin may not coincide with it for off-centre faces), and
+    // size the ortho box to its bbox diagonal.
     float orthoSize = std::max(20.0f, m_sketchGridStep * 40.0f);
+    glm::vec3 lookAt = planeOrigin;
     if (!m_activeSketch->getSourceFace().IsNull()) {
         try {
             Bnd_Box bb;
@@ -1368,15 +1451,32 @@ void Application::alignCameraToActiveSketch() {
                 float dz = static_cast<float>(zmax - zmin);
                 float diag = 0.5f * std::sqrt(dx*dx + dy*dy + dz*dz);
                 if (diag > 1e-3f) orthoSize = diag * 1.2f;
+                lookAt = glm::vec3(static_cast<float>((xmin + xmax) * 0.5),
+                                   static_cast<float>((ymin + ymax) * 0.5),
+                                   static_cast<float>((zmin + zmax) * 0.5));
             }
         } catch (...) {}
     }
 
     Camera& cam = m_viewport->getCamera();
     float standoff = std::max(orthoSize * 4.0f, 10.0f);
-    cam.setTarget(planeOrigin);
-    cam.setPosition(planeOrigin + normal * standoff);
-    cam.setUp(up);
+
+    // Pick an "up" direction that keeps the apparent orientation as close to the
+    // user's previous view as possible: project the camera's current up onto
+    // the sketch plane (perpendicular to its normal). Falls back to the
+    // sketch plane's natural Y if the previous up is degenerate (nearly along
+    // the new normal, which happens when sketching on a face parallel to the
+    // current view's up axis).
+    glm::vec3 chosenUp = up;
+    glm::vec3 prevUp = cam.getUp();
+    glm::vec3 projected = prevUp - normal * glm::dot(prevUp, normal);
+    if (glm::length(projected) > 0.1f) {
+        chosenUp = glm::normalize(projected);
+    }
+
+    cam.setTarget(lookAt);
+    cam.setPosition(lookAt + normal * standoff);
+    cam.setUp(chosenUp);
     cam.setOrthoSize(orthoSize);
     cam.setOrthographic(true);
 }
@@ -1893,6 +1993,19 @@ void Application::exitSketchMode() {
     m_sketchSolver.reset();
     m_activeSketchId = -1;
     m_meshesDirty = true; // refresh sketch rendering set
+
+    // Put the camera back where the user had it before they entered sketch
+    // mode, instead of leaving them looking straight at (and now past) the
+    // sketch plane in ortho. Falls through silently if nothing was saved.
+    if (m_savedCameraForSketch.valid && m_viewport) {
+        Camera& cam = m_viewport->getCamera();
+        cam.setTarget(m_savedCameraForSketch.target);
+        cam.setPosition(m_savedCameraForSketch.position);
+        cam.setUp(m_savedCameraForSketch.up);
+        cam.setOrthographic(m_savedCameraForSketch.ortho);
+        cam.setOrthoSize(m_savedCameraForSketch.orthoSize);
+        m_savedCameraForSketch.valid = false;
+    }
 }
 
 void Application::run() {
@@ -1950,6 +2063,14 @@ void Application::run() {
             m_shortcutsPanel->render();
             m_aboutDialog->render();
             renderUpdatePopup();
+            renderMultiTransformPanel();
+
+            // Keep measurement results in sync with the current selection,
+            // then draw the panel. Cheap when inactive.
+            if (m_measureTool) {
+                m_measureTool->update();
+                m_measureTool->renderPanel();
+            }
 
             if (m_historyPanel->render()) {
                 m_meshesDirty = true;

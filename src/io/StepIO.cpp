@@ -10,8 +10,19 @@
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Compound.hxx>
 #include <BRep_Builder.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Dir.hxx>
 #include <Interface_Static.hxx>
 #include <IFSelect_ReturnStatus.hxx>
+
+#include <cmath>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 namespace materializr {
 
@@ -49,6 +60,23 @@ ImportResult StepIO::import(const std::string& filePath, Document& doc) {
 
     int importCount = 0;
 
+    // Most CAD packages (SolidWorks, Fusion, Onshape, FreeCAD, NX, CATIA, …)
+    // export STEP with a Z-up coordinate convention; this viewer is Y-up. To
+    // keep imported models standing on their natural ground plane, rotate every
+    // shape -90° around X so the source's +Z becomes world +Y. Y-up STEP files
+    // would arrive tilted under this rule and can be straightened with the
+    // Rotate gizmo after import — a rare case in practice.
+    gp_Trsf zUpToYUp;
+    zUpToYUp.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0)),
+                         -M_PI * 0.5);
+    auto reorient = [&](const TopoDS_Shape& s) -> TopoDS_Shape {
+        try {
+            BRepBuilderAPI_Transform xf(s, zUpToYUp, /*copy=*/true);
+            if (xf.IsDone() && !xf.Shape().IsNull()) return xf.Shape();
+        } catch (...) {}
+        return s; // fall through with the original shape on any failure
+    };
+
     // Iterate over transferred shapes
     for (Standard_Integer i = 1; i <= reader.NbShapes(); ++i) {
         TopoDS_Shape shape = reader.Shape(i);
@@ -59,7 +87,7 @@ ImportResult StepIO::import(const std::string& filePath, Document& doc) {
             const TopoDS_Solid& solid = TopoDS::Solid(explorer.Current());
             ++importCount;
             std::string name = "Imported_" + std::to_string(importCount);
-            doc.addBody(solid, name);
+            doc.addBody(reorient(solid), name);
             foundSolids = true;
         }
 
@@ -70,7 +98,7 @@ ImportResult StepIO::import(const std::string& filePath, Document& doc) {
                 const TopoDS_Shell& shell = TopoDS::Shell(explorer.Current());
                 ++importCount;
                 std::string name = "Imported_" + std::to_string(importCount);
-                doc.addBody(shell, name);
+                doc.addBody(reorient(shell), name);
                 foundShells = true;
             }
 
@@ -80,7 +108,7 @@ ImportResult StepIO::import(const std::string& filePath, Document& doc) {
                     const TopoDS_Face& face = TopoDS::Face(explorer.Current());
                     ++importCount;
                     std::string name = "Imported_" + std::to_string(importCount);
-                    doc.addBody(face, name);
+                    doc.addBody(reorient(face), name);
                 }
             }
         }
@@ -93,7 +121,7 @@ ImportResult StepIO::import(const std::string& filePath, Document& doc) {
             if (!shape.IsNull()) {
                 ++importCount;
                 std::string name = "Imported_" + std::to_string(importCount);
-                doc.addBody(shape, name);
+                doc.addBody(reorient(shape), name);
             }
         }
     }
@@ -142,13 +170,25 @@ ExportResult StepIO::exportBodies(const std::string& filePath, const Document& d
     // Use AP214 schema for broad compatibility
     Interface_Static::SetCVal("write.step.schema", "AP214");
 
+    // Reverse of the import rotation: our Y-up scene becomes the Z-up world
+    // most CAD tools expect, so an imported model round-trips back to its
+    // original orientation.
+    gp_Trsf yUpToZUp;
+    yUpToZUp.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0)),
+                         M_PI * 0.5);
+
     for (int id : bodyIds) {
         try {
             const TopoDS_Shape& shape = doc.getBody(id);
             if (shape.IsNull()) {
                 continue;
             }
-            IFSelect_ReturnStatus status = writer.Transfer(shape, STEPControl_AsIs);
+            TopoDS_Shape outShape = shape;
+            try {
+                BRepBuilderAPI_Transform xf(shape, yUpToZUp, /*copy=*/true);
+                if (xf.IsDone() && !xf.Shape().IsNull()) outShape = xf.Shape();
+            } catch (...) {}
+            IFSelect_ReturnStatus status = writer.Transfer(outShape, STEPControl_AsIs);
             if (status != IFSelect_RetDone) {
                 result.errorMessage = "Failed to transfer body ID " + std::to_string(id) +
                                       " to STEP writer.";

@@ -89,7 +89,16 @@ void main() {
     if (t < 0.0) discard; // plane behind the camera
 
     vec3 fragPos3D = v_nearPoint + t * dir;
-    gl_FragDepth = computeDepth(fragPos3D);
+    // Bias the grid's depth slightly toward the camera so it doesn't z-fight
+    // with geometry that lies on the plane (the common "sketch on a face"
+    // case). The bias is computed in world space — a fixed NDC offset would
+    // drift with depth and make the grid appear to lift off the plane as you
+    // zoom out. We push the world position toward the near point by a fraction
+    // of the ray length, so the bias stays visually tight at any scale.
+    vec3 toNear = v_nearPoint - fragPos3D;
+    float rayLen = length(toNear);
+    vec3 biasedPos = fragPos3D + (toNear / max(rayLen, 1e-6)) * (rayLen * 0.0005);
+    gl_FragDepth = computeDepth(biasedPos);
 
     // In-plane coordinates relative to the plane origin.
     vec3 rel = fragPos3D - u_planeOrigin;

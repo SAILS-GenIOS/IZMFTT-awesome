@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <map>
+#include <set>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -36,6 +37,7 @@
 #include "ui/AboutDialog.h"
 #include "ui/ShortcutsPanel.h"
 #include "ui/HelpPanel.h"
+#include "ui/MeasureTool.h"
 #include "ui/UpdateChecker.h"
 #include "modeling/Sketch.h"
 #include "modeling/SketchSolver.h"
@@ -395,6 +397,49 @@ void Application::renderViewport() {
                     }
                 }
             }
+
+            // Measure tool — Line mode: render the two captured points and the
+            // segment between them in screen space, in a colour deliberately
+            // unlike anything else (body edges = white/cyan, sketches = blue,
+            // selection highlight = yellow). Magenta-purple here. The first
+            // captured point also shows on its own (before the second click)
+            // so the user gets feedback that the click landed.
+            if (m_measureTool && m_measureTool->getMode() == MeasureMode::Line) {
+                const ImU32 measureCol  = IM_COL32(210, 90, 240, 255);
+                const ImU32 measureGlow = IM_COL32(210, 90, 240, 90);
+
+                int captured = m_measureTool->getCapturedPointCount();
+                ImVec2 sp1, sp2;
+                bool ok1 = (captured >= 1) &&
+                           toImg(m_measureTool->getCapturedPoint(0), sp1);
+                bool ok2 = (captured >= 2) &&
+                           toImg(m_measureTool->getCapturedPoint(1), sp2);
+
+                if (ok1) {
+                    dl->AddCircleFilled(sp1, 8.0f, measureGlow);
+                    dl->AddCircleFilled(sp1, 4.5f, measureCol);
+                }
+                if (ok2) {
+                    dl->AddCircleFilled(sp2, 8.0f, measureGlow);
+                    dl->AddCircleFilled(sp2, 4.5f, measureCol);
+                }
+                if (ok1 && ok2) {
+                    dl->AddLine(sp1, sp2, measureCol, 2.5f);
+                    // Centred distance label on the midpoint of the segment.
+                    const auto& results = m_measureTool->getResults();
+                    if (!results.empty()) {
+                        char lbl[40];
+                        std::snprintf(lbl, sizeof(lbl), "%.2f mm", results[0].value);
+                        ImVec2 ts = ImGui::CalcTextSize(lbl);
+                        ImVec2 mid((sp1.x + sp2.x) * 0.5f - ts.x * 0.5f,
+                                   (sp1.y + sp2.y) * 0.5f - ts.y - 6.0f);
+                        dl->AddRectFilled(ImVec2(mid.x - 4, mid.y - 2),
+                                          ImVec2(mid.x + ts.x + 4, mid.y + ts.y + 2),
+                                          IM_COL32(30, 18, 38, 220), 3.0f);
+                        dl->AddText(mid, measureCol, lbl);
+                    }
+                }
+            }
         }
 
         if (ImGui::IsItemHovered()) {
@@ -514,6 +559,20 @@ void Application::renderViewport() {
                             m_gizmoTotalAngle = 0.0f;
                             m_gizmoScaleAccum = glm::vec3(0.0f);
                             m_gizmoTotalScale = glm::vec3(1.0f);
+                            // Pre-compute the shared pivot once — the originals
+                            // don't change during the drag, so this is constant.
+                            m_gizmoSharedPivot = glm::vec3(0.0f);
+                            int np = 0;
+                            for (auto& [id, orig] : m_gizmoDragOriginals) {
+                                try {
+                                    Bnd_Box bb; BRepBndLib::Add(orig, bb);
+                                    if (bb.IsVoid()) continue;
+                                    double x0,y0,z0,x1,y1,z1; bb.Get(x0,y0,z0,x1,y1,z1);
+                                    m_gizmoSharedPivot += glm::vec3((x0+x1)*0.5f, (y0+y1)*0.5f, (z0+z1)*0.5f);
+                                    ++np;
+                                } catch (...) {}
+                            }
+                            if (np > 0) m_gizmoSharedPivot /= static_cast<float>(np);
                         }
                     }
 
@@ -538,9 +597,13 @@ void Application::renderViewport() {
                                 }
                                 gp_Trsf trsf; trsf.SetTranslation(gp_Vec(d.x, d.y, d.z));
                                 // Apply the same translation to every selected body,
-                                // each from its own original shape.
+                                // each from its own original shape. copy=false is
+                                // a location-only transform, so the underlying
+                                // topology (and its cached triangulation) is shared
+                                // — orders of magnitude faster per frame than the
+                                // full topology copy.
                                 for (auto& [id, orig] : m_gizmoDragOriginals) {
-                                    BRepBuilderAPI_Transform xf(orig, trsf, true);
+                                    BRepBuilderAPI_Transform xf(orig, trsf, /*copy=*/false);
                                     if (xf.IsDone()) m_document->updateBody(id, xf.Shape());
                                 }
                                 m_meshesDirty = true;
@@ -550,11 +613,21 @@ void Application::renderViewport() {
                                 m_gizmoRotAxis = ad;
                                 m_gizmoTotalAngle += glm::dot(gResult.delta, ad);
                                 float ang = softSnap45(m_gizmoTotalAngle);
+                                // Pivot was captured once at drag start —
+                                // reusing it avoids 65 bbox computations per
+                                // frame for a large multi-selection.
+                                const glm::vec3& pivot = m_gizmoSharedPivot;
                                 gp_Trsf trsf;
-                                trsf.SetRotation(gp_Ax1(center, gp_Dir(ad.x, ad.y, ad.z)),
+                                trsf.SetRotation(gp_Ax1(gp_Pnt(pivot.x, pivot.y, pivot.z),
+                                                        gp_Dir(ad.x, ad.y, ad.z)),
                                                  ang * M_PI / 180.0);
-                                BRepBuilderAPI_Transform xf(m_gizmoDragOriginalShape, trsf, true);
-                                if (xf.IsDone()) { result = xf.Shape(); applied = true; }
+                                // copy=false: location-only, shared topology, fast.
+                                for (auto& [id, orig] : m_gizmoDragOriginals) {
+                                    BRepBuilderAPI_Transform xf(orig, trsf, /*copy=*/false);
+                                    if (xf.IsDone()) m_document->updateBody(id, xf.Shape());
+                                }
+                                m_meshesDirty = true;
+                                applied = false; // per-body above
                             } else { // Scale — per-axis, non-uniform about the centre
                                 float os = static_cast<float>(glm::length(
                                     glm::vec3(ox2-ox1, oy2-oy1, oz2-oz1)));
@@ -563,24 +636,30 @@ void Application::renderViewport() {
                                        : gResult.activeAxis == GizmoAxis::Y ? 1 : 2;
                                 m_gizmoScaleAccum[ai] += (ai==0?gResult.delta.x:ai==1?gResult.delta.y:gResult.delta.z);
                                 if (m_scaleUniform) {
-                                    // Drive all axes from the dragged axis's factor.
                                     float f = glm::clamp(1.0f + m_gizmoScaleAccum[ai]/os, 0.05f, 20.0f);
-                                    f = std::round(f * 100.0f) / 100.0f; // snap to 1%
+                                    f = std::round(f * 100.0f) / 100.0f;
                                     m_gizmoTotalScale = glm::vec3(f);
                                 } else {
                                     for (int k = 0; k < 3; ++k) {
                                         float f = glm::clamp(1.0f + m_gizmoScaleAccum[k]/os, 0.05f, 20.0f);
-                                        m_gizmoTotalScale[k] = std::round(f * 100.0f) / 100.0f; // snap to 1%
+                                        m_gizmoTotalScale[k] = std::round(f * 100.0f) / 100.0f;
                                     }
                                 }
+                                // Cached pivot — see Rotate branch above.
+                                const glm::vec3& pivot = m_gizmoSharedPivot;
                                 gp_GTrsf gt;
-                                gt.SetVectorialPart(gp_Mat(m_gizmoTotalScale.x,0,0, 0,m_gizmoTotalScale.y,0, 0,0,m_gizmoTotalScale.z));
-                                double cx=center.X(), cy=center.Y(), cz=center.Z();
-                                gt.SetTranslationPart(gp_XYZ(cx - m_gizmoTotalScale.x*cx,
-                                                             cy - m_gizmoTotalScale.y*cy,
-                                                             cz - m_gizmoTotalScale.z*cz));
-                                BRepBuilderAPI_GTransform xf(m_gizmoDragOriginalShape, gt, true);
-                                if (xf.IsDone()) { result = xf.Shape(); applied = true; }
+                                gt.SetVectorialPart(gp_Mat(m_gizmoTotalScale.x,0,0,
+                                                           0,m_gizmoTotalScale.y,0,
+                                                           0,0,m_gizmoTotalScale.z));
+                                gt.SetTranslationPart(gp_XYZ(pivot.x - m_gizmoTotalScale.x * pivot.x,
+                                                             pivot.y - m_gizmoTotalScale.y * pivot.y,
+                                                             pivot.z - m_gizmoTotalScale.z * pivot.z));
+                                for (auto& [id, orig] : m_gizmoDragOriginals) {
+                                    BRepBuilderAPI_GTransform xf(orig, gt, true);
+                                    if (xf.IsDone()) m_document->updateBody(id, xf.Shape());
+                                }
+                                m_meshesDirty = true;
+                                applied = false; // per-body above
                             }
 
                             if (applied) {
@@ -591,57 +670,116 @@ void Application::renderViewport() {
                         gizmoConsumedInput = true;
                     }
 
-                    // End drag: commit the right TransformOp(s) for the gizmo's mode.
+                    // End drag: commit the right operation for the gizmo's mode.
+                    // Single body -> a TransformOp (parameters stay editable in
+                    // the Properties panel). Multi-body -> a single batched
+                    // ReplayOp snapshot so the history shows one entry, not one
+                    // per body.
                     if (m_gizmoDragging && gResult.activeAxis == GizmoAxis::None && !mouseDown) {
                         try {
                             GizmoMode gm = m_gizmo->getMode();
-                            if (gm == GizmoMode::Translate) {
-                                // Multi-body Move: restore every body's original so
-                                // each TransformOp captures the right previousShape,
-                                // then push one Translate op per body.
-                                for (auto& [id, orig] : m_gizmoDragOriginals) {
-                                    m_document->updateBody(id, orig);
-                                }
-                                glm::vec3 d = m_gizmoTotalDelta;
-                                if (m_snapToGrid && m_sketchGridStep > 0.0f) {
-                                    float step = m_sketchGridStep, thr = step * 0.4f;
-                                    auto s1 = [&](float v){ float n=std::round(v/step)*step; return std::abs(v-n)<thr?n:v; };
-                                    d.x = s1(d.x); d.y = s1(d.y); d.z = s1(d.z);
-                                }
-                                if (glm::length(d) > 1e-4f) {
-                                    for (auto& [id, orig] : m_gizmoDragOriginals) {
-                                        Bnd_Box bb; BRepBndLib::Add(orig, bb);
-                                        double x0,y0,z0,x1,y1,z1; bb.Get(x0,y0,z0,x1,y1,z1);
-                                        auto op = std::make_unique<TransformOp>();
-                                        op->setBodyId(id);
-                                        op->setCenter((x0+x1)/2,(y0+y1)/2,(z0+z1)/2);
-                                        op->setType(TransformType::Translate);
-                                        op->setTranslation(d.x, d.y, d.z);
-                                        m_history->pushOperation(std::move(op), *m_document);
-                                    }
-                                }
-                            } else {
-                                // Rotate/Scale: single-body path (primary only).
-                                m_document->updateBody(m_gizmoDragBodyId, m_gizmoDragOriginalShape);
-                                Bnd_Box ob; BRepBndLib::Add(m_gizmoDragOriginalShape, ob);
-                                double ox1,oy1,oz1,ox2,oy2,oz2; ob.Get(ox1,oy1,oz1,ox2,oy2,oz2);
-                                gp_Pnt center((ox1+ox2)/2,(oy1+oy2)/2,(oz1+oz2)/2);
+                            const size_t nBodies = m_gizmoDragOriginals.size();
+                            const bool isMulti = nBodies > 1;
 
+                            // Snapshot the post-drag state BEFORE restoring originals,
+                            // since the batched ReplayOp needs it as the "after".
+                            ReplayOp::BodyState afterState;
+                            if (isMulti) {
+                                for (auto& [id, orig] : m_gizmoDragOriginals) {
+                                    afterState.push_back({id, m_document->getBody(id)});
+                                }
+                            }
+                            // Restore originals so any TransformOp captures the right
+                            // previousShape on execute(), and so the ReplayOp's
+                            // "before" snapshot is the pre-drag state.
+                            for (auto& [id, orig] : m_gizmoDragOriginals) {
+                                m_document->updateBody(id, orig);
+                            }
+
+                            // Shared pivot captured once at drag start.
+                            const glm::vec3& pivot = m_gizmoSharedPivot;
+
+                            glm::vec3 d = m_gizmoTotalDelta;
+                            if (gm == GizmoMode::Translate &&
+                                m_snapToGrid && m_sketchGridStep > 0.0f) {
+                                float step = m_sketchGridStep, thr = step * 0.4f;
+                                auto s1 = [&](float v){ float n=std::round(v/step)*step; return std::abs(v-n)<thr?n:v; };
+                                d.x = s1(d.x); d.y = s1(d.y); d.z = s1(d.z);
+                            }
+                            float ang = (gm == GizmoMode::Rotate)
+                                            ? softSnap45(m_gizmoTotalAngle) : 0.0f;
+
+                            bool validMove   = glm::length(d) > 1e-4f;
+                            bool validRotate = std::abs(ang) > 1e-3f;
+                            bool validScale  = glm::length(m_gizmoTotalScale - glm::vec3(1.0f)) > 1e-3f;
+                            bool anyValid    = (gm == GizmoMode::Translate && validMove) ||
+                                               (gm == GizmoMode::Rotate    && validRotate) ||
+                                               (gm == GizmoMode::Scale     && validScale);
+
+                            if (!anyValid) {
+                                /* below-threshold drag: leave history alone */
+                            } else if (isMulti) {
+                                // Batched commit: one ReplayOp covering all bodies.
+                                ReplayOp::BodyState beforeState;
+                                for (auto& [id, orig] : m_gizmoDragOriginals) {
+                                    beforeState.push_back({id, orig});
+                                }
+                                std::string label;
+                                std::string desc;
+                                if (gm == GizmoMode::Translate) {
+                                    label = "Move (" + std::to_string(nBodies) + " bodies)";
+                                    char buf[96];
+                                    std::snprintf(buf, sizeof(buf), "Move %d bodies by (%.2f, %.2f, %.2f) mm",
+                                                  (int)nBodies, d.x, d.y, d.z);
+                                    desc = buf;
+                                } else if (gm == GizmoMode::Rotate) {
+                                    label = "Rotate (" + std::to_string(nBodies) + " bodies)";
+                                    char buf[96];
+                                    std::snprintf(buf, sizeof(buf), "Rotate %d bodies by %.1f°",
+                                                  (int)nBodies, ang);
+                                    desc = buf;
+                                } else {
+                                    label = "Scale (" + std::to_string(nBodies) + " bodies)";
+                                    char buf[128];
+                                    std::snprintf(buf, sizeof(buf),
+                                                  "Scale %d bodies (%.0f%%, %.0f%%, %.0f%%)",
+                                                  (int)nBodies,
+                                                  m_gizmoTotalScale.x * 100.0f,
+                                                  m_gizmoTotalScale.y * 100.0f,
+                                                  m_gizmoTotalScale.z * 100.0f);
+                                    desc = buf;
+                                }
+                                auto op = std::make_unique<ReplayOp>(
+                                    "batchtransform", label, desc,
+                                    std::move(beforeState), std::move(afterState),
+                                    /*fromReload=*/false);
+                                // Apply the after-state to the doc and stamp it as
+                                // executed — the live drag already left the bodies
+                                // in that state visually.
+                                op->execute(*m_document);
+                                m_history->pushExecuted(std::move(op));
+                            } else {
+                                // Single body: keep the TransformOp path so the
+                                // Properties panel still lets the user edit the
+                                // translation/angle/scale after the fact.
                                 auto op = std::make_unique<TransformOp>();
                                 op->setBodyId(m_gizmoDragBodyId);
-                                op->setCenter(center.X(), center.Y(), center.Z());
-                                bool valid = true;
-                                if (gm == GizmoMode::Rotate) {
-                                    float ang = softSnap45(m_gizmoTotalAngle);
+                                op->setCenter(pivot.x, pivot.y, pivot.z);
+                                if (gm == GizmoMode::Translate) {
+                                    op->setType(TransformType::Translate);
+                                    op->setTranslation(d.x, d.y, d.z);
+                                } else if (gm == GizmoMode::Rotate) {
                                     op->setType(TransformType::Rotate);
-                                    op->setRotation(m_gizmoRotAxis.x, m_gizmoRotAxis.y, m_gizmoRotAxis.z, ang);
-                                    valid = std::abs(ang) > 1e-3f;
+                                    op->setRotation(m_gizmoRotAxis.x,
+                                                    m_gizmoRotAxis.y,
+                                                    m_gizmoRotAxis.z, ang);
                                 } else {
                                     op->setType(TransformType::Scale);
-                                    op->setScaleXYZ(m_gizmoTotalScale.x, m_gizmoTotalScale.y, m_gizmoTotalScale.z);
-                                    valid = glm::length(m_gizmoTotalScale - glm::vec3(1.0f)) > 1e-3f;
+                                    op->setScaleXYZ(m_gizmoTotalScale.x,
+                                                    m_gizmoTotalScale.y,
+                                                    m_gizmoTotalScale.z);
                                 }
-                                if (valid) m_history->pushOperation(std::move(op), *m_document);
+                                m_history->pushOperation(std::move(op), *m_document);
                             }
                             m_meshesDirty = true;
                         } catch (...) {}
@@ -721,6 +859,21 @@ void Application::renderViewport() {
                         m_mirrorPickFace = false;
                         regionConsumedClick = true; // don't also change selection
                     }
+
+                    // Measure: point-to-point click capture. When the tool is
+                    // in PointToPoint mode, a left-click on something the
+                    // picker can hit is captured as a measurement point and
+                    // we skip the normal selection logic for that click.
+                    bool measureConsumedClick = false;
+                    if (m_measureTool &&
+                        m_measureTool->getMode() == MeasureMode::Line &&
+                        result.hit &&
+                        ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                        m_measureTool->capturePoint(result.hitPoint);
+                        measureConsumedClick = true;
+                        regionConsumedClick = true; // suppress selection paths
+                    }
+                    (void)measureConsumedClick;
 
                     // Double-click to select body, single-click to select face
                     if (!regionConsumedClick && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
@@ -877,47 +1030,474 @@ void Application::renderViewport() {
                 float localY = mousePos.y - winPos.y;
                 glm::vec2 sketchCoord = screenToSketch(localX, localY, contentSize.x, contentSize.y);
 
-                // Interactive sketch-rotate takes over input while active: the
-                // cursor angle around the pivot drives the rotation; left-click
-                // commits, Esc (handled in handleShortcuts) cancels.
-                if (m_sketchRotating) {
-                    glm::vec2 v0 = m_sketchRotateAnchor - m_sketchRotateCenter;
-                    glm::vec2 v1 = sketchCoord          - m_sketchRotateCenter;
-                    if (glm::length(v0) > 1e-4f && glm::length(v1) > 1e-4f) {
-                        float ang = std::atan2(v1.y, v1.x) - std::atan2(v0.y, v0.x);
-                        float ca = std::cos(ang), sa = std::sin(ang);
-                        for (auto& [id, op] : m_sketchRotateOriginals) {
-                            glm::vec2 d = op - m_sketchRotateCenter;
-                            glm::vec2 r(d.x * ca - d.y * sa, d.x * sa + d.y * ca);
-                            m_activeSketch->movePoint(id, m_sketchRotateCenter + r);
+                // === Sketch Move/Rotate gizmo ====================================
+                // Drawn on the selection centroid in Select mode. Axis arrows for
+                // constrained X/Y move, centre dot for free move, ring for rotate.
+                // Held-drag: click a handle → drag → release commits. While the
+                // gizmo owns the drag, the normal sketch tool input is skipped so
+                // both don't try to mutate the same points.
+                ImDrawList* gdl = ImGui::GetWindowDrawList();
+                glm::mat4 gvp = proj * view;
+                auto gToImg = [&](glm::vec3 w, ImVec2& out) -> bool {
+                    glm::vec4 c = gvp * glm::vec4(w, 1.0f);
+                    if (c.w <= 1e-5f) return false; // behind camera
+                    out = ImVec2(winPos.x + (c.x / c.w * 0.5f + 0.5f) * contentSize.x,
+                                 winPos.y + (1.0f - (c.y / c.w * 0.5f + 0.5f)) * contentSize.y);
+                    return true;
+                };
+                bool gizmoOwnsInput = (m_sketchGizmoHandle != SketchGizmoHandle::None);
+                if (m_sketchTool->getMode() == SketchToolMode::Select &&
+                    m_sketchTool->hasElementSelection()) {
+
+                    // Resolve involved point ids (selected points + endpoints of
+                    // selected lines) and compute centroid.
+                    std::set<int> involved(m_sketchTool->getSelectedPoints().begin(),
+                                           m_sketchTool->getSelectedPoints().end());
+                    for (int lid : m_sketchTool->getSelectedLines()) {
+                        for (const auto& l : m_activeSketch->getLines()) {
+                            if (l.id == lid) {
+                                involved.insert(l.startPointId);
+                                involved.insert(l.endPointId);
+                                break;
+                            }
                         }
                     }
-                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                        auto after = std::make_shared<Sketch>(*m_activeSketch);
-                        auto op = std::make_unique<SketchEditOp>(
-                            m_activeSketch, m_sketchRotateBefore, after);
-                        m_history->pushExecuted(std::move(op));
-                        m_sketchRotating = false;
-                        m_sketchRotateBefore.reset();
-                        m_sketchRotateOriginals.clear();
+                    glm::vec2 c{0.0f};
+                    int nInv = 0;
+                    for (int id : involved)
+                        if (auto* p = m_activeSketch->getPoint(id)) { c += p->pos; ++nInv; }
+                    if (nInv > 0) {
+                        c /= static_cast<float>(nInv);
+                        // During a drag, anchor the gizmo visual at the drag-start
+                        // centroid so it doesn't slide around with the selection.
+                        glm::vec2 gizmoC = gizmoOwnsInput ? m_sketchGizmoCenter : c;
+
+                        const gp_Ax3& ax = m_activeSketch->getPlane().Position();
+                        glm::vec3 O(ax.Location().X(), ax.Location().Y(), ax.Location().Z());
+                        glm::vec3 Xw(ax.XDirection().X(), ax.XDirection().Y(), ax.XDirection().Z());
+                        glm::vec3 Yw(ax.YDirection().X(), ax.YDirection().Y(), ax.YDirection().Z());
+                        auto sk2w = [&](glm::vec2 p) { return O + p.x * Xw + p.y * Yw; };
+
+                        ImVec2 sc, sx, sy;
+                        bool projOk = gToImg(sk2w(gizmoC), sc) &&
+                                      gToImg(sk2w(gizmoC + glm::vec2(1.0f, 0.0f)), sx) &&
+                                      gToImg(sk2w(gizmoC + glm::vec2(0.0f, 1.0f)), sy);
+                        glm::vec2 vx(sx.x - sc.x, sx.y - sc.y);
+                        glm::vec2 vy(sy.x - sc.x, sy.y - sc.y);
+                        if (projOk && glm::length(vx) > 1e-3f && glm::length(vy) > 1e-3f) {
+                            vx = glm::normalize(vx);
+                            vy = glm::normalize(vy);
+                            const float armLen  = 70.0f;
+                            const float ringR   = 100.0f;
+                            const float centerR = 6.5f;
+                            ImVec2 ex(sc.x + vx.x * armLen, sc.y + vx.y * armLen);
+                            ImVec2 ey(sc.x + vy.x * armLen, sc.y + vy.y * armLen);
+
+                            // Hit-test against handles in screen space.
+                            auto distSegSq = [](glm::vec2 q, glm::vec2 a, glm::vec2 b) {
+                                glm::vec2 ab = b - a;
+                                float len2 = glm::dot(ab, ab);
+                                if (len2 < 1e-6f) return glm::dot(q - a, q - a);
+                                float t = glm::clamp(glm::dot(q - a, ab) / len2, 0.0f, 1.0f);
+                                glm::vec2 proj = a + t * ab;
+                                return glm::dot(q - proj, q - proj);
+                            };
+                            glm::vec2 mv(mousePos.x, mousePos.y);
+                            glm::vec2 scV(sc.x, sc.y), exV(ex.x, ex.y), eyV(ey.x, ey.y);
+                            float distC    = glm::length(mv - scV);
+                            float dxSq     = distSegSq(mv, scV, exV);
+                            float dySq     = distSegSq(mv, scV, eyV);
+                            float distRing = std::abs(distC - ringR);
+
+                            const float pickPx = 8.0f;
+                            const float pickPxSq = pickPx * pickPx;
+                            SketchGizmoHandle hover = SketchGizmoHandle::None;
+                            if      (distC < centerR + 4.0f)                            hover = SketchGizmoHandle::MoveFree;
+                            else if (dxSq < pickPxSq && distC < armLen + 12.0f)         hover = SketchGizmoHandle::MoveX;
+                            else if (dySq < pickPxSq && distC < armLen + 12.0f)         hover = SketchGizmoHandle::MoveY;
+                            else if (distRing < pickPx)                                 hover = SketchGizmoHandle::Rotate;
+
+                            // Yellow highlight for the active or hovered handle.
+                            auto col = [&](ImU32 base, SketchGizmoHandle h) -> ImU32 {
+                                bool hot = (hover == h) || (m_sketchGizmoHandle == h);
+                                return hot ? IM_COL32(255, 240, 80, 255) : base;
+                            };
+                            ImU32 colX      = col(IM_COL32(230,  70,  70, 230), SketchGizmoHandle::MoveX);
+                            ImU32 colY      = col(IM_COL32( 90, 200,  90, 230), SketchGizmoHandle::MoveY);
+                            ImU32 colRing   = col(IM_COL32(220, 180,  60, 220), SketchGizmoHandle::Rotate);
+                            ImU32 colCenter = col(IM_COL32(240, 240, 230, 230), SketchGizmoHandle::MoveFree);
+
+                            // Rotate ring (behind the arrows so arrowheads aren't clipped).
+                            gdl->AddCircle(sc, ringR, colRing, 64, 2.5f);
+                            // Axis arrows.
+                            gdl->AddLine(sc, ex, colX, 3.0f);
+                            gdl->AddLine(sc, ey, colY, 3.0f);
+                            auto arrowhead = [&](ImVec2 tip, glm::vec2 d, ImU32 c) {
+                                glm::vec2 perp(-d.y, d.x);
+                                ImVec2 a(tip.x - d.x * 14.0f + perp.x * 6.0f,
+                                         tip.y - d.y * 14.0f + perp.y * 6.0f);
+                                ImVec2 b(tip.x - d.x * 14.0f - perp.x * 6.0f,
+                                         tip.y - d.y * 14.0f - perp.y * 6.0f);
+                                gdl->AddTriangleFilled(tip, a, b, c);
+                            };
+                            arrowhead(ex, vx, colX);
+                            arrowhead(ey, vy, colY);
+                            // Centre free-move dot, on top.
+                            gdl->AddCircleFilled(sc, centerR, colCenter);
+                            gdl->AddCircle(sc, centerR, IM_COL32(30, 30, 40, 230), 0, 1.2f);
+
+                            // Live angle label while dragging the rotate ring, plus
+                            // a small type-in popup once the drag is released so the
+                            // user can refine the angle exactly.
+                            if (m_sketchGizmoHandle == SketchGizmoHandle::Rotate) {
+                                char angBuf[24];
+                                std::snprintf(angBuf, sizeof(angBuf), "%.1f\xC2\xB0",
+                                              m_sketchGizmoRotateDegrees);
+                                ImVec2 ts = ImGui::CalcTextSize(angBuf);
+                                ImVec2 lp(sc.x + 14.0f, sc.y - 14.0f - ts.y);
+                                gdl->AddRectFilled(ImVec2(lp.x - 4, lp.y - 2),
+                                                   ImVec2(lp.x + ts.x + 4, lp.y + ts.y + 2),
+                                                   IM_COL32(20, 20, 28, 220), 3.0f);
+                                gdl->AddText(lp, IM_COL32(255, 240, 80, 255), angBuf);
+                            }
+
+                            if (m_sketchGizmoRotateAdjusting) {
+                                // Fixed size + NoDocking + plain focus semantics — this
+                                // matches the push/pull popup pattern which doesn't
+                                // glitch on hover. AlwaysAutoResize was the culprit:
+                                // tiny content-rect jitter from hover state collided
+                                // with the parent viewport's hit-test.
+                                ImGui::SetNextWindowPos(ImVec2(sc.x + 20.0f, sc.y + 16.0f),
+                                                        ImGuiCond_Appearing);
+                                ImGui::SetNextWindowSize(ImVec2(200.0f, 0.0f), ImGuiCond_Appearing);
+                                ImGui::Begin("##SketchRotateAdjust", nullptr,
+                                             ImGuiWindowFlags_NoTitleBar |
+                                             ImGuiWindowFlags_NoResize |
+                                             ImGuiWindowFlags_NoMove |
+                                             ImGuiWindowFlags_NoSavedSettings |
+                                             ImGuiWindowFlags_NoDocking);
+                                ImGui::TextColored(ImVec4(0.85f, 0.75f, 0.30f, 1.0f),
+                                                   "Rotation (deg)");
+                                ImGui::SetNextItemWidth(150.0f);
+                                if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+                                bool typedEnter = ImGui::InputText(
+                                    "##sketchRotAng", m_sketchGizmoRotateBuf,
+                                    sizeof(m_sketchGizmoRotateBuf),
+                                    ImGuiInputTextFlags_EnterReturnsTrue |
+                                    ImGuiInputTextFlags_CharsDecimal);
+                                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                                    // Re-apply the typed value live so the user sees
+                                    // the new angle reflected on the sketch.
+                                    float deg = static_cast<float>(std::atof(m_sketchGizmoRotateBuf));
+                                    m_sketchGizmoRotateDegrees = deg;
+                                    float rad = deg * static_cast<float>(M_PI) / 180.0f;
+                                    float ca = std::cos(rad), sa = std::sin(rad);
+                                    for (auto& [id, orig] : m_sketchGizmoOriginals) {
+                                        glm::vec2 d = orig - m_sketchGizmoCenter;
+                                        glm::vec2 r(d.x * ca - d.y * sa,
+                                                    d.x * sa + d.y * ca);
+                                        m_activeSketch->movePoint(id, m_sketchGizmoCenter + r);
+                                    }
+                                }
+                                ImGui::Separator();
+                                bool apply = ImGui::Button("Apply", ImVec2(70, 0)) ||
+                                             typedEnter;
+                                ImGui::SameLine();
+                                bool cancel = ImGui::Button("Cancel", ImVec2(70, 0));
+                                ImGui::End();
+
+                                if (apply) {
+                                    // Re-apply the final typed value, then commit.
+                                    float deg = static_cast<float>(std::atof(m_sketchGizmoRotateBuf));
+                                    float rad = deg * static_cast<float>(M_PI) / 180.0f;
+                                    float ca = std::cos(rad), sa = std::sin(rad);
+                                    for (auto& [id, orig] : m_sketchGizmoOriginals) {
+                                        glm::vec2 d = orig - m_sketchGizmoCenter;
+                                        glm::vec2 r(d.x * ca - d.y * sa,
+                                                    d.x * sa + d.y * ca);
+                                        m_activeSketch->movePoint(id, m_sketchGizmoCenter + r);
+                                    }
+                                    bool changed = false;
+                                    for (auto& [id, orig] : m_sketchGizmoOriginals) {
+                                        if (auto* p = m_activeSketch->getPoint(id))
+                                            if (glm::distance(p->pos, orig) > 1e-5f) {
+                                                changed = true; break;
+                                            }
+                                    }
+                                    if (changed) {
+                                        auto after = std::make_shared<Sketch>(*m_activeSketch);
+                                        auto op = std::make_unique<SketchEditOp>(
+                                            m_activeSketch, m_sketchGizmoBefore, after);
+                                        m_history->pushExecuted(std::move(op));
+                                    }
+                                    m_sketchGizmoHandle = SketchGizmoHandle::None;
+                                    m_sketchGizmoBefore.reset();
+                                    m_sketchGizmoOriginals.clear();
+                                    m_sketchGizmoRotateAdjusting = false;
+                                } else if (cancel) {
+                                    for (auto& [id, orig] : m_sketchGizmoOriginals)
+                                        m_activeSketch->movePoint(id, orig);
+                                    m_sketchGizmoHandle = SketchGizmoHandle::None;
+                                    m_sketchGizmoBefore.reset();
+                                    m_sketchGizmoOriginals.clear();
+                                    m_sketchGizmoRotateAdjusting = false;
+                                }
+                            }
+
+                            // Start drag: clicking a handle arms the gizmo, snapshots
+                            // the involved points, and stops the click from reaching
+                            // the SketchTool below. Ctrl+click is the multi-select
+                            // modifier for sketch elements — never intercept it for
+                            // the gizmo, even if the click happens to land on a
+                            // handle (the ring is large and crosses sketch lines).
+                            if (!gizmoOwnsInput && hover != SketchGizmoHandle::None &&
+                                !io.KeyCtrl &&
+                                ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                                m_sketchGizmoHandle = hover;
+                                m_sketchGizmoCenter = c;
+                                m_sketchGizmoAnchor = sketchCoord;
+                                m_sketchGizmoBefore = std::make_shared<Sketch>(*m_activeSketch);
+                                m_sketchGizmoOriginals.clear();
+                                for (int id : involved)
+                                    if (auto* p = m_activeSketch->getPoint(id))
+                                        m_sketchGizmoOriginals.push_back({id, p->pos});
+                                gizmoOwnsInput = true;
+                            }
+                        }
                     }
-                    // Skip the normal sketch-tool input while rotating.
+                }
+
+                // Apply the gizmo drag (skipped once Rotate has transitioned to
+                // popup-adjust mode — there's no live drag anymore at that point).
+                // MoveX/MoveY clamp the cursor delta to the chosen sketch axis and
+                // snap the resulting centroid to grid; MoveFree snaps both axes;
+                // Rotate spins around the centroid with a 15° soft snap.
+                if (gizmoOwnsInput && !m_sketchGizmoRotateAdjusting) {
+                    glm::vec2 cur = sketchCoord;
+                    if (m_sketchGizmoHandle == SketchGizmoHandle::Rotate) {
+                        glm::vec2 v0 = m_sketchGizmoAnchor - m_sketchGizmoCenter;
+                        glm::vec2 v1 = cur                  - m_sketchGizmoCenter;
+                        if (glm::length(v0) > 1e-4f && glm::length(v1) > 1e-4f) {
+                            float angRad = std::atan2(v1.y, v1.x) - std::atan2(v0.y, v0.x);
+                            float angDeg = angRad * 180.0f / static_cast<float>(M_PI);
+                            // Soft 15° snap: lock when within 3° of an increment so
+                            // the user can ride the snap without it feeling sticky.
+                            float snapped = std::round(angDeg / 15.0f) * 15.0f;
+                            if (std::abs(angDeg - snapped) < 3.0f) angDeg = snapped;
+                            m_sketchGizmoRotateDegrees = angDeg;
+                            float rad = angDeg * static_cast<float>(M_PI) / 180.0f;
+                            float ca = std::cos(rad), sa = std::sin(rad);
+                            for (auto& [id, orig] : m_sketchGizmoOriginals) {
+                                glm::vec2 d = orig - m_sketchGizmoCenter;
+                                glm::vec2 r(d.x * ca - d.y * sa, d.x * sa + d.y * ca);
+                                m_activeSketch->movePoint(id, m_sketchGizmoCenter + r);
+                            }
+                        }
+                    } else {
+                        glm::vec2 delta = cur - m_sketchGizmoAnchor;
+                        if (m_sketchGizmoHandle == SketchGizmoHandle::MoveX) delta.y = 0.0f;
+                        else if (m_sketchGizmoHandle == SketchGizmoHandle::MoveY) delta.x = 0.0f;
+                        // Snap the new centroid (on the unconstrained axes) so the
+                        // numbers land on grid lines.
+                        float step = m_sketchTool->getGridStep();
+                        if (step > 0.0f) {
+                            glm::vec2 nc = m_sketchGizmoCenter + delta;
+                            if (m_sketchGizmoHandle != SketchGizmoHandle::MoveY)
+                                nc.x = std::round(nc.x / step) * step;
+                            if (m_sketchGizmoHandle != SketchGizmoHandle::MoveX)
+                                nc.y = std::round(nc.y / step) * step;
+                            delta = nc - m_sketchGizmoCenter;
+                        }
+                        for (auto& [id, orig] : m_sketchGizmoOriginals)
+                            m_activeSketch->movePoint(id, orig + delta);
+                    }
+
+                    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                        if (m_sketchGizmoHandle == SketchGizmoHandle::Rotate) {
+                            // Transition to popup-adjust mode instead of committing
+                            // straight away — the user can refine the angle by
+                            // typing, then Apply / Enter commits.
+                            std::snprintf(m_sketchGizmoRotateBuf,
+                                          sizeof(m_sketchGizmoRotateBuf),
+                                          "%.1f", m_sketchGizmoRotateDegrees);
+                            m_sketchGizmoRotateAdjusting = true;
+                        } else {
+                            bool changed = false;
+                            for (auto& [id, orig] : m_sketchGizmoOriginals) {
+                                if (auto* p = m_activeSketch->getPoint(id))
+                                    if (glm::distance(p->pos, orig) > 1e-5f) {
+                                        changed = true; break;
+                                    }
+                            }
+                            if (changed) {
+                                auto after = std::make_shared<Sketch>(*m_activeSketch);
+                                auto op = std::make_unique<SketchEditOp>(
+                                    m_activeSketch, m_sketchGizmoBefore, after);
+                                m_history->pushExecuted(std::move(op));
+                            }
+                            m_sketchGizmoHandle = SketchGizmoHandle::None;
+                            m_sketchGizmoBefore.reset();
+                            m_sketchGizmoOriginals.clear();
+                        }
+                    }
+                }
+
+                // Hit-test helper shared by box-select start and chain-select
+                // (double-click). Mirrors handleSelectTool: nearest point first,
+                // then a nearby line, within the same tolerance.
+                auto pickSketchAt = [&](glm::vec2 pos, int& outPointId, int& outLineId) {
+                    outPointId = -1; outLineId = -1;
+                    const float pointTol = 0.3f; // matches SketchTool::findCoincidentPoint
+                    for (const auto& pt : m_activeSketch->getPoints()) {
+                        if (glm::length(pos - pt.pos) < pointTol) { outPointId = pt.id; return; }
+                    }
+                    float bestD = 0.0f;
+                    const float lineTol = std::max(m_sketchTool->getGridStep() * 0.5f, 0.5f);
+                    for (const auto& l : m_activeSketch->getLines()) {
+                        const SketchPoint* a = m_activeSketch->getPoint(l.startPointId);
+                        const SketchPoint* b = m_activeSketch->getPoint(l.endPointId);
+                        if (!a || !b) continue;
+                        glm::vec2 ab = b->pos - a->pos;
+                        float len2 = glm::dot(ab, ab);
+                        if (len2 < 1e-12f) continue;
+                        float t = glm::clamp(glm::dot(pos - a->pos, ab) / len2, 0.0f, 1.0f);
+                        glm::vec2 proj = a->pos + ab * t;
+                        float d = glm::distance(proj, pos);
+                        if (d < lineTol && (outLineId < 0 || d < bestD)) {
+                            outLineId = l.id; bestD = d;
+                        }
+                    }
+                };
+
+                if (gizmoOwnsInput) {
+                    // Suppress normal sketch input while the gizmo owns the drag /
+                    // popup adjust.
                 } else if (m_sketchTool->getMode() == SketchToolMode::Select &&
                     ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                    // Double-click in Select mode → select every element in the
-                    // sketch (saves a Ctrl+click marathon to grab everything).
-                    m_sketchTool->selectAll();
+                    // Double-click behaviour:
+                    //   on a line → select every line in its connected chain
+                    //               (lines sharing endpoints, transitively),
+                    //   empty space → select every element in the sketch.
+                    int hitPt = -1, hitLn = -1;
+                    pickSketchAt(sketchCoord, hitPt, hitLn);
+                    if (hitLn >= 0) {
+                        // BFS over lines via shared endpoint ids.
+                        std::set<int> selPts, selLns;
+                        std::vector<int> stack{hitLn};
+                        while (!stack.empty()) {
+                            int lid = stack.back(); stack.pop_back();
+                            if (!selLns.insert(lid).second) continue;
+                            for (const auto& l : m_activeSketch->getLines()) {
+                                if (l.id != lid) continue;
+                                selPts.insert(l.startPointId);
+                                selPts.insert(l.endPointId);
+                                // walk neighbours via the two endpoints
+                                for (const auto& n : m_activeSketch->getLines()) {
+                                    if (n.id == lid || selLns.count(n.id)) continue;
+                                    if (n.startPointId == l.startPointId ||
+                                        n.startPointId == l.endPointId   ||
+                                        n.endPointId   == l.startPointId ||
+                                        n.endPointId   == l.endPointId) {
+                                        stack.push_back(n.id);
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        m_sketchTool->setSelection(selPts, selLns);
+                    } else {
+                        m_sketchTool->selectAll();
+                    }
                     m_sketchDragBefore.reset(); // not a drag
                 } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                    // Select/drag mutates point positions only — no structural
-                    // change — so recordSketchMutation's signature wouldn't see
-                    // it. Snapshot manually for the drag-commit on mouse-up.
-                    if (m_sketchTool->getMode() == SketchToolMode::Select) {
-                        m_sketchDragBefore = std::make_shared<Sketch>(*m_activeSketch);
+                    // Pick first to decide between element-drag and box-select.
+                    bool tryBoxSelect = (m_sketchTool->getMode() == SketchToolMode::Select);
+                    int hitPt = -1, hitLn = -1;
+                    if (tryBoxSelect) pickSketchAt(sketchCoord, hitPt, hitLn);
+                    bool hitElement = (hitPt >= 0 || hitLn >= 0);
+
+                    if (tryBoxSelect && !hitElement && m_boxSelect) {
+                        // Empty space in Select mode → start a box-select drag.
+                        // Don't clear the existing selection yet; the release
+                        // handler does that based on whether the rect is tiny.
+                        m_boxSelect->begin(glm::vec2(localX, localY));
+                        m_sketchBoxSelectActive = true;
+                        m_sketchDragBefore.reset();
+                    } else {
+                        // Select/drag mutates point positions only — no structural
+                        // change — so recordSketchMutation's signature wouldn't see
+                        // it. Snapshot manually for the drag-commit on mouse-up.
+                        if (m_sketchTool->getMode() == SketchToolMode::Select) {
+                            m_sketchDragBefore = std::make_shared<Sketch>(*m_activeSketch);
+                        }
+                        recordSketchMutation([&]{ m_sketchTool->onMouseDown(sketchCoord, io.KeyCtrl); });
                     }
-                    recordSketchMutation([&]{ m_sketchTool->onMouseDown(sketchCoord, io.KeyCtrl); });
                 }
-                if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+
+                // Box-select drag/release in sketch mode.
+                if (m_sketchBoxSelectActive && m_boxSelect && m_boxSelect->isActive()) {
+                    if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+                        m_boxSelect->update(glm::vec2(localX, localY));
+                    }
+                    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                        glm::vec2 mn = m_boxSelect->getMin();
+                        glm::vec2 mx = m_boxSelect->getMax();
+                        m_boxSelect->end();
+                        m_sketchBoxSelectActive = false;
+
+                        if (glm::distance(mn, mx) < 4.0f) {
+                            // Tiny rect — plain click on empty space. Clear unless Ctrl.
+                            if (!io.KeyCtrl) m_sketchTool->clearElementSelection();
+                        } else {
+                            // Project sketch points to viewport-local screen pixels,
+                            // pick anything that lands in the rectangle, plus any
+                            // line whose endpoints' AABB overlaps the rectangle.
+                            const gp_Ax3& ax = m_activeSketch->getPlane().Position();
+                            glm::vec3 O(ax.Location().X(), ax.Location().Y(), ax.Location().Z());
+                            glm::vec3 Xw(ax.XDirection().X(), ax.XDirection().Y(), ax.XDirection().Z());
+                            glm::vec3 Yw(ax.YDirection().X(), ax.YDirection().Y(), ax.YDirection().Z());
+                            glm::mat4 vp = proj * view;
+                            auto projectPt = [&](glm::vec2 sp, glm::vec2& out) -> bool {
+                                glm::vec3 w = O + sp.x * Xw + sp.y * Yw;
+                                glm::vec4 cp = vp * glm::vec4(w, 1.0f);
+                                if (cp.w <= 1e-5f) return false;
+                                out = glm::vec2((cp.x / cp.w * 0.5f + 0.5f) * contentSize.x,
+                                                (1.0f - (cp.y / cp.w * 0.5f + 0.5f)) * contentSize.y);
+                                return true;
+                            };
+
+                            std::set<int> selPts = io.KeyCtrl ? m_sketchTool->getSelectedPoints()
+                                                              : std::set<int>{};
+                            std::set<int> selLns = io.KeyCtrl ? m_sketchTool->getSelectedLines()
+                                                              : std::set<int>{};
+                            // Cache projected positions so the line test reuses them.
+                            std::map<int, glm::vec2> ptScreen;
+                            for (const auto& p : m_activeSketch->getPoints()) {
+                                glm::vec2 sp;
+                                if (!projectPt(p.pos, sp)) continue;
+                                ptScreen[p.id] = sp;
+                                if (sp.x >= mn.x && sp.x <= mx.x &&
+                                    sp.y >= mn.y && sp.y <= mx.y) {
+                                    selPts.insert(p.id);
+                                }
+                            }
+                            for (const auto& l : m_activeSketch->getLines()) {
+                                auto a = ptScreen.find(l.startPointId);
+                                auto b = ptScreen.find(l.endPointId);
+                                if (a == ptScreen.end() || b == ptScreen.end()) continue;
+                                glm::vec2 lmin = glm::min(a->second, b->second);
+                                glm::vec2 lmax = glm::max(a->second, b->second);
+                                if (lmax.x >= mn.x && lmin.x <= mx.x &&
+                                    lmax.y >= mn.y && lmin.y <= mx.y) {
+                                    selLns.insert(l.id);
+                                }
+                            }
+                            m_sketchTool->setSelection(selPts, selLns);
+                        }
+                    }
+                }
+
+                if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !m_sketchBoxSelectActive) {
                     m_sketchTool->onMouseUp(sketchCoord);
                     if (m_sketchDragBefore) {
                         // Compare point positions; commit a SketchEditOp if any moved.
@@ -937,7 +1517,7 @@ void Application::renderViewport() {
                         m_sketchDragBefore.reset();
                     }
                 }
-                m_sketchTool->onMouseMove(sketchCoord);
+                if (!gizmoOwnsInput) m_sketchTool->onMouseMove(sketchCoord);
             }
         }
     }

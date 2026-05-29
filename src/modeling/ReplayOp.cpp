@@ -3,39 +3,50 @@
 #include <set>
 
 ReplayOp::ReplayOp(std::string typeId, std::string name, std::string description,
-                   BodyState before, BodyState after)
+                   BodyState before, BodyState after, bool fromReload)
     : m_typeId(std::move(typeId))
     , m_name(std::move(name))
     , m_description(std::move(description))
     , m_before(std::move(before))
-    , m_after(std::move(after)) {}
+    , m_after(std::move(after))
+    , m_fromReload(fromReload) {}
 
-void ReplayOp::restore(Document& doc, const BodyState& state) {
+void ReplayOp::restore(Document& doc, const BodyState& state,
+                       bool removeUnlisted) {
     std::set<int> wanted;
     for (const auto& [id, shape] : state) {
         doc.putBody(id, shape);
         wanted.insert(id);
     }
-    // Drop any body that shouldn't exist in this state (e.g. one this step
-    // created, when undoing).
+    // Project-reload snapshots cover the whole document — anything not listed
+    // shouldn't exist in this state (e.g. a body created by a later step that
+    // we're undoing past). Batch in-session snapshots only cover the affected
+    // bodies, so removing unlisted ones would delete the rest of the scene.
+    if (!removeUnlisted) return;
     for (int id : doc.getAllBodyIds()) {
         if (!wanted.count(id)) doc.removeBody(id);
     }
 }
 
 bool ReplayOp::execute(Document& doc) {
-    restore(doc, m_after);
+    restore(doc, m_after, /*removeUnlisted=*/m_fromReload);
     return true;
 }
 
 bool ReplayOp::undo(Document& doc) {
-    restore(doc, m_before);
+    restore(doc, m_before, /*removeUnlisted=*/m_fromReload);
     return true;
 }
 
 void ReplayOp::renderProperties() {
     ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", m_description.c_str());
-    ImGui::Spacing();
-    ImGui::TextWrapped("Loaded from a saved project. Undo/redo work, but the "
-                       "parameters of a reloaded step can't be edited.");
+    if (m_fromReload) {
+        ImGui::Spacing();
+        ImGui::TextWrapped("Loaded from a saved project. Undo/redo work, but the "
+                           "parameters of a reloaded step can't be edited.");
+    } else {
+        ImGui::Spacing();
+        ImGui::TextWrapped("Batched transform — undo/redo restores the whole "
+                           "set at once.");
+    }
 }
