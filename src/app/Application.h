@@ -97,6 +97,13 @@ private:
 
     void importStepFile();
     void exportStepFile();
+    // Per-body STL export: opens a save dialog with the body's current name
+    // (from the Items panel) as the default filename and writes JUST that
+    // body's mesh. Triggered from the viewport right-click menu and the
+    // Items-panel context menu so users can dump individual parts of a
+    // multi-body project without juggling visibility for the file-menu
+    // "Export STL" (which writes every visible body to one file).
+    void exportBodyAsStl(int bodyId);
     void saveProject();         // Save dialog (Save As behavior)
     void saveProjectQuick();    // Save to current path if known, else falls through to saveProject
     void loadProject();         // File dialog → loadProjectAt

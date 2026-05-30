@@ -3,6 +3,27 @@
 All notable changes to Materializr are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [0.3.5] — 2026-05-30
+
+### Added
+
+- **Per-body STL export.** Right-click any body in the viewport or its row
+  in the Items panel and pick **Export STL…** to dump just that body to
+  a file. The save dialog opens with the body's current name (as shown
+  in the Items panel) as the default filename — `<body name>.stl`, with
+  filesystem-unfriendly characters (`/ \ : * ? " < > |`) sanitised to
+  `_`. Separate from File → Export STL, which still writes every visible
+  body to one file; this one is for pulling individual parts out of a
+  multi-body project without juggling visibility.
+
+### Internal
+
+- New `Application::exportBodyAsStl(int bodyId)`, called from both
+  context menus.
+- `ItemsPanel` gained a `setExportStlCallback(std::function<void(int)>)`
+  hook so it can route the menu click without depending on the STL I/O
+  module directly.
+
 ## [0.3.4] — 2026-05-30
 
 Tiny cleanup release — drops scaffolding left over from troubleshooting in

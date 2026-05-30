@@ -484,6 +484,13 @@ bool ItemsPanel::renderBodyRow(int id, bool& colorChanged) {
             }
             colorChanged = true;
         }
+        // Per-body STL export: dumps only this body's mesh to a file the
+        // user picks. Default filename = the body's current name (see
+        // Application::exportBodyAsStl). Wired via callback so ItemsPanel
+        // doesn't depend on the STL I/O module.
+        if (!deleted && m_exportStl && ImGui::MenuItem("Export STL…")) {
+            m_exportStl(id);
+        }
         // Move-to-folder submenu. If the right-clicked body is part of a
         // multi-selection, the action moves EVERY selected body at once;
         // otherwise it just moves this one. Lists existing folders + a "(root)"

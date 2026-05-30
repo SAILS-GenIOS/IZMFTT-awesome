@@ -20,6 +20,10 @@ public:
     // Application can mark the project dirty (otherwise closing without a
     // manual Save silently drops the change).
     void setDirtyCallback(std::function<void()> cb) { m_markDirty = std::move(cb); }
+    // Called when the user picks "Export STL…" from a body's context menu.
+    // ItemsPanel doesn't own STL I/O, so the Application wires this up to
+    // route the click into its own per-body export flow.
+    void setExportStlCallback(std::function<void(int)> cb) { m_exportStl = std::move(cb); }
 
     // Returns true if a body was deleted (caller must rebuild meshes)
     bool render();
@@ -29,6 +33,7 @@ private:
     SelectionManager* m_selection = nullptr;
     History* m_history = nullptr;
     std::function<void()> m_markDirty;
+    std::function<void(int)> m_exportStl;
     int m_renamingId = -1;
     char m_renameBuffer[128] = {};
     bool m_showBodies = true;

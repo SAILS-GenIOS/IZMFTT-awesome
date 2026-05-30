@@ -53,6 +53,7 @@
 #include "modeling/SketchEditOp.h"
 #include "modeling/ResizeCylindricalOp.h"
 #include "io/StepIO.h"
+#include "io/StlExport.h"
 #include "io/FileDialogs.h"
 #include "io/ProjectIO.h"
 #include "io/Settings.h"
@@ -143,6 +144,7 @@ Application::Application(bool safeMode) : m_safeMode(safeMode) {
     m_itemsPanel->setSelectionManager(m_selection.get());
     m_itemsPanel->setHistory(m_history.get());
     m_itemsPanel->setDirtyCallback([this]() { markDirty(); });
+    m_itemsPanel->setExportStlCallback([this](int bodyId) { exportBodyAsStl(bodyId); });
     m_statusBar->setDocument(m_document.get());
     m_statusBar->setSelectionManager(m_selection.get());
     m_propertiesPanel->setHistory(m_history.get());
@@ -1629,6 +1631,41 @@ void Application::exportStepFile() {
             auto result = StepIO::exportFile(path, *m_document);
             if (result.success) std::fprintf(stdout, "Exported to %s\n", path.c_str());
             else std::fprintf(stderr, "Export failed: %s\n", result.errorMessage.c_str());
+        });
+}
+
+void Application::exportBodyAsStl(int bodyId) {
+    if (!m_document || bodyId < 0) return;
+    // Build a safe default filename from the body's name. Strip / replace
+    // characters that the OS would reject in a filename so the dialog
+    // doesn't open with an invalid suggestion the user has to fix.
+    std::string name = m_document->getBodyName(bodyId);
+    if (name.empty()) name = "body-" + std::to_string(bodyId);
+    for (char& ch : name) {
+        if (ch == '/' || ch == '\\' || ch == ':' || ch == '*' || ch == '?' ||
+            ch == '"' || ch == '<' || ch == '>' || ch == '|') ch = '_';
+    }
+    std::string defaultFile = name + ".stl";
+
+    TopoDS_Shape shape;
+    try { shape = m_document->getBody(bodyId); } catch (...) {}
+    if (shape.IsNull()) {
+        std::fprintf(stderr, "Export STL: body %d has no geometry\n", bodyId);
+        return;
+    }
+
+    FileDialogs::saveFile("Export Body to STL", defaultFile,
+        {{"STL Files", "*.stl"}},
+        [shape](const std::string& path) {
+            if (path.empty()) return;
+            auto result = StlExport::exportShape(path, shape);
+            if (result.success) {
+                std::fprintf(stdout, "Exported %d triangles to %s\n",
+                             result.triangleCount, path.c_str());
+            } else {
+                std::fprintf(stderr, "STL export failed: %s\n",
+                             result.errorMessage.c_str());
+            }
         });
 }
 

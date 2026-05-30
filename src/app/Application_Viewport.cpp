@@ -1748,6 +1748,13 @@ void Application::renderViewport() {
             m_selection->select(entry);
             m_contextMenuFace.Nullify();
         }
+        if (ImGui::MenuItem("Export Body to STL…")) {
+            // Per-body STL dump — file-menu Export STL writes every visible
+            // body to one file; this lets users pull a single part out of a
+            // multi-body project without juggling visibility.
+            exportBodyAsStl(m_contextMenuBodyId);
+            m_contextMenuFace.Nullify();
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Cancel")) {
             m_contextMenuFace.Nullify();
