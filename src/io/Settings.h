@@ -50,6 +50,15 @@ namespace SettingsIO {
 
     AppSettings load(const std::string& path);
     bool        save(const std::string& path, const AppSettings& s);
+
+    // Portable import/export as JSON, for backing up preferences or moving them
+    // between machines (File → Import/Export Settings). Same tolerance contract
+    // as load(): unknown keys are ignored and missing keys keep their defaults.
+    // `lastProjectPath` is deliberately omitted — it is machine-specific session
+    // state, not a portable preference. On a read error or unparseable file,
+    // importJson returns defaults and sets *ok (if provided) to false.
+    bool        exportJson(const std::string& path, const AppSettings& s);
+    AppSettings importJson(const std::string& path, bool* ok = nullptr);
 }
 
 } // namespace materializr

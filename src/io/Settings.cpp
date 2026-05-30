@@ -48,6 +48,101 @@ void readBool(const std::map<std::string, std::string>& kv, const char* key, boo
     // anything else: keep default
 }
 
+// Map a bag of string key/values onto the struct. Shared by the `.cfg` text
+// loader and the JSON importer so both honour the same keys and tolerance
+// rules (unknown keys ignored, missing keys keep their defaults).
+void applyKv(const std::map<std::string, std::string>& kv, AppSettings& s) {
+    readInt (kv, "theme",                s.theme);
+    readInt (kv, "orbitButton",          s.orbitButton);
+    readInt (kv, "panButton",            s.panButton);
+    readBool(kv, "levelOrbit",           s.levelOrbit);
+    readBool(kv, "autosaveEnabled",      s.autosaveEnabled);
+    readInt (kv, "autosaveIntervalSec",  s.autosaveIntervalSec);
+    readBool(kv, "invertCubeDrag",       s.invertCubeDrag);
+    readFloat(kv, "lightAmbient",        s.lightAmbient);
+    readBool(kv, "lightHeadlight",       s.lightHeadlight);
+    readBool(kv, "lightFill",            s.lightFill);
+    readInt (kv, "msaaSamples",          s.msaaSamples);
+    readInt (kv, "meshQuality",          s.meshQuality);
+    readFloat(kv, "selectionLineWidth",  s.selectionLineWidth);
+    readBool(kv, "autoOpenLastProject",  s.autoOpenLastProject);
+    readString(kv, "lastProjectPath",    s.lastProjectPath);
+    readBool(kv, "checkForUpdatesOnLaunch", s.checkForUpdatesOnLaunch);
+}
+
+// Make sure the parent directory of `path` exists. Best-effort: a failure here
+// just lets the subsequent file open fail and report the error itself.
+void ensureParentDir(const std::string& path) {
+    try {
+        std::filesystem::path p(path);
+        if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path());
+    } catch (...) { /* fall through */ }
+}
+
+// Minimal reader for a flat JSON object of scalar values. Returns each
+// "key": value pair as raw text (numbers/booleans verbatim; strings unquoted
+// and unescaped) so applyKv can interpret them exactly like the `.cfg` map.
+// Not a general JSON parser — nested objects/arrays are not expected here.
+std::map<std::string, std::string> parseFlatJson(const std::string& text) {
+    std::map<std::string, std::string> kv;
+    size_t i = 0, n = text.size();
+    auto skipWs = [&] { while (i < n && std::isspace(static_cast<unsigned char>(text[i]))) i++; };
+
+    auto readJsonString = [&](std::string& out) -> bool {
+        if (i >= n || text[i] != '"') return false;
+        i++; out.clear();
+        while (i < n) {
+            char c = text[i++];
+            if (c == '\\') {
+                if (i >= n) return false;
+                char e = text[i++];
+                switch (e) {
+                    case '"':  out += '"';  break;
+                    case '\\': out += '\\'; break;
+                    case '/':  out += '/';  break;
+                    case 'n':  out += '\n'; break;
+                    case 't':  out += '\t'; break;
+                    case 'r':  out += '\r'; break;
+                    case 'b':  out += '\b'; break;
+                    case 'f':  out += '\f'; break;
+                    default:   out += e;    break;
+                }
+            } else if (c == '"') {
+                return true;
+            } else {
+                out += c;
+            }
+        }
+        return false;
+    };
+
+    skipWs();
+    if (i < n && text[i] == '{') i++;
+    while (i < n) {
+        skipWs();
+        if (i < n && text[i] == '}') break;
+        std::string key;
+        if (!readJsonString(key)) break;
+        skipWs();
+        if (i < n && text[i] == ':') i++; else break;
+        skipWs();
+        std::string val;
+        if (i < n && text[i] == '"') {
+            if (!readJsonString(val)) break;
+        } else {
+            size_t start = i;
+            while (i < n && text[i] != ',' && text[i] != '}' &&
+                   !std::isspace(static_cast<unsigned char>(text[i]))) i++;
+            val = text.substr(start, i - start);
+        }
+        if (!key.empty()) kv[key] = val;
+        skipWs();
+        if (i < n && text[i] == ',') { i++; continue; }
+        if (i < n && text[i] == '}') break;
+    }
+    return kv;
+}
+
 } // namespace
 
 std::string SettingsIO::defaultPath() {
@@ -92,34 +187,13 @@ AppSettings SettingsIO::load(const std::string& path) {
     }
 
     // Map known keys onto the struct. Unknown keys are simply never read.
-    readInt (kv, "theme",                s.theme);
-    readInt (kv, "orbitButton",          s.orbitButton);
-    readInt (kv, "panButton",            s.panButton);
-    readBool(kv, "levelOrbit",           s.levelOrbit);
-    readBool(kv, "autosaveEnabled",      s.autosaveEnabled);
-    readInt (kv, "autosaveIntervalSec",  s.autosaveIntervalSec);
-    readBool(kv, "invertCubeDrag",       s.invertCubeDrag);
-    readFloat(kv, "lightAmbient",        s.lightAmbient);
-    readBool(kv, "lightHeadlight",       s.lightHeadlight);
-    readBool(kv, "lightFill",            s.lightFill);
-    readInt (kv, "msaaSamples",          s.msaaSamples);
-    readInt (kv, "meshQuality",          s.meshQuality);
-    readFloat(kv, "selectionLineWidth",  s.selectionLineWidth);
-    readBool(kv, "autoOpenLastProject",  s.autoOpenLastProject);
-    readString(kv, "lastProjectPath",    s.lastProjectPath);
-    readBool(kv, "checkForUpdatesOnLaunch", s.checkForUpdatesOnLaunch);
+    applyKv(kv, s);
 
     return s;
 }
 
 bool SettingsIO::save(const std::string& path, const AppSettings& s) {
-    // Make sure the parent directory exists.
-    try {
-        std::filesystem::path p(path);
-        if (p.has_parent_path()) {
-            std::filesystem::create_directories(p.parent_path());
-        }
-    } catch (...) { /* fall through and let the open fail if it must */ }
+    ensureParentDir(path);
 
     std::ofstream ofs(path, std::ios::out | std::ios::trunc);
     if (!ofs.is_open()) return false;
@@ -144,6 +218,54 @@ bool SettingsIO::save(const std::string& path, const AppSettings& s) {
     ofs << "checkForUpdatesOnLaunch = " << (s.checkForUpdatesOnLaunch ? "true" : "false") << "\n";
 
     return ofs.good();
+}
+
+bool SettingsIO::exportJson(const std::string& path, const AppSettings& s) {
+    ensureParentDir(path);
+
+    std::ofstream ofs(path, std::ios::out | std::ios::trunc);
+    if (!ofs.is_open()) return false;
+
+    auto b = [](bool v) { return v ? "true" : "false"; };
+
+    // A flat object of scalars; lastProjectPath is intentionally excluded so an
+    // exported file is portable between machines. Key names match the .cfg
+    // loader and applyKv, so files round-trip through either path.
+    ofs << "{\n";
+    ofs << "  \"theme\": "                   << s.theme                 << ",\n";
+    ofs << "  \"orbitButton\": "             << s.orbitButton           << ",\n";
+    ofs << "  \"panButton\": "               << s.panButton             << ",\n";
+    ofs << "  \"levelOrbit\": "              << b(s.levelOrbit)         << ",\n";
+    ofs << "  \"autosaveEnabled\": "         << b(s.autosaveEnabled)    << ",\n";
+    ofs << "  \"autosaveIntervalSec\": "     << s.autosaveIntervalSec   << ",\n";
+    ofs << "  \"invertCubeDrag\": "          << b(s.invertCubeDrag)     << ",\n";
+    ofs << "  \"lightAmbient\": "            << s.lightAmbient          << ",\n";
+    ofs << "  \"lightHeadlight\": "          << b(s.lightHeadlight)     << ",\n";
+    ofs << "  \"lightFill\": "               << b(s.lightFill)          << ",\n";
+    ofs << "  \"msaaSamples\": "             << s.msaaSamples           << ",\n";
+    ofs << "  \"meshQuality\": "             << s.meshQuality           << ",\n";
+    ofs << "  \"selectionLineWidth\": "      << s.selectionLineWidth    << ",\n";
+    ofs << "  \"autoOpenLastProject\": "     << b(s.autoOpenLastProject)<< ",\n";
+    ofs << "  \"checkForUpdatesOnLaunch\": " << b(s.checkForUpdatesOnLaunch) << "\n";
+    ofs << "}\n";
+
+    return ofs.good();
+}
+
+AppSettings SettingsIO::importJson(const std::string& path, bool* ok) {
+    AppSettings s; // defaults
+
+    std::ifstream ifs(path);
+    if (!ifs.is_open()) { if (ok) *ok = false; return s; }
+
+    std::stringstream ss;
+    ss << ifs.rdbuf();
+    auto kv = parseFlatJson(ss.str());
+    if (kv.empty()) { if (ok) *ok = false; return s; } // unparseable / empty
+
+    applyKv(kv, s);
+    if (ok) *ok = true;
+    return s;
 }
 
 } // namespace materializr

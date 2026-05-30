@@ -13,6 +13,7 @@
 
 namespace materializr {
 
+struct AppSettings;
 class Window;
 class Viewport;
 class Grid;
@@ -78,6 +79,10 @@ private:
     void renderSettings();
     void loadAppSettings();   // restore persisted preferences at startup
     void saveAppSettings();   // write persisted preferences
+    void exportSettings();    // File → Export Settings…  (write current prefs as JSON)
+    void importSettings();    // File → Import Settings…  (load prefs from JSON, apply live)
+    AppSettings currentSettings() const;     // gather current prefs into a struct
+    void        applyAppSettings(const AppSettings& s); // push prefs onto the live members
     void renderMirrorPopup();
     void renderUpdatePopup();
     void renderMultiTransformPanel();

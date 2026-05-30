@@ -460,6 +460,8 @@ void Application::renderMenuBar() {
                 m_settingsPanButton = m_panButton;
                 m_showSettings = true;
             }
+            if (ImGui::MenuItem("Import Settings...")) importSettings();
+            if (ImGui::MenuItem("Export Settings...")) exportSettings();
             ImGui::Separator();
             if (ImGui::MenuItem("Exit", "Alt+F4")) glfwSetWindowShouldClose(m_window->handle(), true);
             ImGui::EndMenu();
@@ -501,23 +503,7 @@ void Application::renderMenuBar() {
 
 void Application::loadAppSettings() {
     AppSettings s = SettingsIO::load(SettingsIO::defaultPath());
-    m_themeManager->setTheme(s.theme == 1 ? Theme::Light : Theme::Dark);
-    m_orbitButton = s.orbitButton;
-    m_panButton = s.panButton;
-    m_settingsOrbitButton = s.orbitButton;
-    m_settingsPanButton = s.panButton;
-    m_viewport->getCamera().setLevelOrbit(s.levelOrbit);
-    m_autosaveEnabled = s.autosaveEnabled;
-    m_autosaveIntervalSec = static_cast<float>(s.autosaveIntervalSec);
-    m_invertCubeDrag = s.invertCubeDrag;
-    m_lightAmbient = s.lightAmbient;
-    m_lightHeadlight = s.lightHeadlight;
-    m_lightFill = s.lightFill;
-    m_msaaSamples = s.msaaSamples;
-    m_meshQuality = s.meshQuality;
-    m_selectionLineWidth = s.selectionLineWidth;
-    m_autoOpenLastProject = s.autoOpenLastProject;
-    m_checkForUpdatesOnLaunch = s.checkForUpdatesOnLaunch;
+    applyAppSettings(s);
 
     // CLI --safe-mode: stomp anything that could a) crash a driver on a hot
     // restart, b) hang the launch by reopening a large project before the
@@ -592,7 +578,7 @@ void Application::meshQualityParams(float& deflection, float& angularDeflection)
     }
 }
 
-void Application::saveAppSettings() {
+AppSettings Application::currentSettings() const {
     AppSettings s;
     s.theme = (m_themeManager->getTheme() == Theme::Light) ? 1 : 0;
     s.orbitButton = m_orbitButton;
@@ -610,7 +596,73 @@ void Application::saveAppSettings() {
     s.autoOpenLastProject = m_autoOpenLastProject;
     s.lastProjectPath = m_currentProjectPath; // empty after closeProject()
     s.checkForUpdatesOnLaunch = m_checkForUpdatesOnLaunch;
-    SettingsIO::save(SettingsIO::defaultPath(), s);
+    return s;
+}
+
+// Push a settings struct onto the live members. Preferences only — session
+// state (lastProjectPath) and one-shot startup actions (auto-open, update
+// check) are deliberately not handled here; loadAppSettings/importSettings
+// layer those on top as appropriate. Camera buttons land on both the active
+// and the Settings-dialog "staged" copies so an import takes effect at once.
+void Application::applyAppSettings(const AppSettings& s) {
+    m_themeManager->setTheme(s.theme == 1 ? Theme::Light : Theme::Dark);
+    m_orbitButton = s.orbitButton;
+    m_panButton = s.panButton;
+    m_settingsOrbitButton = s.orbitButton;
+    m_settingsPanButton = s.panButton;
+    m_viewport->getCamera().setLevelOrbit(s.levelOrbit);
+    m_autosaveEnabled = s.autosaveEnabled;
+    m_autosaveIntervalSec = static_cast<float>(s.autosaveIntervalSec);
+    m_invertCubeDrag = s.invertCubeDrag;
+    m_lightAmbient = s.lightAmbient;
+    m_lightHeadlight = s.lightHeadlight;
+    m_lightFill = s.lightFill;
+    m_msaaSamples = s.msaaSamples;
+    m_meshQuality = s.meshQuality;
+    m_selectionLineWidth = s.selectionLineWidth;
+    m_autoOpenLastProject = s.autoOpenLastProject;
+    m_checkForUpdatesOnLaunch = s.checkForUpdatesOnLaunch;
+}
+
+void Application::saveAppSettings() {
+    SettingsIO::save(SettingsIO::defaultPath(), currentSettings());
+}
+
+void Application::exportSettings() {
+    FileDialogs::saveFile("Export Settings", "materializr-settings.json",
+        {{"JSON Files", "*.json"}},
+        [this](const std::string& path) {
+            if (path.empty()) return;
+            if (SettingsIO::exportJson(path, currentSettings()))
+                std::fprintf(stdout, "Exported settings to %s\n", path.c_str());
+            else
+                std::fprintf(stderr, "Failed to export settings to %s\n", path.c_str());
+        });
+}
+
+void Application::importSettings() {
+    FileDialogs::openFile("Import Settings",
+        {{"JSON Files", "*.json"}},
+        [this](const std::string& path) {
+            if (path.empty()) return;
+            bool ok = false;
+            AppSettings s = SettingsIO::importJson(path, &ok);
+            if (!ok) {
+                std::fprintf(stderr, "Failed to import settings from %s\n", path.c_str());
+                return;
+            }
+            // Apply the imported preferences live, then persist them to the
+            // regular settings file so they survive the next launch. Theme is
+            // applied explicitly since applyAppSettings only stages it.
+            applyAppSettings(s);
+            m_themeManager->apply();
+            m_orbitButton = m_settingsOrbitButton; // commit staged camera buttons
+            m_panButton = m_settingsPanButton;
+            applyRenderingSettings();
+            m_meshesDirty = true; // re-tessellate at the imported quality
+            saveAppSettings();
+            std::fprintf(stdout, "Imported settings from %s\n", path.c_str());
+        });
 }
 
 

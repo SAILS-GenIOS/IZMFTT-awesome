@@ -283,6 +283,20 @@ void Application::renderSettings() {
             m_showSettings = false;
         }
 
+        // Import/Export the whole preference set as JSON, for backup or sharing
+        // between machines. The file browsers render on the next frames; import
+        // applies live and persists, so dismiss the dialog to avoid showing
+        // stale staged values over freshly-imported ones.
+        ImGui::SameLine();
+        if (ImGui::Button("Import...", ImVec2(90, 0))) {
+            importSettings();
+            m_showSettings = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Export...", ImVec2(90, 0))) {
+            exportSettings();
+        }
+
         if (changed) saveAppSettings();
     }
     ImGui::End();
