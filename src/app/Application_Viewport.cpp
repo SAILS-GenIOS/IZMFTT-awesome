@@ -162,8 +162,13 @@ void Application::renderViewport() {
         // Render selection highlight (face/edge/body)
         m_selectionHighlight->render(*m_selection, *m_document, view, proj);
 
-        // Update gizmo visibility and position based on selection
-        if (m_selection->hasSelectedBodies() && !m_inSketchMode && !m_extruding && !m_edgeOpActive) {
+        // Update gizmo visibility and position based on selection.
+        // Suppressed by navigationOnly so a panel pick highlights the body
+        // without dropping a move/rotate/scale widget on top of it; the user
+        // gets the gizmo back by either explicitly clicking Move/Rotate/Scale
+        // (which clears the flag) or by picking again in the viewport.
+        if (m_selection->hasSelectedBodies() && !m_selection->navigationOnly() &&
+            !m_inSketchMode && !m_extruding && !m_edgeOpActive) {
             const auto& sel = m_selection->getSelection();
             int bodyId = sel[0].bodyId;
             try {

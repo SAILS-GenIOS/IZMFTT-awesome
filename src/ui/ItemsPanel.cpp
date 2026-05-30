@@ -8,6 +8,8 @@
 #include <cstring>
 #include <cstdio>
 #include <memory>
+#include <string>
+#include <algorithm>
 
 namespace materializr {
 
@@ -58,123 +60,159 @@ bool ItemsPanel::render() {
     // Bodies section
     if (m_showBodies) {
         ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Bodies");
+        // "+ New folder" button at the section header creates an empty folder
+        // (bodies join via right-click → Move to folder…).
+        ImGui::SameLine();
+        if (ImGui::SmallButton("+ Folder")) {
+            m_newFolderForBodyIds.clear();
+            m_newFolderName[0] = '\0';
+            m_newFolderPopupOpen = true;
+        }
 
-        std::vector<int> bodyIds = m_document->getAllBodyIds();
+        // 1) Folders, each with their member bodies indented underneath.
+        for (int folderId : m_document->getAllFolderIds()) {
+            ImGui::PushID(2000000 + folderId); // namespace away from body ids
 
-        for (int id : bodyIds) {
-            ImGui::PushID(id);
-
-            // Visibility toggle (eye icon)
-            bool visible = m_document->isBodyVisible(id);
-            if (ImGui::Checkbox("##vis", &visible)) {
-                m_document->setBodyVisible(id, visible);
+            // Visibility checkbox (cascades to members in Document).
+            bool fvis = m_document->isFolderVisible(folderId);
+            if (ImGui::Checkbox("##fvis", &fvis)) {
+                m_document->setFolderVisible(folderId, fvis);
+                colorChanged = true; // forces mesh rebuild
             }
             ImGui::SameLine();
 
-            // Check if this body is currently selected
-            bool isSelected = false;
-            if (m_selection) {
-                const auto& sel = m_selection->getSelection();
-                for (const auto& entry : sel) {
-                    if (entry.type == SelectionType::Body && entry.bodyId == id) {
-                        isSelected = true;
-                        break;
-                    }
-                }
-            }
+            // Tree-node arrow + name. Use TreeNodeEx so we can pre-set the
+            // expanded state from the Document (persisted across frames).
+            ImGuiTreeNodeFlags fflags =
+                ImGuiTreeNodeFlags_OpenOnArrow |
+                ImGuiTreeNodeFlags_SpanAvailWidth;
+            bool wantExpanded = m_document->isFolderExpanded(folderId);
+            ImGui::SetNextItemOpen(wantExpanded, ImGuiCond_Always);
 
-            // Renaming mode
-            if (m_renamingId == id) {
+            std::string fname = m_document->getFolderName(folderId);
+            // Reserve room for the colour swatch on the right.
+            float swatchW = ImGui::GetFrameHeight();
+            float nameW = ImGui::GetContentRegionAvail().x - swatchW - 6.0f;
+            bool open = ImGui::TreeNodeEx(("##fnode" + std::to_string(folderId)).c_str(),
+                                          fflags | (wantExpanded ? ImGuiTreeNodeFlags_DefaultOpen : 0));
+            if (open != wantExpanded) {
+                m_document->setFolderExpanded(folderId, open);
+            }
+            // Folder label, overlaid on the tree-node line.
+            ImGui::SameLine();
+            const int renameKey = 2000000 + folderId;
+            if (m_renamingId == renameKey) {
+                ImGui::SetNextItemWidth(nameW);
                 ImGui::SetKeyboardFocusHere();
-                if (ImGui::InputText("##rename", m_renameBuffer, sizeof(m_renameBuffer),
-                                     ImGuiInputTextFlags_EnterReturnsTrue |
-                                     ImGuiInputTextFlags_AutoSelectAll)) {
-                    m_document->setBodyName(id, m_renameBuffer);
+                bool committed = ImGui::InputText("##frename", m_renameBuffer,
+                                                  sizeof(m_renameBuffer),
+                                                  ImGuiInputTextFlags_EnterReturnsTrue |
+                                                  ImGuiInputTextFlags_AutoSelectAll);
+                bool clickedOff = !ImGui::IsItemActive() && ImGui::IsMouseClicked(0);
+                if (committed || clickedOff) {
+                    m_document->setFolderName(folderId, m_renameBuffer);
+                    if (m_markDirty) m_markDirty();
                     m_renamingId = -1;
-                }
-                // Cancel on escape or click elsewhere
-                if (ImGui::IsKeyPressed(ImGuiKey_Escape) ||
-                    (!ImGui::IsItemActive() && ImGui::IsMouseClicked(0))) {
+                } else if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                     m_renamingId = -1;
                 }
             } else {
-                // Selectable body name, leaving room on the right for a colour swatch.
-                float swatchW = ImGui::GetFrameHeight();
-                float nameW = ImGui::GetContentRegionAvail().x - swatchW - 6.0f;
-                std::string name = m_document->getBodyName(id);
-                if (ImGui::Selectable(name.c_str(), isSelected, 0,
-                                      ImVec2(nameW > 1.0f ? nameW : 0.0f, 0.0f))) {
-                    // Select this body
-                    if (m_selection) {
-                        SelectionEntry entry;
-                        entry.type = SelectionType::Body;
-                        entry.bodyId = id;
-                        m_selection->select(entry);
-                    }
-                }
-
-                // Double-click to rename
+                ImGui::TextUnformatted(fname.c_str());
                 if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
-                    m_renamingId = id;
-                    std::string bodyName = m_document->getBodyName(id);
-                    std::strncpy(m_renameBuffer, bodyName.c_str(), sizeof(m_renameBuffer) - 1);
+                    m_renamingId = renameKey;
+                    std::strncpy(m_renameBuffer, fname.c_str(), sizeof(m_renameBuffer) - 1);
                     m_renameBuffer[sizeof(m_renameBuffer) - 1] = '\0';
                 }
-
-                // Right-click context menu
-                if (ImGui::BeginPopupContextItem("BodyContextMenu")) {
+                if (ImGui::BeginPopupContextItem("FolderContextMenu")) {
                     if (ImGui::MenuItem("Rename")) {
-                        m_renamingId = id;
-                        std::string bodyName = m_document->getBodyName(id);
-                        std::strncpy(m_renameBuffer, bodyName.c_str(), sizeof(m_renameBuffer) - 1);
+                        m_renamingId = renameKey;
+                        std::strncpy(m_renameBuffer, fname.c_str(), sizeof(m_renameBuffer) - 1);
                         m_renameBuffer[sizeof(m_renameBuffer) - 1] = '\0';
                     }
-                    if (ImGui::MenuItem("Delete")) {
-                        // Route through history so the delete is undoable
-                        if (m_history) {
-                            auto op = std::make_unique<DeleteOp>();
-                            op->setBodyId(id);
-                            m_history->pushOperation(std::move(op), *m_document);
-                        } else {
-                            m_document->removeBody(id);
-                        }
-                        if (m_selection) m_selection->clear();
-                        m_renamingId = -1;
-                        m_bodyDeleted = true;
+                    if (ImGui::MenuItem("Delete folder (keeps bodies)")) {
+                        m_document->removeFolder(folderId);
                         ImGui::EndPopup();
                         ImGui::PopID();
-                        goto end_bodies;
-                    }
-                    if (ImGui::MenuItem("Isolate")) {
-                        // Hide all other bodies, show only this one
-                        for (int otherId : bodyIds) {
-                            m_document->setBodyVisible(otherId, otherId == id);
-                        }
-                    }
-                    if (ImGui::MenuItem("Hide Others")) {
-                        for (int otherId : bodyIds) {
-                            if (otherId != id) {
-                                m_document->setBodyVisible(otherId, false);
-                            }
-                        }
+                        colorChanged = true;
+                        continue;
                     }
                     ImGui::EndPopup();
                 }
-
-                // Per-body colour swatch on the right; click opens a colour wheel.
-                ImGui::SameLine();
-                glm::vec3 col = m_document->getBodyColor(id);
-                if (ImGui::ColorEdit3("##bodycolor", &col.x,
-                        ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel |
-                        ImGuiColorEditFlags_PickerHueWheel)) {
-                    m_document->setBodyColor(id, col);
-                    colorChanged = true;
-                }
             }
 
+            // Colour swatch.
+            ImGui::SameLine();
+            glm::vec3 fcol = m_document->getFolderColor(folderId);
+            if (ImGui::ColorEdit3("##fcolor", &fcol.x,
+                    ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel |
+                    ImGuiColorEditFlags_PickerHueWheel)) {
+                m_document->setFolderColor(folderId, fcol);
+                colorChanged = true;
+            }
+
+            // Member bodies, only when expanded.
+            if (open) {
+                ImGui::Indent();
+                for (int bid : m_document->getBodiesInFolder(folderId)) {
+                    if (!renderBodyRow(bid, colorChanged)) {
+                        // Body was deleted; member list is stale. Bail to
+                        // outer loop, will re-fetch next frame.
+                        ImGui::Unindent();
+                        ImGui::TreePop();
+                        ImGui::PopID();
+                        goto end_bodies;
+                    }
+                }
+                ImGui::Unindent();
+                ImGui::TreePop();
+            }
             ImGui::PopID();
         }
+
+        // 2) Root-level bodies (folderId == -1).
+        for (int id : m_document->getBodiesInFolder(-1)) {
+            if (!renderBodyRow(id, colorChanged)) goto end_bodies;
+        }
         end_bodies:;
+
+        // "New folder…" name prompt (kept as a modal popup so it survives the
+        // frame the user clicked the menu item — ImGui menus auto-close).
+        if (m_newFolderPopupOpen) {
+            ImGui::OpenPopup("New Folder##itemspanel");
+            m_newFolderPopupOpen = false;
+            m_newFolderFocusInput = true;
+        }
+        if (ImGui::BeginPopupModal("New Folder##itemspanel", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("Folder name:");
+            if (m_newFolderFocusInput) {
+                ImGui::SetKeyboardFocusHere();
+                m_newFolderFocusInput = false;
+            }
+            bool committed = ImGui::InputText("##newfoldername",
+                                              m_newFolderName,
+                                              sizeof(m_newFolderName),
+                                              ImGuiInputTextFlags_EnterReturnsTrue);
+            bool createClicked = ImGui::Button("Create");
+            ImGui::SameLine();
+            bool cancelClicked = ImGui::Button("Cancel");
+            bool escPressed = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+            if (committed || createClicked) {
+                if (m_newFolderName[0] != '\0') {
+                    int newId = m_document->addFolder(m_newFolderName);
+                    for (int bid : m_newFolderForBodyIds) {
+                        m_document->setBodyFolder(bid, newId);
+                    }
+                    if (m_markDirty) m_markDirty();
+                }
+                m_newFolderForBodyIds.clear();
+                ImGui::CloseCurrentPopup();
+            } else if (cancelClicked || escPressed) {
+                m_newFolderForBodyIds.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
     }
 
     // Sketches section
@@ -192,6 +230,7 @@ bool ItemsPanel::render() {
             bool visible = m_document->isSketchVisible(id);
             if (ImGui::Checkbox("##svis", &visible)) {
                 m_document->setSketchVisible(id, visible);
+                colorChanged = true;
             }
             ImGui::SameLine();
 
@@ -218,18 +257,23 @@ bool ItemsPanel::render() {
             bool deleted = false;
             if (m_renamingId == renameKey) {
                 ImGui::SetKeyboardFocusHere();
-                if (ImGui::InputText("##srename", m_renameBuffer, sizeof(m_renameBuffer),
-                                     ImGuiInputTextFlags_EnterReturnsTrue |
-                                     ImGuiInputTextFlags_AutoSelectAll)) {
+                bool committed = ImGui::InputText("##srename", m_renameBuffer,
+                                                  sizeof(m_renameBuffer),
+                                                  ImGuiInputTextFlags_EnterReturnsTrue |
+                                                  ImGuiInputTextFlags_AutoSelectAll);
+                bool clickedOff = !ImGui::IsItemActive() && ImGui::IsMouseClicked(0);
+                if (committed || clickedOff) {
                     m_document->setSketchName(id, m_renameBuffer);
+                    if (m_markDirty) m_markDirty();
                     m_renamingId = -1;
-                }
-                if (ImGui::IsKeyPressed(ImGuiKey_Escape) ||
-                    (!ImGui::IsItemActive() && ImGui::IsMouseClicked(0))) {
+                } else if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                     m_renamingId = -1;
                 }
             } else {
                 std::string name = m_document->getSketchName(id);
+                if (isSelected && id != m_lastSelectedSketchId) {
+                    ImGui::SetScrollHereY(0.5f);
+                }
                 if (ImGui::Selectable(name.c_str(), isSelected)) {
                     if (m_selection) {
                         SelectionEntry entry;
@@ -279,8 +323,227 @@ bool ItemsPanel::render() {
     std::snprintf(countText, sizeof(countText), "Bodies: %d", m_document->bodyCount());
     ImGui::Text("%s", countText);
 
+    // Remember which body / sketch is the primary selection so the next frame
+    // knows whether selection changed (= time to auto-scroll). Use -1 when
+    // nothing is selected so the next pick of any id triggers a scroll.
+    m_lastSelectedBodyId   = -1;
+    m_lastSelectedSketchId = -1;
+    if (m_selection) {
+        for (const auto& entry : m_selection->getSelection()) {
+            if (entry.type == SelectionType::Body && entry.bodyId >= 0) {
+                m_lastSelectedBodyId = entry.bodyId; break;
+            }
+        }
+        for (const auto& entry : m_selection->getSelection()) {
+            if (entry.type == SelectionType::Sketch && entry.sketchId >= 0) {
+                m_lastSelectedSketchId = entry.sketchId; break;
+            }
+        }
+    }
+
     ImGui::End();
     return m_bodyDeleted || colorChanged;
+}
+
+// One body row. Pulled out of render() so it can run at the root level OR
+// inside a folder's expanded contents (indented by the caller). Returns false
+// if this body was deleted via its context menu — caller must stop iterating
+// because the body list is now stale.
+bool ItemsPanel::renderBodyRow(int id, bool& colorChanged) {
+    ImGui::PushID(id);
+
+    bool visible = m_document->isBodyVisible(id);
+    if (ImGui::Checkbox("##vis", &visible)) {
+        m_document->setBodyVisible(id, visible);
+        colorChanged = true;
+    }
+    ImGui::SameLine();
+
+    bool isSelected = false;
+    if (m_selection) {
+        for (const auto& e : m_selection->getSelection()) {
+            if (e.type == SelectionType::Body && e.bodyId == id) {
+                isSelected = true; break;
+            }
+        }
+    }
+
+    if (m_renamingId == id) {
+        ImGui::SetKeyboardFocusHere();
+        bool committed = ImGui::InputText("##rename", m_renameBuffer,
+                                          sizeof(m_renameBuffer),
+                                          ImGuiInputTextFlags_EnterReturnsTrue |
+                                          ImGuiInputTextFlags_AutoSelectAll);
+        bool clickedOff = !ImGui::IsItemActive() && ImGui::IsMouseClicked(0);
+        if (committed || clickedOff) {
+            m_document->setBodyName(id, m_renameBuffer);
+            if (m_markDirty) m_markDirty();
+            m_renamingId = -1;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            m_renamingId = -1;
+        }
+        ImGui::PopID();
+        return true;
+    }
+
+    float swatchW = ImGui::GetFrameHeight();
+    float nameW = ImGui::GetContentRegionAvail().x - swatchW - 6.0f;
+    std::string name = m_document->getBodyName(id);
+    // Auto-scroll into view ONLY when this is the lone selected body and it's
+    // newly selected (typically a viewport pick changing selection). With
+    // multi-select every selected row would otherwise re-issue SetScrollHereY,
+    // causing the panel to ping-pong between the first and last selected rows.
+    if (isSelected && id != m_lastSelectedBodyId &&
+        m_selection && m_selection->selectedBodyCount() == 1) {
+        ImGui::SetScrollHereY(0.5f);
+    }
+    if (ImGui::Selectable(name.c_str(), isSelected, 0,
+                          ImVec2(nameW > 1.0f ? nameW : 0.0f, 0.0f))) {
+        if (m_selection) {
+            ImGuiIO& io = ImGui::GetIO();
+            auto makeEntry = [this](int bid) {
+                SelectionEntry e;
+                e.type = SelectionType::Body;
+                e.bodyId = bid;
+                try { e.shape = m_document->getBody(bid); } catch (...) {}
+                return e;
+            };
+            if (io.KeyShift && m_anchorBodyId >= 0) {
+                // Range select from the anchor to here using display order:
+                // folder members first (in folder iteration order), then root.
+                std::vector<int> displayOrder;
+                for (int fid : m_document->getAllFolderIds()) {
+                    for (int b : m_document->getBodiesInFolder(fid))
+                        displayOrder.push_back(b);
+                }
+                for (int b : m_document->getBodiesInFolder(-1))
+                    displayOrder.push_back(b);
+                int a = -1, b = -1;
+                for (int i = 0; i < static_cast<int>(displayOrder.size()); ++i) {
+                    if (displayOrder[i] == m_anchorBodyId) a = i;
+                    if (displayOrder[i] == id)             b = i;
+                }
+                if (a >= 0 && b >= 0) {
+                    if (a > b) std::swap(a, b);
+                    m_selection->clear();
+                    for (int i = a; i <= b; ++i)
+                        m_selection->addToSelection(makeEntry(displayOrder[i]));
+                    m_selection->setNavigationOnly(true);
+                }
+            } else if (io.KeyCtrl) {
+                // Toggle this body in/out of the selection without disturbing
+                // the others. Keeps the anchor where it was.
+                m_selection->toggleSelection(makeEntry(id));
+                m_selection->setNavigationOnly(true);
+            } else {
+                // Plain click → single-select, this body becomes the anchor.
+                m_selection->select(makeEntry(id));
+                m_selection->setNavigationOnly(true);
+                m_anchorBodyId = id;
+            }
+        }
+    }
+
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+        m_renamingId = id;
+        std::string bodyName = m_document->getBodyName(id);
+        std::strncpy(m_renameBuffer, bodyName.c_str(), sizeof(m_renameBuffer) - 1);
+        m_renameBuffer[sizeof(m_renameBuffer) - 1] = '\0';
+    }
+
+    bool deleted = false;
+    if (ImGui::BeginPopupContextItem("BodyContextMenu")) {
+        if (ImGui::MenuItem("Rename")) {
+            m_renamingId = id;
+            std::string bodyName = m_document->getBodyName(id);
+            std::strncpy(m_renameBuffer, bodyName.c_str(), sizeof(m_renameBuffer) - 1);
+            m_renameBuffer[sizeof(m_renameBuffer) - 1] = '\0';
+        }
+        if (ImGui::MenuItem("Delete")) {
+            if (m_history) {
+                auto op = std::make_unique<DeleteOp>();
+                op->setBodyId(id);
+                m_history->pushOperation(std::move(op), *m_document);
+            } else {
+                m_document->removeBody(id);
+            }
+            if (m_selection) m_selection->clear();
+            m_renamingId = -1;
+            m_bodyDeleted = true;
+            deleted = true;
+        }
+        if (!deleted && ImGui::MenuItem("Isolate")) {
+            for (int otherId : m_document->getAllBodyIds()) {
+                m_document->setBodyVisible(otherId, otherId == id);
+            }
+            colorChanged = true;
+        }
+        if (!deleted && ImGui::MenuItem("Hide Others")) {
+            for (int otherId : m_document->getAllBodyIds()) {
+                if (otherId != id) m_document->setBodyVisible(otherId, false);
+            }
+            colorChanged = true;
+        }
+        // Move-to-folder submenu. If the right-clicked body is part of a
+        // multi-selection, the action moves EVERY selected body at once;
+        // otherwise it just moves this one. Lists existing folders + a "(root)"
+        // entry (when at least one target is currently in a folder) + a
+        // "New folder…" prompt that drops all the targets into the new folder.
+        if (!deleted && ImGui::BeginMenu("Move to folder")) {
+            std::vector<int> targets;
+            bool multi = false;
+            if (m_selection) {
+                for (const auto& e : m_selection->getSelection()) {
+                    if (e.type == SelectionType::Body && e.bodyId >= 0)
+                        targets.push_back(e.bodyId);
+                }
+                multi = targets.size() > 1 &&
+                        std::find(targets.begin(), targets.end(), id) != targets.end();
+            }
+            if (!multi) { targets.clear(); targets.push_back(id); }
+            // Are any of the targets currently in a folder?
+            bool anyInFolder = false;
+            for (int t : targets) {
+                if (m_document->getBodyFolder(t) >= 0) { anyInFolder = true; break; }
+            }
+            const char* moveLabel = multi ? "(root — no folder) — all selected"
+                                          : "(root — no folder)";
+            if (anyInFolder && ImGui::MenuItem(moveLabel)) {
+                for (int t : targets) m_document->setBodyFolder(t, -1);
+                if (m_markDirty) m_markDirty();
+            }
+            for (int fid : m_document->getAllFolderIds()) {
+                std::string label = m_document->getFolderName(fid);
+                if (multi) label += " — all selected";
+                if (ImGui::MenuItem(label.c_str())) {
+                    for (int t : targets) m_document->setBodyFolder(t, fid);
+                    if (m_markDirty) m_markDirty();
+                }
+            }
+            ImGui::Separator();
+            const char* newLabel = multi ? "New folder… (all selected)"
+                                         : "New folder…";
+            if (ImGui::MenuItem(newLabel)) {
+                m_newFolderForBodyIds = targets;
+                m_newFolderName[0] = '\0';
+                m_newFolderPopupOpen = true;
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndPopup();
+    }
+
+    ImGui::SameLine();
+    glm::vec3 col = m_document->getBodyColor(id);
+    if (ImGui::ColorEdit3("##bodycolor", &col.x,
+            ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel |
+            ImGuiColorEditFlags_PickerHueWheel)) {
+        m_document->setBodyColor(id, col);
+        colorChanged = true;
+    }
+
+    ImGui::PopID();
+    return !deleted;
 }
 
 } // namespace materializr

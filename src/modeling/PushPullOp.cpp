@@ -4,6 +4,11 @@
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepGProp_Face.hxx>
+#include <BRep_Tool.hxx>
+#include <Geom_CylindricalSurface.hxx>
+#include <Geom_ConicalSurface.hxx>
+#include <Geom_ToroidalSurface.hxx>
+#include <Geom_SurfaceOfRevolution.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <TopoDS.hxx>
 #include <gp_Pnt.hxx>
@@ -32,7 +37,16 @@ bool PushPullOp::execute(Document& doc) {
     for (const auto& tgt : m_targets) {
         if (tgt.profile.IsNull()) continue;
 
-        // Compute face outward normal
+        // Compute push/pull direction. For a flat face this is the face's
+        // outward normal at its UV midpoint. For a CURVED face (chamfer cone,
+        // fillet torus, cylinder side, etc.) that UV-midpoint normal is the
+        // surface tangent perpendicular at one specific point — sloped and
+        // dependent on where you happened to click. The user expects a stable
+        // axis-aligned direction instead, so we use the surface's natural
+        // rotation axis for chamfers/fillets/cylinders/revolves. Sign-correct
+        // so positive distance still pushes outward.
+        // (Must mirror the logic in Application::beginPushPull so the live
+        // arrow and the executed extrusion agree on direction.)
         gp_Vec faceNormal(0, 0, 1);
         try {
             BRepGProp_Face prop(tgt.profile);
@@ -41,7 +55,24 @@ bool PushPullOp::execute(Document& doc) {
             gp_Pnt center;
             gp_Vec n;
             prop.Normal((u1 + u2) * 0.5, (v1 + v2) * 0.5, center, n);
-            if (n.Magnitude() > 1e-10) faceNormal = n.Normalized();
+            if (n.Magnitude() > 1e-10) {
+                faceNormal = n.Normalized();
+                Handle(Geom_Surface) surf = BRep_Tool::Surface(tgt.profile);
+                gp_Dir axis; bool hasAxis = false;
+                if (auto cone = Handle(Geom_ConicalSurface)::DownCast(surf);
+                        !cone.IsNull()) { axis = cone->Axis().Direction(); hasAxis = true; }
+                else if (auto tor = Handle(Geom_ToroidalSurface)::DownCast(surf);
+                        !tor.IsNull()) { axis = tor->Axis().Direction(); hasAxis = true; }
+                else if (auto cyl = Handle(Geom_CylindricalSurface)::DownCast(surf);
+                        !cyl.IsNull()) { axis = cyl->Axis().Direction(); hasAxis = true; }
+                else if (auto rev = Handle(Geom_SurfaceOfRevolution)::DownCast(surf);
+                        !rev.IsNull()) { axis = rev->Axis().Direction(); hasAxis = true; }
+                if (hasAxis) {
+                    gp_Vec axisVec(axis);
+                    if (axisVec.Dot(faceNormal) < 0) axisVec.Reverse();
+                    faceNormal = axisVec.Normalized();
+                }
+            }
         } catch (...) {}
 
         // Sign of distance determines prism direction & boolean mode

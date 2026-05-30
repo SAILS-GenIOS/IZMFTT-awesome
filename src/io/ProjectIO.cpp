@@ -15,7 +15,9 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <map>
 #include <algorithm>
+#include <glm/glm.hpp>
 
 namespace materializr {
 
@@ -164,6 +166,37 @@ ProjectSaveResult ProjectIO::save(const std::string& filePath, const Document& d
         }
 
         ofs << "SKETCH_END\n";
+    }
+
+    // --- Folders (optional, since 0.3.0) ---
+    // Format:
+    //   FOLDER_COUNT n
+    //   for each:
+    //     FOLDER id "name" visible(0|1) r g b expanded(0|1)
+    //   BODY_FOLDER_COUNT m
+    //   for each body that's in a folder:
+    //     BODY_FOLDER bodyId folderId
+    // Bodies without a FOLDER mapping stay at root (folderId == -1). Old files
+    // simply omit these blocks and the loader leaves all bodies at root.
+    std::vector<int> folderIds = doc.getAllFolderIds();
+    ofs << "FOLDER_COUNT " << static_cast<int>(folderIds.size()) << "\n";
+    for (int fid : folderIds) {
+        std::string fname = doc.getFolderName(fid);
+        glm::vec3 fcol = doc.getFolderColor(fid);
+        bool fvis  = doc.isFolderVisible(fid);
+        bool fexp  = doc.isFolderExpanded(fid);
+        ofs << "FOLDER " << fid << " \"" << fname << "\" " << (fvis ? 1 : 0)
+            << " " << fcol.r << " " << fcol.g << " " << fcol.b
+            << " " << (fexp ? 1 : 0) << "\n";
+    }
+    std::vector<std::pair<int,int>> bodyFolders;
+    for (int bid : bodyIds) {
+        int fid = doc.getBodyFolder(bid);
+        if (fid >= 0) bodyFolders.emplace_back(bid, fid);
+    }
+    ofs << "BODY_FOLDER_COUNT " << static_cast<int>(bodyFolders.size()) << "\n";
+    for (auto [bid, fid] : bodyFolders) {
+        ofs << "BODY_FOLDER " << bid << " " << fid << "\n";
     }
 
     // --- History (optional) ---
@@ -417,6 +450,67 @@ ProjectLoadResult ProjectIO::load(const std::string& filePath, Document& doc,
                 std::istringstream s(sline); std::string t; s >> t;
                 if (t != "SKETCH_START") break;
                 readSketch(ifs, sline, doc);
+            }
+        } else if (tok == "FOLDER_COUNT") {
+            // FOLDER blocks (0.3.0+, optional). Each line:
+            //   FOLDER id "name" visible(0|1) r g b expanded(0|1)
+            // We re-issue addFolder so the Document's next-id counter ticks,
+            // then setFolderName/Color/Visible/Expanded etc. Note that addFolder
+            // returns a NEW id rather than respecting the saved one; for now
+            // that's fine because BODY_FOLDER lines below remap by saved id
+            // via a local map. (Folder ids don't need to be globally stable
+            // the way body ids do — no operations reference them.)
+            int n = 0; iss >> n;
+            std::map<int,int> savedToNewFolder;
+            for (int i = 0; i < n; ++i) {
+                std::string fline;
+                if (!std::getline(ifs, fline)) break;
+                std::istringstream fs(fline);
+                std::string ftok; fs >> ftok;
+                if (ftok != "FOLDER") continue;
+                int savedId = 0; fs >> savedId;
+                std::string rest; std::getline(fs, rest);
+                auto fq = rest.find('"'), lq = rest.rfind('"');
+                std::string fname = "Folder";
+                int fvis = 1, fexp = 1;
+                float fr = 0.8f, fg = 0.8f, fb = 0.82f;
+                if (fq != std::string::npos && lq != std::string::npos && fq != lq) {
+                    fname = rest.substr(fq + 1, lq - fq - 1);
+                    std::istringstream after(rest.substr(lq + 1));
+                    after >> fvis >> fr >> fg >> fb >> fexp;
+                }
+                int newId = doc.addFolder(fname);
+                doc.setFolderVisible(newId, fvis != 0);
+                doc.setFolderColor(newId, glm::vec3(fr, fg, fb));
+                doc.setFolderExpanded(newId, fexp != 0);
+                savedToNewFolder[savedId] = newId;
+            }
+            // BODY_FOLDER_COUNT may be on the next line OR somewhere later in
+            // the same stream — peek and only consume if it's adjacent. (Save
+            // writes them adjacent.)
+            std::streampos restore = ifs.tellg();
+            std::string maybe;
+            if (std::getline(ifs, maybe)) {
+                std::istringstream ms(maybe);
+                std::string mt; ms >> mt;
+                if (mt == "BODY_FOLDER_COUNT") {
+                    int m = 0; ms >> m;
+                    for (int i = 0; i < m; ++i) {
+                        std::string bfline;
+                        if (!std::getline(ifs, bfline)) break;
+                        std::istringstream bs(bfline);
+                        std::string bt; bs >> bt;
+                        if (bt != "BODY_FOLDER") continue;
+                        int bid = -1, savedFid = -1;
+                        bs >> bid >> savedFid;
+                        auto it = savedToNewFolder.find(savedFid);
+                        if (it != savedToNewFolder.end()) {
+                            doc.setBodyFolder(bid, it->second);
+                        }
+                    }
+                } else {
+                    ifs.seekg(restore);
+                }
             }
         } else if (tok == "HISTORY_INITIAL_COUNT" && historyOut) {
             int k = 0; iss >> k;

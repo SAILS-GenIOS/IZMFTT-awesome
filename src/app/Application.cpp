@@ -141,6 +141,7 @@ Application::Application(bool safeMode) : m_safeMode(safeMode) {
     m_itemsPanel->setDocument(m_document.get());
     m_itemsPanel->setSelectionManager(m_selection.get());
     m_itemsPanel->setHistory(m_history.get());
+    m_itemsPanel->setDirtyCallback([this]() { markDirty(); });
     m_statusBar->setDocument(m_document.get());
     m_statusBar->setSelectionManager(m_selection.get());
     m_propertiesPanel->setHistory(m_history.get());
@@ -349,20 +350,31 @@ void Application::initRenderers() {
         std::fprintf(stderr, "Failed to initialize plane renderer\n");
     }
 
-    // Create a demo box so there's something to see (a 20 mm cube).
-    TopoDS_Shape box = BRepPrimAPI_MakeBox(20.0, 20.0, 20.0).Shape();
-    m_document->addBody(box, "Demo Box");
-    m_meshesDirty = true;
+    // Create a demo box so there's something to see (a 20 mm cube) — but only
+    // on a truly empty launch. If loadAppSettings already auto-opened the
+    // user's last project, the document is populated and dropping the demo
+    // box in on top would surprise them.
+    if (m_document->getAllBodyIds().empty()) {
+        TopoDS_Shape box = BRepPrimAPI_MakeBox(20.0, 20.0, 20.0).Shape();
+        m_document->addBody(box, "Demo Box");
+        m_meshesDirty = true;
+    }
 
-    // Frame it so the larger cube isn't clipped by the default camera distance.
+    // Frame whatever the document holds — the demo box on a fresh launch, or
+    // the auto-opened project's bodies — so nothing is clipped by the default
+    // camera distance.
     try {
         Bnd_Box bbox;
-        BRepBndLib::Add(box, bbox);
-        double x0, y0, z0, x1, y1, z1;
-        bbox.Get(x0, y0, z0, x1, y1, z1);
-        m_viewport->getCamera().zoomToFit(
-            glm::vec3(static_cast<float>(x0), static_cast<float>(y0), static_cast<float>(z0)),
-            glm::vec3(static_cast<float>(x1), static_cast<float>(y1), static_cast<float>(z1)));
+        for (int id : m_document->getAllBodyIds()) {
+            try { BRepBndLib::Add(m_document->getBody(id), bbox); } catch (...) {}
+        }
+        if (!bbox.IsVoid()) {
+            double x0, y0, z0, x1, y1, z1;
+            bbox.Get(x0, y0, z0, x1, y1, z1);
+            m_viewport->getCamera().zoomToFit(
+                glm::vec3(static_cast<float>(x0), static_cast<float>(y0), static_cast<float>(z0)),
+                glm::vec3(static_cast<float>(x1), static_cast<float>(y1), static_cast<float>(z1)));
+        }
     } catch (...) {}
 
     m_renderersReady = true;
@@ -892,16 +904,19 @@ void Application::handleToolAction(int action) {
         case ToolAction::Move: {
             if (!m_selection->hasSelectedBodies()) break;
             m_gizmo->setMode(GizmoMode::Translate);
+            m_selection->setNavigationOnly(false); // user explicitly wants the gizmo
             break;
         }
         case ToolAction::Rotate: {
             if (!m_selection->hasSelectedBodies()) break;
             m_gizmo->setMode(GizmoMode::Rotate);
+            m_selection->setNavigationOnly(false);
             break;
         }
         case ToolAction::Scale: {
             if (!m_selection->hasSelectedBodies()) break;
             m_gizmo->setMode(GizmoMode::Scale);
+            m_selection->setNavigationOnly(false);
             break;
         }
         case ToolAction::Mirror: {
@@ -1159,17 +1174,22 @@ void Application::handleShortcuts() {
         m_hoveredBodyId = -1;
         m_meshesDirty = true;
     }
-    // Gizmo mode switching
-    if (!m_inSketchMode && !io.KeyCtrl) {
+    // Gizmo mode switching. WantTextInput is true while an InputText (rename
+    // field, dimension input, etc.) has focus — letting W/E/R fire there both
+    // switches gizmo mode AND inserts the character, which is rude.
+    if (!m_inSketchMode && !io.KeyCtrl && !io.WantTextInput) {
+        bool changed = false;
         if (ImGui::IsKeyPressed(ImGuiKey_W)) {
-            m_gizmo->setMode(GizmoMode::Translate);
+            m_gizmo->setMode(GizmoMode::Translate); changed = true;
         }
         if (ImGui::IsKeyPressed(ImGuiKey_E)) {
-            m_gizmo->setMode(GizmoMode::Rotate);
+            m_gizmo->setMode(GizmoMode::Rotate); changed = true;
         }
         if (ImGui::IsKeyPressed(ImGuiKey_R)) {
-            m_gizmo->setMode(GizmoMode::Scale);
+            m_gizmo->setMode(GizmoMode::Scale); changed = true;
         }
+        // Explicit ask for a gizmo: drop any navigation-only suppression.
+        if (changed) m_selection->setNavigationOnly(false);
     }
 }
 

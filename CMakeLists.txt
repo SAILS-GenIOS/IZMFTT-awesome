@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Materializr VERSION 0.2.3 LANGUAGES CXX)
+project(Materializr VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -154,6 +154,7 @@ add_executable(materializr
     src/core/SelectionManager.cpp
     src/core/VariableManager.cpp
     src/core/Material.cpp
+    src/core/Verbose.cpp
     src/core/VersionManager.cpp
     src/modeling/ExtrudeOp.cpp
     src/modeling/PushPullOp.cpp

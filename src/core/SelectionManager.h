@@ -53,10 +53,22 @@ public:
     bool hasSelectedSketches() const;
     bool hasSelectedSketchRegions() const;
 
+    // "Navigation-only" — the current selection was made for highlighting /
+    // navigation purposes (e.g. clicking a body name in the Items panel) and
+    // should not auto-activate the move/rotate/scale gizmo. Cleared by any
+    // mutation through select / addToSelection / clear so a follow-up
+    // viewport pick restores the default gizmo-on behaviour; ItemsPanel sets
+    // it true again right after each panel-driven select call. Move / Rotate
+    // / Scale toolbar actions also clear it (the user explicitly wants the
+    // gizmo at that point).
+    bool navigationOnly() const { return m_navigationOnly; }
+    void setNavigationOnly(bool b) { m_navigationOnly = b; }
+
 private:
     int findEntry(const SelectionEntry& entry) const;
     void publishChanged();
 
     std::vector<SelectionEntry> m_selection;
     materializr::EventBus* m_eventBus = nullptr;
+    bool m_navigationOnly = false;
 };

@@ -3,6 +3,108 @@
 All notable changes to Materializr are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [0.3.0] — 2026-05-29
+
+Geometry-correctness pass on the cylindrical-resize op and the push/pull
+direction, plus an Items-panel rework that adds folders and multi-select.
+Merges friend's Settings tabs + JSON preferences + Command Palette removal.
+
+### Added
+
+- **Folders in the Items panel.** `+ Folder` button creates an empty folder;
+  any body's right-click menu has a **Move to folder ▶** submenu listing
+  existing folders, a `New folder…` option that prompts for a name and drops
+  the body into the new folder, and (if the body is currently in one)
+  a `(root — no folder)` option to lift it back out. Folders own a
+  visibility checkbox and a colour swatch, both of which **cascade to every
+  body inside**: hiding the folder hides all members; setting the folder
+  colour overwrites every member's colour (re-customisable per body
+  afterwards). Folder names are renamable via double-click or context menu.
+  Project save / load round-trips folders; older project files load
+  unchanged with all bodies at root.
+- **Multi-select in the Items panel.** Plain click single-selects (and
+  becomes the shift-click anchor); **Ctrl-click** toggles a body in/out of
+  the selection; **Shift-click** range-selects from the anchor to the
+  clicked body across folders + root in display order. Right-clicking a
+  body that's part of a multi-selection makes the Move-to-folder submenu
+  act on **every selected body at once** ( " — all selected" is shown on
+  each menu entry to make this explicit).
+- **`--verbose` / `-v` CLI flag** (with `--log <path>` to override the
+  default `/tmp/materializr.log` destination). Flips a process-global
+  `materializr::isVerbose()` and redirects stderr to the log file (line-
+  buffered, so a crash mid-op still flushes recent traces). Useful when
+  triaging modeling bugs — `[Resize]`, `[Push/Pull]`, etc. diagnostics
+  land in a file that survives the session. Off by default; normal
+  launches stay quiet.
+
+### Fixed
+
+- **Cylindrical resize on holes that pierce non-perpendicular caps.**
+  Previously the fill ring used the cylindrical face's parametric V range
+  as a flat-disc height, which is correct only when the cap is exactly
+  perpendicular to the cylinder axis. For tilted-flat caps (common on
+  STEP-imported parts) the ring stuck out past the cap on the high-V
+  angles and fell short on the low-V angles, leaving a visible "washer"
+  ring of old-radius material at the cap. For curved caps (NURBS / BSpline
+  exits — e.g. a hole through a filleted block edge) the same thing
+  happened, larger. New approach is topology-agnostic: locate the cap
+  face adjacent to the cylinder's extremal-V wire edge, then clip an
+  axially-padded ring with a half-space built from the cap. For planar
+  caps the half-space is built from the cap's extracted `gp_Pln` (works
+  for any orientation, including tilted); for non-planar caps we extrude
+  an untrimmed face from the cap's underlying surface along the cylinder
+  axis into a finite prism and clip with that. Either path validates the
+  clipped volume strictly decreases and falls back to the legacy height-
+  bounded ring if the clip degenerates. Handles plane / cone / sphere /
+  torus / NURBS / BSpline caps uniformly without classifying the surface
+  type.
+- **Push/Pull direction on chamfer / fillet / cylinder side faces.** The
+  arrow + extrusion direction used the UV-midpoint surface normal, which
+  for a curved face is the surface tangent perpendicular at that one
+  point — sloped for a cone, twisted for a torus. Looked like the
+  direction "followed the polygon clicked" instead of a stable axis. Now
+  detects `Geom_ConicalSurface` / `Geom_ToroidalSurface` /
+  `Geom_CylindricalSurface` / `Geom_SurfaceOfRevolution` and uses the
+  surface's natural rotation axis as the push/pull direction, sign-
+  corrected so positive distance still pushes outward. Flat faces are
+  unchanged. Mirrored in both the arrow display
+  (`Application::beginPushPull`) and the executed extrusion
+  (`PushPullOp`) so they agree.
+- **Items-panel visibility checkbox didn't actually hide.** Toggling the
+  per-body eye checkbox set the document flag but didn't mark meshes
+  dirty, so the renderer kept drawing the now-hidden body. Same bug on
+  the per-sketch checkbox. Both now mark dirty and rebuild on the next
+  frame.
+- **Items-panel scroll jitter under multi-select.** The "auto-scroll to
+  newly-selected row" code re-issued `SetScrollHereY(0.5)` for every
+  selected row whose id differed from the last frame's primary selection
+  → all selected rows took turns scrolling themselves into view, twitching
+  in the user's intended scroll direction. Auto-scroll now only fires
+  when the selection contains exactly one body (which is the case where
+  it actually matters — viewport-driven picks bringing a row into view).
+- **Edit Diameter popup wasn't draggable.** The popup re-anchored its
+  position every frame and carried `ImGuiWindowFlags_NoMove`, so any drag
+  attempt was undone immediately. Now anchors only on first appearance
+  (`ImGuiCond_Appearing`), drops `NoMove`, and gets a title bar so the
+  drag affordance is obvious. Confirm / Cancel buttons unchanged.
+- **New-folder popup got stuck on screen.**
+  `ImGui::SetKeyboardFocusHere()` was called every frame, hijacking
+  focus back to the input field continuously and starving the
+  Create / Cancel buttons. Now fires only on the first frame the popup
+  opens.
+
+### Internal / refactor
+
+- Deleted ~240 lines of dead code in `ResizeCylindricalOp.cpp` left over
+  from an abandoned chamfer-detection approach (`detectCap`, `CapInfo`,
+  `makeRevolvedFill`). The current cap-following implementation
+  supersedes it. Cleaned up ~14 OpenCASCADE includes that were only
+  needed by the removed code.
+- New `core/Verbose.{h,cpp}` exposes a process-global verbose flag set
+  by `main` from the CLI. `ResizeCylindricalOp` and friends now use a
+  `MZLOG(...)` macro that no-ops unless the flag is set, so normal
+  launches don't spam stderr.
+
 ## [0.2.3] — 2026-05-29
 
 A polish release: clearer tool semantics, a proper close-project flow, an

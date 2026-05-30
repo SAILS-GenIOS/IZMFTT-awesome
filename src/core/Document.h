@@ -14,6 +14,20 @@ struct BodyEntry {
     TopoDS_Shape shape;
     bool visible = true;
     glm::vec3 color = glm::vec3(0.80f, 0.80f, 0.82f); // default: light grey
+    // -1 = at the root (not in any folder). >0 = a FolderEntry::id.
+    int folderId = -1;
+};
+
+// Bodies can be grouped under a folder for organisation in the Items panel.
+// Folder visibility and colour CASCADE to its bodies — toggling the folder
+// hides/shows every body inside; setting the colour overwrites every body's
+// colour (which can still be re-customised per body afterwards).
+struct FolderEntry {
+    int id;
+    std::string name;
+    bool visible = true;
+    glm::vec3 color = glm::vec3(0.80f, 0.80f, 0.82f);
+    bool expanded = true; // UI-only — collapsed folders hide children in panel
 };
 
 struct PlaneEntry {
@@ -53,6 +67,26 @@ public:
     void setBodyColor(int id, const glm::vec3& color);
     std::vector<int> getAllBodyIds() const;
 
+    // Folder management. Folders are pure UI grouping over bodies — they
+    // don't own bodies (a body keeps its id and is only assigned a folderId).
+    int addFolder(const std::string& name = "");
+    void removeFolder(int folderId); // bodies in it return to root (folderId=-1)
+    std::vector<int> getAllFolderIds() const;
+    std::string getFolderName(int folderId) const;
+    void setFolderName(int folderId, const std::string& name);
+    bool isFolderVisible(int folderId) const;
+    // Setting folder visibility CASCADES to every member body's visibility.
+    void setFolderVisible(int folderId, bool visible);
+    glm::vec3 getFolderColor(int folderId) const;
+    // Setting folder colour CASCADES to every member body's colour.
+    void setFolderColor(int folderId, const glm::vec3& color);
+    bool isFolderExpanded(int folderId) const;
+    void setFolderExpanded(int folderId, bool expanded);
+    // Bodies-by-folder lookups.
+    int getBodyFolder(int bodyId) const; // -1 if at root
+    void setBodyFolder(int bodyId, int folderId); // -1 = move to root
+    std::vector<int> getBodiesInFolder(int folderId) const; // folderId=-1 = root bodies
+
     // Sketch management
     int addSketch(std::shared_ptr<materializr::Sketch> sketch, const std::string& name = "");
     void removeSketch(int id);
@@ -76,12 +110,15 @@ public:
 private:
     int findBodyIndex(int id) const;
     int findSketchIndex(int id) const;
+    int findFolderIndex(int id) const;
 
     std::vector<BodyEntry> m_bodies;
     std::vector<PlaneEntry> m_planes;
     std::vector<SketchEntry> m_sketches;
+    std::vector<FolderEntry> m_folders;
     int m_nextBodyId = 1;
     int m_nextPlaneId = 1;
     int m_nextSketchId = 1;
+    int m_nextFolderId = 1;
     materializr::EventBus* m_eventBus = nullptr;
 };

@@ -26,6 +26,9 @@
 #include <BRepGProp_Face.hxx>
 #include <Bnd_Box.hxx>
 #include <Geom_CylindricalSurface.hxx>
+#include <Geom_ConicalSurface.hxx>
+#include <Geom_ToroidalSurface.hxx>
+#include <Geom_SurfaceOfRevolution.hxx>
 #include <GeomAbs_CurveType.hxx>
 #include <TopoDS.hxx>
 #include <TopExp_Explorer.hxx>
@@ -827,8 +830,19 @@ void Application::beginPushPull() {
         return;
     }
 
-    // Arrow along the first target's outward normal, at its centre — the user
-    // drags this to set the distance (and a measurement reads off it).
+    // Arrow direction at the first target's centre.
+    //
+    // For a flat face the UV-midpoint surface normal IS the face normal, but
+    // for a CURVED face (chamfer cone, fillet torus, side of a cylinder, etc.)
+    // that normal is the surface tangent perpendicular at one specific point —
+    // sloped for a cone, twisted for a torus. The push/pull arrow then looks
+    // like it "follows the polygon clicked" instead of a stable axis.
+    //
+    // Fix: if the face's underlying surface has a natural rotation axis (cone,
+    // torus, cylinder, surface of revolution), use that axis as the push/pull
+    // direction. Sign-correct it so positive distance still points outward
+    // (positive dot product with the UV-midpoint normal preserves the
+    // "fuse for +, cut for −" convention the user expects).
     m_pushPullHasArrow = false;
     try {
         const TopoDS_Face& f = m_pushPullTargets.front().profile;
@@ -839,7 +853,28 @@ void Application::beginPushPull() {
             gp_Pnt c; gp_Vec n;
             prop.Normal((u1 + u2) * 0.5, (v1 + v2) * 0.5, c, n);
             if (n.Magnitude() > 1e-10) {
-                m_pushPullNormal = glm::normalize(glm::vec3(n.X(), n.Y(), n.Z()));
+                gp_Vec dir = n;
+                Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
+                gp_Dir axis;
+                bool hasAxis = false;
+                if (auto cone =
+                        Handle(Geom_ConicalSurface)::DownCast(surf); !cone.IsNull()) {
+                    axis = cone->Axis().Direction(); hasAxis = true;
+                } else if (auto tor =
+                        Handle(Geom_ToroidalSurface)::DownCast(surf); !tor.IsNull()) {
+                    axis = tor->Axis().Direction(); hasAxis = true;
+                } else if (auto cyl =
+                        Handle(Geom_CylindricalSurface)::DownCast(surf); !cyl.IsNull()) {
+                    axis = cyl->Axis().Direction(); hasAxis = true;
+                } else if (auto rev =
+                        Handle(Geom_SurfaceOfRevolution)::DownCast(surf); !rev.IsNull()) {
+                    axis = rev->Axis().Direction(); hasAxis = true;
+                }
+                if (hasAxis) {
+                    dir = gp_Vec(axis);
+                    if (dir.Dot(n) < 0) dir.Reverse();
+                }
+                m_pushPullNormal = glm::normalize(glm::vec3(dir.X(), dir.Y(), dir.Z()));
                 m_pushPullOrigin = glm::vec3(c.X(), c.Y(), c.Z());
                 m_pushPullHasArrow = true;
             }

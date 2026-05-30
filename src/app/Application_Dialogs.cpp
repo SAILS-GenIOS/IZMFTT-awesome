@@ -568,12 +568,16 @@ void Application::applyMultiBodyRotation() {
 void Application::renderResizeCylindricalPanel() {
     if (!m_resizeCylActive) return;
 
+    // Anchor only on first appearance — afterwards the user can drag the
+    // popup somewhere more convenient and it stays there. Re-positioning
+    // every frame fought any drag attempt + NoMove also prevented dragging.
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 280,
-                                    ImGui::GetWindowPos().y + 50));
-    ImGui::SetNextWindowSize(ImVec2(260, 0));
-    ImGui::Begin("##ResizeCylindrical", nullptr,
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                                    ImGui::GetWindowPos().y + 50),
+                            ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(260, 0), ImGuiCond_Appearing);
+    ImGui::Begin("Edit Diameter", nullptr,
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_AlwaysAutoResize);
 
     bool both = m_resizeCylEditBottom && m_resizeCylEditTop;

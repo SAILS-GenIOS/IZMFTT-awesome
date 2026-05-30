@@ -190,9 +190,118 @@ void Document::clear() {
     m_bodies.clear();
     m_planes.clear();
     m_sketches.clear();
+    m_folders.clear();
     m_nextBodyId = 1;
     m_nextPlaneId = 1;
     m_nextSketchId = 1;
+    m_nextFolderId = 1;
+}
+
+// ---- Folders ---------------------------------------------------------------
+
+int Document::addFolder(const std::string& name) {
+    FolderEntry entry;
+    entry.id = m_nextFolderId++;
+    entry.name = name.empty() ? ("Folder " + std::to_string(entry.id)) : name;
+    m_folders.push_back(std::move(entry));
+    if (m_eventBus) m_eventBus->publish(materializr::DocumentModifiedEvent{true});
+    return m_folders.back().id;
+}
+
+void Document::removeFolder(int folderId) {
+    int idx = findFolderIndex(folderId);
+    if (idx < 0) return;
+    // Orphan members back to root, then erase.
+    for (auto& b : m_bodies) {
+        if (b.folderId == folderId) b.folderId = -1;
+    }
+    m_folders.erase(m_folders.begin() + idx);
+    if (m_eventBus) m_eventBus->publish(materializr::DocumentModifiedEvent{true});
+}
+
+std::vector<int> Document::getAllFolderIds() const {
+    std::vector<int> ids;
+    ids.reserve(m_folders.size());
+    for (const auto& f : m_folders) ids.push_back(f.id);
+    return ids;
+}
+
+std::string Document::getFolderName(int folderId) const {
+    int idx = findFolderIndex(folderId);
+    return idx < 0 ? "" : m_folders[idx].name;
+}
+
+void Document::setFolderName(int folderId, const std::string& name) {
+    int idx = findFolderIndex(folderId);
+    if (idx >= 0) m_folders[idx].name = name;
+}
+
+bool Document::isFolderVisible(int folderId) const {
+    int idx = findFolderIndex(folderId);
+    return idx < 0 ? false : m_folders[idx].visible;
+}
+
+void Document::setFolderVisible(int folderId, bool visible) {
+    int idx = findFolderIndex(folderId);
+    if (idx < 0) return;
+    m_folders[idx].visible = visible;
+    // Cascade to members.
+    for (auto& b : m_bodies) {
+        if (b.folderId == folderId) b.visible = visible;
+    }
+}
+
+glm::vec3 Document::getFolderColor(int folderId) const {
+    int idx = findFolderIndex(folderId);
+    return idx < 0 ? glm::vec3(0.80f, 0.80f, 0.82f) : m_folders[idx].color;
+}
+
+void Document::setFolderColor(int folderId, const glm::vec3& color) {
+    int idx = findFolderIndex(folderId);
+    if (idx < 0) return;
+    m_folders[idx].color = color;
+    // Cascade to members — overwrites their colour. Re-customisable per body
+    // afterwards (per-body picker still works as before).
+    for (auto& b : m_bodies) {
+        if (b.folderId == folderId) b.color = color;
+    }
+}
+
+bool Document::isFolderExpanded(int folderId) const {
+    int idx = findFolderIndex(folderId);
+    return idx < 0 ? false : m_folders[idx].expanded;
+}
+
+void Document::setFolderExpanded(int folderId, bool expanded) {
+    int idx = findFolderIndex(folderId);
+    if (idx >= 0) m_folders[idx].expanded = expanded;
+}
+
+int Document::getBodyFolder(int bodyId) const {
+    int idx = findBodyIndex(bodyId);
+    return idx < 0 ? -1 : m_bodies[idx].folderId;
+}
+
+void Document::setBodyFolder(int bodyId, int folderId) {
+    int bidx = findBodyIndex(bodyId);
+    if (bidx < 0) return;
+    if (folderId >= 0 && findFolderIndex(folderId) < 0) return; // unknown folder
+    m_bodies[bidx].folderId = folderId;
+}
+
+std::vector<int> Document::getBodiesInFolder(int folderId) const {
+    std::vector<int> ids;
+    for (const auto& b : m_bodies) {
+        if (b.folderId == folderId) ids.push_back(b.id);
+    }
+    return ids;
+}
+
+int Document::findFolderIndex(int id) const {
+    for (int i = 0; i < static_cast<int>(m_folders.size()); ++i) {
+        if (m_folders[i].id == id) return i;
+    }
+    return -1;
 }
 
 int Document::bodyCount() const {

@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,10 @@ public:
     void setDocument(Document* doc);
     void setSelectionManager(SelectionManager* sel);
     void setHistory(History* hist);
+    // Called whenever a rename / non-history mutation happens so the
+    // Application can mark the project dirty (otherwise closing without a
+    // manual Save silently drops the change).
+    void setDirtyCallback(std::function<void()> cb) { m_markDirty = std::move(cb); }
 
     // Returns true if a body was deleted (caller must rebuild meshes)
     bool render();
@@ -23,12 +28,36 @@ private:
     Document* m_document = nullptr;
     SelectionManager* m_selection = nullptr;
     History* m_history = nullptr;
+    std::function<void()> m_markDirty;
     int m_renamingId = -1;
     char m_renameBuffer[128] = {};
     bool m_showBodies = true;
     bool m_showSketches = true;
     bool m_showPlanes = true;
     bool m_bodyDeleted = false;
+    // Auto-scroll: when the selected body / sketch changes (e.g. a viewport
+    // pick), scroll its row into view. -1 = no pending scroll.
+    int m_lastSelectedBodyId = -1;
+    int m_lastSelectedSketchId = -1;
+    // Anchor body for shift-click range selection in the Items panel. Set
+    // whenever a plain click (no Ctrl, no Shift) selects a body.
+    int m_anchorBodyId = -1;
+    // "New folder…" submenu prompts for a name — kept across frames until the
+    // user confirms / cancels via Enter / Esc. The body being moved is
+    // remembered so we can assign it once the folder exists.
+    bool m_newFolderPopupOpen = false;
+    bool m_newFolderFocusInput = false; // first-frame focus only — else the
+                                        // input steals focus from Create/Cancel
+                                        // every frame and the popup locks up.
+    char m_newFolderName[128] = {};
+    // Bodies to move into the newly-created folder once its name is confirmed.
+    // Empty = create the folder empty (e.g. "+ Folder" header button).
+    std::vector<int> m_newFolderForBodyIds;
+
+    // Renders one body row (visibility + name + colour + context menu).
+    // Pulled out of render() so it can be called both at the root level and
+    // inside each folder's expanded content.
+    bool renderBodyRow(int id, bool& colorChanged);
 };
 
 } // namespace materializr

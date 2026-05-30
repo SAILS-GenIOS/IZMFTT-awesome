@@ -9,18 +9,21 @@ void SelectionManager::publishChanged() {
 
 void SelectionManager::clear() {
     m_selection.clear();
+    m_navigationOnly = false;
     publishChanged();
 }
 
 void SelectionManager::select(const SelectionEntry& entry) {
     m_selection.clear();
     m_selection.push_back(entry);
+    m_navigationOnly = false;
     publishChanged();
 }
 
 void SelectionManager::addToSelection(const SelectionEntry& entry) {
     if (findEntry(entry) < 0) {
         m_selection.push_back(entry);
+        m_navigationOnly = false;
         publishChanged();
     }
 }
