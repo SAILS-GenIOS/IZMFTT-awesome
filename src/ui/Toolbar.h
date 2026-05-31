@@ -28,8 +28,10 @@ enum class ToolAction {
     SketchConstrainParallel, SketchConstrainPerpendicular, SketchConstrainEqual,
     SketchConstrainFixed,
     // Dimension constraints — captured at current geometry value, so adding
-    // one is non-destructive. User edits the displayed value later (next pass).
-    SketchDimDistance, SketchDimAngle,
+    // one is non-destructive. User edits the displayed value later.
+    SketchDimDistance, SketchDimAngle, SketchDimRadius,
+    // Geometric constraints that need circle/arc selection (Session 4 catalogue).
+    SketchConstrainTangent, SketchConstrainConcentric,
     // General
     Measure, ResetCamera
 };
@@ -71,14 +73,23 @@ public:
     // frame from SketchTool so the Constraints section of the sketch toolbar
     // can show only the buttons that match the selection arity, and stay
     // hidden entirely when nothing is selected.
-    void setSketchSelectionCounts(int points, int lines) {
-        m_selPoints = points;
-        m_selLines = lines;
+    void setSketchSelectionCounts(int points, int lines,
+                                  int circles = 0, int arcs = 0) {
+        m_selPoints  = points;
+        m_selLines   = lines;
+        m_selCircles = circles;
+        m_selArcs    = arcs;
     }
     // Settings → Interface → Sketch helper. 0 = Inferences (no formal-
     // constraints buttons in the toolbar), 1 = Constraints (buttons appear
     // when sketch elements are selected, like Session 1's original UI).
     void setSketchHelperMode(int mode) { m_sketchHelperMode = mode; }
+    // Most recent SketchSolver state: 0 = Fully, 1 = Under, 2 = Over (matches
+    // the SketchState enum). Drives the small status badge at the top of the
+    // sketch toolbar so the user knows whether the current constraint set is
+    // satisfiable / has slack / is impossible. -1 = no status (no constraints).
+    void setSketchSolverState(int state) { m_sketchSolverState = state; }
+    void setSketchSolverDof(int dof) { m_sketchSolverDof = dof; }
 
     // When true (the default) every toolbar button shows a hover tooltip
     // describing what it does. Off via Settings → Interface for users who
@@ -98,6 +109,10 @@ private:
     int  m_activeSketchMode = 0; // SketchToolMode (see setActiveSketchMode)
     int  m_selPoints = 0;        // sketch points currently selected (see setSketchSelectionCounts)
     int  m_selLines = 0;         // sketch lines currently selected
+    int  m_selCircles = 0;       // sketch circles currently selected
+    int  m_selArcs = 0;          // sketch arcs currently selected
+    int  m_sketchSolverState = -1; // -1=none, 0=Fully, 1=Under, 2=Over
+    int  m_sketchSolverDof = 0;
     int  m_sketchHelperMode = 0; // 0=Inferences, 1=Constraint buttons (see setSketchHelperMode)
 
     ToolAction renderSketchTools();

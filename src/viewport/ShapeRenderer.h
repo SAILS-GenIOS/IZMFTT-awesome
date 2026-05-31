@@ -6,6 +6,7 @@
 
 #include <TopoDS_Shape.hxx>
 
+#include <map>
 #include <vector>
 #include <string>
 
@@ -37,6 +38,24 @@ public:
     /// almost no triangles to flat faces.
     int tessellate(const TopoDS_Shape& shape, float deflection = 0.1f,
                    float angularDeflection = 0.2f);
+
+    /// Per-body upsert: tessellate `shape` and bind the resulting mesh to
+    /// `bodyId`. If this body already has a mesh slot, replace its data in
+    /// place (preserving the slot index so existing setColor / setSelected
+    /// references stay valid). If new, allocate a slot. Returns the slot
+    /// index. This is the partial-update path used by interactive ops to
+    /// avoid re-tessellating every body on every preview frame.
+    int setBodyMesh(int bodyId, const TopoDS_Shape& shape,
+                    float deflection = 0.1f, float angularDeflection = 0.2f);
+
+    /// Remove the mesh associated with `bodyId`. The slot is marked empty
+    /// (vertexCount = 0, GL buffers freed) but kept in the array so other
+    /// slots' indices don't shift. A future setBodyMesh for the same id can
+    /// reclaim a vacant slot.
+    void removeBody(int bodyId);
+
+    /// Look up the slot index for a body id, or -1 if none.
+    int findSlotByBody(int bodyId) const;
 
     /// Render all meshes.
     void render(const glm::mat4& view, const glm::mat4& projection,
@@ -72,11 +91,18 @@ private:
         unsigned int vao = 0;
         unsigned int vbo = 0;
         int vertexCount = 0;
+        int bodyId = -1; // -1 = not tied to a Document body (legacy slot)
         glm::mat4 modelMatrix = glm::mat4(1.0f);
         glm::vec3 color = glm::vec3(0.7f, 0.7f, 0.7f);
         bool selected = false;
         bool subtractPreview = false;
     };
+
+    // Internal: upload a tessellated shape's vertex buffer into `slot`.
+    // Frees the slot's previous GL resources, recomputes triangles, and
+    // re-uploads. Returns true on success.
+    bool uploadTessellatedInto(int slot, const TopoDS_Shape& shape,
+                               float deflection, float angularDeflection);
 
     bool compileShader(unsigned int& shader, unsigned int type, const char* source);
     bool linkProgram(unsigned int program, unsigned int vertShader, unsigned int fragShader);
@@ -84,6 +110,9 @@ private:
                            const glm::mat4& projection, const glm::vec4& color);
 
     std::vector<MeshData> m_meshes;
+    // bodyId → slot index in m_meshes. Lets setBodyMesh / removeBody resolve
+    // by body id without scanning the vector.
+    std::map<int, int> m_bodyToSlot;
 
     // Mesh shader program
     unsigned int m_meshProgram = 0;

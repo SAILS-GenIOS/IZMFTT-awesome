@@ -76,6 +76,9 @@ namespace materializr { namespace force_link { void linkAll(); } }
 #include <Geom_Plane.hxx>
 #include <Geom_CylindricalSurface.hxx>
 #include <GeomAbs_CurveType.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Elips.hxx>
+#include <cstring>
 #include <gp_Cylinder.hxx>
 #include <gp_Pln.hxx>
 #include <Bnd_Box.hxx>
@@ -145,6 +148,7 @@ Application::Application(bool safeMode) : m_safeMode(safeMode) {
     m_itemsPanel->setHistory(m_history.get());
     m_itemsPanel->setDirtyCallback([this]() { markDirty(); });
     m_itemsPanel->setExportStlCallback([this](int bodyId) { exportBodyAsStl(bodyId); });
+    m_itemsPanel->setEditSketchCallback([this](int sketchId) { editSketch(sketchId); });
     m_statusBar->setDocument(m_document.get());
     m_statusBar->setSelectionManager(m_selection.get());
     m_propertiesPanel->setHistory(m_history.get());
@@ -853,6 +857,12 @@ void Application::handleToolAction(int action) {
             applySketchConstraint(ConstraintType::Distance); break;
         case ToolAction::SketchDimAngle:
             applySketchConstraint(ConstraintType::Angle); break;
+        case ToolAction::SketchDimRadius:
+            applySketchConstraint(ConstraintType::Radius); break;
+        case ToolAction::SketchConstrainTangent:
+            applySketchConstraint(ConstraintType::Tangent); break;
+        case ToolAction::SketchConstrainConcentric:
+            applySketchConstraint(ConstraintType::Concentric); break;
 
         // --- Sketch element transforms (operate on the Select-mode selection) ---
         // Rotate is handled by the sketch gizmo's ring handle (see Application_
@@ -1294,26 +1304,62 @@ void Application::handleShortcuts() {
 }
 
 void Application::rebuildMeshes() {
-    m_shapeRenderer->clear();
-    m_edgeRenderer->clear();
     float deflection, angularDeflection;
     meshQualityParams(deflection, angularDeflection);
-    auto ids = m_document->getAllBodyIds();
+
+    if (m_meshesDirty) {
+        // Full rebuild — clear everything and re-tessellate every visible
+        // body. Used on project load, mesh-quality change, theme switch.
+        m_shapeRenderer->clear();
+        m_edgeRenderer->clear();
+        auto ids = m_document->getAllBodyIds();
+        for (int id : ids) {
+            if (!m_document->isBodyVisible(id)) continue;
+            const TopoDS_Shape& shape = m_document->getBody(id);
+            int idx = m_shapeRenderer->setBodyMesh(id, shape, deflection,
+                                                   angularDeflection);
+            if (idx >= 0) {
+                m_shapeRenderer->setColor(idx, m_document->getBodyColor(id));
+                if (m_extruding && m_extrudeMode == ExtrudeMode::Subtract &&
+                    id == m_extrudePreviewBodyId) {
+                    m_shapeRenderer->setSubtractPreview(idx, true);
+                }
+            }
+            m_edgeRenderer->setBodyEdges(id, shape, deflection);
+        }
+        m_dirtyBodyIds.clear();
+        return;
+    }
+
+    // Partial rebuild — only the bodies in m_dirtyBodyIds need new meshes.
+    // The other (potentially 100+) bodies are left untouched, which is the
+    // whole point of this path: interactive ops like push/pull stay smooth
+    // on a complex project.
+    if (m_dirtyBodyIds.empty()) return;
+
+    // Copy out: setBodyMesh may mutate the renderer's internal slots; safer
+    // to iterate a snapshot.
+    std::vector<int> ids(m_dirtyBodyIds.begin(), m_dirtyBodyIds.end());
+    m_dirtyBodyIds.clear();
     for (int id : ids) {
-        if (!m_document->isBodyVisible(id)) continue;
+        bool exists = false;
+        try { (void)m_document->getBody(id); exists = true; } catch (...) {}
+        if (!exists || !m_document->isBodyVisible(id)) {
+            m_shapeRenderer->removeBody(id);
+            m_edgeRenderer->removeBody(id);
+            continue;
+        }
         const TopoDS_Shape& shape = m_document->getBody(id);
-        int idx = m_shapeRenderer->tessellate(shape, deflection, angularDeflection);
+        int idx = m_shapeRenderer->setBodyMesh(id, shape, deflection,
+                                               angularDeflection);
         if (idx >= 0) {
-            // Use the body's own colour (defaults to light grey) instead of an
-            // index-based palette, so colours are stable and user-controllable.
             m_shapeRenderer->setColor(idx, m_document->getBodyColor(id));
-            // The live tool volume of a Subtract extrude is shown in red.
             if (m_extruding && m_extrudeMode == ExtrudeMode::Subtract &&
                 id == m_extrudePreviewBodyId) {
                 m_shapeRenderer->setSubtractPreview(idx, true);
             }
         }
-        m_edgeRenderer->addShape(shape, deflection);
+        m_edgeRenderer->setBodyEdges(id, shape, deflection);
     }
 }
 
@@ -1486,6 +1532,9 @@ ProjectHistory Application::captureProjectHistory() {
         steps[i].description = op->description();
         steps[i].enabled = op->isEnabled();
         steps[i].params = op->serializeParams();
+        steps[i].timestampUnix = static_cast<long long>(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                op->timestamp().time_since_epoch()).count());
         if (!op->isEnabled()) continue; // a disabled step changed nothing
 
         OperationDiff d = op->captureDiff();
@@ -1540,8 +1589,75 @@ void Application::rebuildHistoryFromProject(const ProjectHistory& hist) {
         // pass (when face-id stability lands) can pull the original radii /
         // distances / etc. back out without re-prompting the user.
         if (!st.params.empty()) op->setStoredParams(st.params);
+        // Restore the original timestamp so the HistoryPanel's date grouping
+        // is preserved across reload. Legacy projects (timestamp == 0) get
+        // bumped to "yesterday" so they group under that header instead of
+        // landing on today and mixing with new work.
+        if (st.timestampUnix > 0) {
+            op->setTimestamp(std::chrono::system_clock::time_point{
+                std::chrono::seconds{st.timestampUnix}});
+        } else {
+            op->setTimestamp(std::chrono::system_clock::now() -
+                             std::chrono::hours{24});
+        }
         m_history->pushExecuted(std::move(op));
     }
+}
+
+void Application::ensureSketchSourceFace(int sketchId) {
+    auto sk = m_document->getSketch(sketchId);
+    if (!sk) return;
+    if (!sk->getSourceFace().IsNull()) return; // already set; nothing to do
+    int bid = sk->getSourceBody();
+    if (bid < 0) return;
+    TopoDS_Shape body;
+    try { body = m_document->getBody(bid); } catch (...) { return; }
+    if (body.IsNull()) return;
+
+    const gp_Pln& sketchPln = sk->getPlane();
+    gp_Pnt sO = sketchPln.Location();
+    gp_Dir sN = sketchPln.Axis().Direction();
+
+    // Two passes — first prefer faces that have inner wires (i.e., faces with
+    // holes) since those are usually what the user sketched on; second pass
+    // accepts the first geometric match. Tolerances loose enough to survive
+    // a save/load + history-replay round trip without being so loose that
+    // unrelated parallel faces match.
+    auto matchPass = [&](bool requireHoles) -> TopoDS_Face {
+        TopoDS_Face hit;
+        for (TopExp_Explorer ex(body, TopAbs_FACE); ex.More(); ex.Next()) {
+            TopoDS_Face f = TopoDS::Face(ex.Current());
+            Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
+            if (surf.IsNull()) continue;
+            Handle(Geom_Plane) gpln = Handle(Geom_Plane)::DownCast(surf);
+            if (gpln.IsNull()) continue;
+            gp_Pln fPln = gpln->Pln();
+            gp_Dir fN = fPln.Axis().Direction();
+            // Normals parallel (either direction). Tolerance ~0.6° of slack.
+            if (std::abs(sN.Dot(fN)) < 0.9999) continue;
+            // Sketch origin should lie on the face's plane within 0.05 mm.
+            gp_Pnt fO = fPln.Location();
+            gp_Vec d(fO, sO);
+            double dist = std::abs(d.Dot(gp_Vec(fN)));
+            if (dist > 0.05) continue;
+            if (requireHoles) {
+                // Walk wires — need at least one beyond the outer wire to
+                // qualify as a face-with-hole.
+                TopoDS_Wire outer = BRepTools::OuterWire(f);
+                int wireCount = 0;
+                for (TopExp_Explorer we(f, TopAbs_WIRE); we.More(); we.Next()) {
+                    ++wireCount;
+                }
+                if (wireCount < 2 || outer.IsNull()) continue;
+            }
+            hit = f;
+            break;
+        }
+        return hit;
+    };
+    TopoDS_Face f = matchPass(/*requireHoles=*/true);
+    if (f.IsNull()) f = matchPass(/*requireHoles=*/false);
+    if (!f.IsNull()) sk->setSourceFace(f);
 }
 
 bool Application::loadProjectAt(const std::string& path) {
@@ -1559,6 +1675,15 @@ bool Application::loadProjectAt(const std::string& path) {
     m_currentProjectPath = path;
     markSaved();
     m_meshesDirty = true;
+
+    // m_sourceFace (the TopoDS_Face the sketch was drawn on) isn't part of
+    // the project file — only the plane and sourceBodyId are. Re-derive it
+    // for every loaded sketch so Sketch::buildRegions can union the host
+    // face's wires (holes, fillets) into the sketch profile.
+    for (int sid : m_document->getAllSketchIds()) {
+        ensureSketchSourceFace(sid);
+    }
+
     std::fprintf(stdout, "Loaded %d bodies, %d history steps from %s\n",
                  result.bodiesLoaded, static_cast<int>(hist.steps.size()),
                  path.c_str());
@@ -1888,10 +2013,35 @@ void Application::enterSketchOnFace(const TopoDS_Face& face, int sourceBodyId) {
                 if (curve.GetType() == GeomAbs_Line) {
                     refs.lines.emplace_back(a, b);
                     dedup(refs.points, 0.5f * (a + b)); // midpoint
+                } else if (curve.GetType() == GeomAbs_Circle) {
+                    // Circle / arc edge — add the centre as a snap point
+                    // (very common target: hole centres, fillet centres).
+                    // Also sample the perimeter so the cursor can catch the
+                    // curve itself along a few spots until proper curve-
+                    // perimeter snapping ships.
+                    gp_Circ circ = curve.Circle();
+                    dedup(refs.points, project(circ.Location()));
+                    const int samples = 8;
+                    for (int i = 1; i < samples; ++i) {
+                        double t = f + (l - f) * (double(i) / samples);
+                        gp_Pnt p;
+                        curve.D0(t, p);
+                        dedup(refs.points, project(p));
+                    }
+                } else if (curve.GetType() == GeomAbs_Ellipse) {
+                    // Ellipse also has a centre; treat it as a snap target.
+                    gp_Elips el = curve.Ellipse();
+                    dedup(refs.points, project(el.Location()));
+                    const int samples = 8;
+                    for (int i = 1; i < samples; ++i) {
+                        double t = f + (l - f) * (double(i) / samples);
+                        gp_Pnt p;
+                        curve.D0(t, p);
+                        dedup(refs.points, project(p));
+                    }
                 } else {
-                    // For arcs / circles / splines, sample a couple of points
-                    // along the edge so the user can at least snap to a few
-                    // spots on a curve (proper curve snapping is future work).
+                    // Splines / hyperbolas / etc. — just sample perimeter
+                    // points so something snappable exists along the curve.
                     const int samples = 8;
                     for (int i = 1; i < samples; ++i) {
                         double t = f + (l - f) * (double(i) / samples);
@@ -1939,6 +2089,11 @@ void Application::applySketchConstraint(ConstraintType type) {
     };
 
     int added = 0;
+    // Wrap the whole mutation in recordSketchMutation so the constraint add
+    // (+ subsequent solver pass) becomes a single SketchEditOp on the history
+    // stack. Ctrl+Z removes the constraint(s) just added. Description is
+    // specialised by SketchEditOp::description() reading the constraint diff.
+    recordSketchMutation([&]{
     switch (type) {
         case ConstraintType::Horizontal:
         case ConstraintType::Vertical: {
@@ -2030,15 +2185,70 @@ void Application::applySketchConstraint(ConstraintType type) {
             }
             break;
         }
+        case ConstraintType::Radius: {
+            // Lock each selected circle / arc at its current radius. Adding
+            // the constraint is non-destructive; user edits the value later.
+            const auto& selC = m_sketchTool->getSelectedCircles();
+            const auto& selA = m_sketchTool->getSelectedArcs();
+            for (int cid : selC) {
+                for (const auto& circ : m_activeSketch->getCircles()) {
+                    if (circ.id == cid) {
+                        pushConstraint(ConstraintType::Radius, cid, -1, circ.radius);
+                        ++added;
+                        break;
+                    }
+                }
+            }
+            for (int aid : selA) {
+                for (const auto& arc : m_activeSketch->getArcs()) {
+                    if (arc.id == aid) {
+                        pushConstraint(ConstraintType::Radius, aid, -1, arc.radius);
+                        ++added;
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        case ConstraintType::Tangent: {
+            // Tangent constraint takes one arc/circle (entityA) and one line
+            // (entityB). Pair every selected curve with every selected line.
+            const auto& selC = m_sketchTool->getSelectedCircles();
+            const auto& selA = m_sketchTool->getSelectedArcs();
+            for (int lid : selLns) {
+                for (int cid : selC) {
+                    pushConstraint(ConstraintType::Tangent, cid, lid);
+                    ++added;
+                }
+                for (int aid : selA) {
+                    pushConstraint(ConstraintType::Tangent, aid, lid);
+                    ++added;
+                }
+            }
+            break;
+        }
+        case ConstraintType::Concentric: {
+            // Two circles / arcs share a centre. Build a flat list of selected
+            // curves and pair the first with each subsequent.
+            std::vector<int> curves;
+            for (int cid : m_sketchTool->getSelectedCircles()) curves.push_back(cid);
+            for (int aid : m_sketchTool->getSelectedArcs())    curves.push_back(aid);
+            for (size_t i = 1; i < curves.size(); ++i) {
+                pushConstraint(ConstraintType::Concentric, curves[0], curves[i]);
+                ++added;
+            }
+            break;
+        }
         default:
-            break; // Radius / Tangent / Concentric still pending in later passes
+            break;
     }
 
     if (added > 0) {
         m_sketchSolver->setSketch(m_activeSketch.get());
         m_sketchSolver->solve(*m_activeSketch);
-        markDirty();
     }
+    }); // end recordSketchMutation
+    if (added > 0) markDirty();
 }
 
 void Application::recordSketchMutation(const std::function<void()>& mutator) {
@@ -2058,6 +2268,19 @@ void Application::recordSketchMutation(const std::function<void()>& mutator) {
         for (const auto& sp : s.getSplines()) mix(static_cast<size_t>(sp.id));
         mix(s.getPolygons().size());
         for (const auto& p : s.getPolygons()) mix(static_cast<size_t>(p.id));
+        // Constraints too — including their values so an edit (not just an
+        // add / remove) registers as a mutation and pushes a history step.
+        mix(s.getConstraints().size());
+        for (const auto& c : s.getConstraints()) {
+            mix(static_cast<size_t>(c.id));
+            mix(static_cast<size_t>(c.type));
+            mix(static_cast<size_t>(c.entityA));
+            mix(static_cast<size_t>(c.entityB));
+            size_t vb; std::memcpy(&vb, &c.value, sizeof(vb));
+            mix(vb);
+            std::memcpy(&vb, &c.valueY, sizeof(vb));
+            mix(vb);
+        }
         return h;
     };
     size_t beforeSig = signature(*m_activeSketch);
@@ -2073,6 +2296,11 @@ void Application::recordSketchMutation(const std::function<void()>& mutator) {
 void Application::editSketch(int sketchId) {
     auto sketch = m_document->getSketch(sketchId);
     if (!sketch) return;
+
+    // For sketches loaded from a previous session, sourceFace isn't part of
+    // the project file — re-bind it from the host body before the user
+    // starts editing / using sketch regions.
+    ensureSketchSourceFace(sketchId);
 
     m_activeSketch = sketch; // shared ownership - edits go straight to the stored sketch
     m_sketchSolver = std::make_unique<SketchSolver>();
@@ -2389,9 +2617,21 @@ void Application::run() {
             if (m_inSketchMode && m_sketchTool) {
                 m_toolbar->setSketchSelectionCounts(
                     static_cast<int>(m_sketchTool->getSelectedPoints().size()),
-                    static_cast<int>(m_sketchTool->getSelectedLines().size()));
+                    static_cast<int>(m_sketchTool->getSelectedLines().size()),
+                    static_cast<int>(m_sketchTool->getSelectedCircles().size()),
+                    static_cast<int>(m_sketchTool->getSelectedArcs().size()));
             } else {
-                m_toolbar->setSketchSelectionCounts(0, 0);
+                m_toolbar->setSketchSelectionCounts(0, 0, 0, 0);
+            }
+            // Solver-state badge. Only meaningful when in sketch mode AND
+            // there are constraints to evaluate; otherwise hide the badge.
+            if (m_inSketchMode && m_activeSketch && m_sketchSolver &&
+                !m_activeSketch->getConstraints().empty()) {
+                m_toolbar->setSketchSolverState(static_cast<int>(m_sketchSolver->getState()));
+                m_toolbar->setSketchSolverDof(m_sketchSolver->degreesOfFreedom());
+            } else {
+                m_toolbar->setSketchSolverState(-1);
+                m_toolbar->setSketchSolverDof(0);
             }
             ToolAction action = m_toolbar->render();
             m_sketchGridStep = m_toolbar->getGridStep();

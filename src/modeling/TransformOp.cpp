@@ -1,4 +1,5 @@
 #include "TransformOp.h"
+#include "Sketch.h"
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_GTransform.hxx>
 #include <gp_Trsf.hxx>
@@ -65,6 +66,22 @@ bool TransformOp::execute(Document& doc) {
     try {
         // Store previous shape for undo
         m_previousShape = doc.getBody(m_bodyId);
+        // Same for sketch planes anchored to this body — they follow the
+        // host face/body through Translate / Rotate so sketches drawn on it
+        // stay registered to "where they were drawn" even after a move.
+        // Scale is deliberately skipped: it changes physical dimensions, which
+        // a dimension-driven sketch shouldn't silently absorb. Effectively the
+        // sketch detaches on Scale.
+        m_previousSketchPlanes.clear();
+        const bool propagateToSketches = (m_type != TransformType::Scale);
+        if (propagateToSketches) {
+            for (int sid : doc.getAllSketchIds()) {
+                auto sk = doc.getSketch(sid);
+                if (sk && sk->getSourceBody() == m_bodyId) {
+                    m_previousSketchPlanes.push_back({sid, sk->getPlane()});
+                }
+            }
+        }
 
         gp_Pnt center(m_cx, m_cy, m_cz);
 
@@ -108,6 +125,19 @@ bool TransformOp::execute(Document& doc) {
         }
 
         doc.updateBody(m_bodyId, transform.Shape());
+
+        // Propagate the SAME gp_Trsf to every sketch anchored to this body
+        // so the sketch's plane (and therefore its 2D coordinate frame)
+        // stays glued to the body's face. The sketch's own 2D points are
+        // already in plane-local coordinates, so transforming just the
+        // plane is enough to keep the world-space sketch geometry aligned.
+        for (const auto& [sid, prevPln] : m_previousSketchPlanes) {
+            auto sk = doc.getSketch(sid);
+            if (!sk) continue;
+            gp_Pln newPln = prevPln; // copy
+            newPln.Transform(trsf);
+            sk->setPlane(newPln);
+        }
         return true;
     } catch (...) {
         return false;
@@ -121,6 +151,13 @@ bool TransformOp::undo(Document& doc) {
 
     try {
         doc.updateBody(m_bodyId, m_previousShape);
+        // Restore the sketch planes we snapshotted in execute(). Even if
+        // some sketches have been removed since, we just skip the missing
+        // ones — restoration is best-effort.
+        for (const auto& [sid, prevPln] : m_previousSketchPlanes) {
+            auto sk = doc.getSketch(sid);
+            if (sk) sk->setPlane(prevPln);
+        }
         return true;
     } catch (...) {
         return false;

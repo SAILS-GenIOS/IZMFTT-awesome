@@ -131,6 +131,43 @@ int EdgeRenderer::addShape(const TopoDS_Shape& shape, float deflection) {
     return index;
 }
 
+void EdgeRenderer::setBodyEdges(int bodyId, const TopoDS_Shape& shape,
+                                 float deflection) {
+    int appendedSlot = addShape(shape, deflection);
+    if (appendedSlot < 0) return; // tessellation produced no edges
+    auto it = m_bodyToSlot.find(bodyId);
+    if (it == m_bodyToSlot.end()) {
+        m_meshes[appendedSlot].bodyId = bodyId;
+        m_bodyToSlot[bodyId] = appendedSlot;
+        return;
+    }
+    int oldSlot = it->second;
+    if (oldSlot < 0 || oldSlot >= static_cast<int>(m_meshes.size())) {
+        m_meshes[appendedSlot].bodyId = bodyId;
+        m_bodyToSlot[bodyId] = appendedSlot;
+        return;
+    }
+    EdgeMesh& old = m_meshes[oldSlot];
+    if (old.vao) glDeleteVertexArrays(1, &old.vao);
+    if (old.vbo) glDeleteBuffers(1, &old.vbo);
+    old = m_meshes[appendedSlot];
+    old.bodyId = bodyId;
+    // Drop the now-stale tail slot.
+    m_meshes.pop_back();
+}
+
+void EdgeRenderer::removeBody(int bodyId) {
+    auto it = m_bodyToSlot.find(bodyId);
+    if (it == m_bodyToSlot.end()) return;
+    int slot = it->second;
+    m_bodyToSlot.erase(it);
+    if (slot < 0 || slot >= static_cast<int>(m_meshes.size())) return;
+    EdgeMesh& m = m_meshes[slot];
+    if (m.vao) glDeleteVertexArrays(1, &m.vao);
+    if (m.vbo) glDeleteBuffers(1, &m.vbo);
+    m.vao = 0; m.vbo = 0; m.vertexCount = 0; m.bodyId = -1;
+}
+
 void EdgeRenderer::render(const glm::mat4& view, const glm::mat4& projection) {
     if (m_meshes.empty() || !m_program) return;
 
@@ -169,6 +206,7 @@ void EdgeRenderer::clear() {
         if (mesh.vbo) glDeleteBuffers(1, &mesh.vbo);
     }
     m_meshes.clear();
+    m_bodyToSlot.clear();
 }
 
 bool EdgeRenderer::compileShader(unsigned int& shader, unsigned int type, const char* source) {

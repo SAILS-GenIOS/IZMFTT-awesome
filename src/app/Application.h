@@ -143,6 +143,21 @@ private:
     // changed, push a SketchEditOp so the user can Ctrl+Z drawing actions.
     void recordSketchMutation(const std::function<void()>& mutator);
 
+    // Flag a single body as needing a mesh refresh. Call sites that already
+    // know which body changed should prefer this over `m_meshesDirty = true`
+    // — the next rebuildMeshes pass updates just this body via setBodyMesh,
+    // leaving the rest of the (potentially 100+) bodies untouched. Critical
+    // for push/pull preview smoothness on complex projects.
+    void markBodyDirty(int bodyId) { if (bodyId >= 0) m_dirtyBodyIds.insert(bodyId); }
+
+    // If `sketchId`'s Sketch has a sourceBodyId but no sourceFace (typical
+    // for a sketch reloaded from a project file), walk the source body's
+    // faces and bind the planar face whose plane coincides with the sketch's
+    // plane. Without a sourceFace, Sketch::buildRegions doesn't union the
+    // host face's wires (holes, fillets) into the sketch — and a push/pull
+    // of a "circle around an existing hole" wrongly produces a solid bar.
+    void ensureSketchSourceFace(int sketchId);
+
     // Apply a sketch constraint of the given type to the current
     // SketchTool element selection. Inspects the selection counts to decide
     // which arity to use (e.g. Coincident chains pairs of selected points;
@@ -352,7 +367,15 @@ private:
     std::vector<std::pair<int, TopoDS_Shape>> m_pushPullPreviousBodies;
 
     bool m_renderersReady = false;
+    // Full-rebuild signal: clear all meshes and re-tessellate every visible
+    // body. Necessary on theme/mesh-quality changes, project load, and the
+    // first frame. Most edits should prefer markBodyDirty() so a 145-body
+    // project doesn't pay full re-tessellation on every push/pull frame.
     bool m_meshesDirty = true;
+    // Per-body partial rebuild signal. rebuildMeshes() walks this set and
+    // updates only those bodies' meshes via setBodyMesh / removeBody. Cleared
+    // after each rebuild pass.
+    std::set<int> m_dirtyBodyIds;
     int m_hoveredBodyId = -1;
 
     // Gizmo drag state for history commit

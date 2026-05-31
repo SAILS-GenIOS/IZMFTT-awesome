@@ -119,9 +119,10 @@ void Application::renderViewport() {
     if (w > 0 && h > 0) {
         m_viewport->resize(w, h);
 
-        if (m_meshesDirty) {
+        if (m_meshesDirty || !m_dirtyBodyIds.empty()) {
             rebuildMeshes();
             m_meshesDirty = false;
+            // rebuildMeshes() also clears m_dirtyBodyIds on completion.
         }
 
         m_viewport->bind();
@@ -157,8 +158,35 @@ void Application::renderViewport() {
             float fadeDist = cam.isOrthographic()
                 ? cam.getOrthoSize() * 8.0f
                 : glm::length(cam.getPosition() - cam.getTarget()) * 8.0f;
+            // Suppress the minor (1×) grid tier when the project is big and
+            // the user isn't actively sketching / moving — at that zoom the
+            // 1-mm lines are clutter that drowns the major (10-mm) lines.
+            // The minor tier comes back during sketch / gizmo drag because
+            // that's when fine snapping actually matters.
+            bool interactive = m_inSketchMode || m_gizmoDragging ||
+                               m_extruding || m_pushPullActive ||
+                               m_edgeOpActive;
+            float minorAlpha = 1.0f;
+            if (!interactive) {
+                try {
+                    Bnd_Box bb;
+                    bool any = false;
+                    for (int id : m_document->getAllBodyIds()) {
+                        if (!m_document->isBodyVisible(id)) continue;
+                        BRepBndLib::Add(m_document->getBody(id), bb);
+                        any = true;
+                    }
+                    if (any && !bb.IsVoid()) {
+                        double xmn,ymn,zmn,xmx,ymx,zmx;
+                        bb.Get(xmn,ymn,zmn,xmx,ymx,zmx);
+                        double ext = std::max({xmx-xmn, ymx-ymn, zmx-zmn});
+                        if (ext > 100.0) minorAlpha = 0.0f; // hide 1× tier
+                    }
+                } catch (...) {}
+            }
             m_grid->render(view, proj, cam.getTarget(), std::max(fadeDist, 10.0f),
-                           gp, std::max(m_sketchGridStep, 0.01f));
+                           gp, std::max(m_sketchGridStep, 0.01f),
+                           minorAlpha, 0.55f /*globalAlpha*/);
         }
         m_planeRenderer->render(view, proj);
         m_shapeRenderer->render(view, proj, cam.getPosition());
@@ -585,6 +613,10 @@ void Application::renderViewport() {
                         if (c.type == ConstraintType::Angle) {
                             std::snprintf(m_dimEditingBuf, sizeof(m_dimEditingBuf),
                                           "%.2f", c.value * 180.0 / M_PI);
+                        } else if (c.type == ConstraintType::Radius) {
+                            // Edited as diameter to match the label.
+                            std::snprintf(m_dimEditingBuf, sizeof(m_dimEditingBuf),
+                                          "%.2f", c.value * 2.0);
                         } else {
                             std::snprintf(m_dimEditingBuf, sizeof(m_dimEditingBuf),
                                           "%.2f", c.value);
@@ -617,11 +649,16 @@ void Application::renderViewport() {
                         drawLabel(mid + perp, lbl, c);
                     } else if (c.type == ConstraintType::Radius) {
                         glm::vec2 center(0.0f);
+                        float radius = 1.0f;
                         bool found = false;
                         for (const auto& circ : m_activeSketch->getCircles()) {
                             if (circ.id == c.entityA) {
                                 const SketchPoint* cp = m_activeSketch->getPoint(circ.centerPointId);
-                                if (cp) { center = cp->pos; found = true; }
+                                if (cp) {
+                                    center = cp->pos;
+                                    radius = static_cast<float>(circ.radius);
+                                    found = true;
+                                }
                                 break;
                             }
                         }
@@ -629,14 +666,25 @@ void Application::renderViewport() {
                             for (const auto& arc : m_activeSketch->getArcs()) {
                                 if (arc.id == c.entityA) {
                                     const SketchPoint* cp = m_activeSketch->getPoint(arc.centerPointId);
-                                    if (cp) { center = cp->pos; found = true; }
+                                    if (cp) {
+                                        center = cp->pos;
+                                        radius = static_cast<float>(arc.radius);
+                                        found = true;
+                                    }
                                     break;
                                 }
                             }
                         }
                         if (!found) continue;
-                        std::snprintf(lbl, sizeof(lbl), "R %.2f mm", c.value);
-                        drawLabel(center, lbl, c);
+                        // Place the label tangentially outside the circle (up
+                        // and to the right) so the centre stays clear for
+                        // concentric-circle drawing. Offset is the radius + a
+                        // small constant so it floats just past the perimeter.
+                        glm::vec2 labelPos = center +
+                            glm::vec2(0.7071f, 0.7071f) * (radius + 1.2f);
+                        std::snprintf(lbl, sizeof(lbl), "\xC3\x98 %.2f mm",
+                                      c.value * 2.0);
+                        drawLabel(labelPos, lbl, c);
                     } else if (c.type == ConstraintType::Angle) {
                         // Label at the midpoint of line A (the reference) so
                         // it's near both lines without overlapping geometry.
@@ -674,17 +722,23 @@ void Application::renderViewport() {
                                              ImGuiInputTextFlags_CharsDecimal |
                                              ImGuiInputTextFlags_AutoSelectAll)) {
                             double v = std::atof(m_dimEditingBuf);
-                            for (auto& cn : m_activeSketch->getMutableConstraints()) {
-                                if (cn.id != m_dimEditingId) continue;
-                                if (cn.type == ConstraintType::Angle) {
-                                    // Popup shows degrees; solver wants radians.
-                                    cn.value = v * M_PI / 180.0;
-                                } else if (v > 0.0) {
-                                    cn.value = v;
+                            // recordSketchMutation snapshots before/after and
+                            // pushes a SketchEditOp so the dimension edit is
+                            // Ctrl-Z-able and visible in the History panel.
+                            recordSketchMutation([&]{
+                                for (auto& cn : m_activeSketch->getMutableConstraints()) {
+                                    if (cn.id != m_dimEditingId) continue;
+                                    if (cn.type == ConstraintType::Angle) {
+                                        cn.value = v * M_PI / 180.0;
+                                    } else if (cn.type == ConstraintType::Radius) {
+                                        if (v > 0.0) cn.value = v * 0.5;
+                                    } else if (v > 0.0) {
+                                        cn.value = v;
+                                    }
+                                    break;
                                 }
-                                break;
-                            }
-                            if (m_sketchSolver) m_sketchSolver->solve(*m_activeSketch);
+                                if (m_sketchSolver) m_sketchSolver->solve(*m_activeSketch);
+                            });
                             markDirty();
                             m_meshesDirty = true;
                             m_dimEditingId = -1;
@@ -2081,10 +2135,14 @@ void Application::renderViewport() {
     if (m_inSketchMode && m_sketchTool && ImGui::BeginPopup("SketchContextMenu")) {
         int nPts = static_cast<int>(m_sketchTool->getSelectedPoints().size());
         int nLns = static_cast<int>(m_sketchTool->getSelectedLines().size());
+        int nCir = static_cast<int>(m_sketchTool->getSelectedCircles().size());
+        int nArc = static_cast<int>(m_sketchTool->getSelectedArcs().size());
+        int nCur = nCir + nArc; // any curve selection
         ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f),
-                           "Selection: %d point%s, %d line%s",
+                           "Selection: %d point%s, %d line%s, %d curve%s",
                            nPts, nPts == 1 ? "" : "s",
-                           nLns, nLns == 1 ? "" : "s");
+                           nLns, nLns == 1 ? "" : "s",
+                           nCur, nCur == 1 ? "" : "s");
         ImGui::Separator();
         if (ImGui::BeginMenu("Add Constraint")) {
             if (nLns >= 1) {
@@ -2112,6 +2170,18 @@ void Application::renderViewport() {
             if (nPts >= 1) {
                 if (ImGui::MenuItem("Fix Position"))
                     applySketchConstraint(ConstraintType::Fixed);
+            }
+            if (nCur >= 1) {
+                if (ImGui::MenuItem("Radius … (current value)"))
+                    applySketchConstraint(ConstraintType::Radius);
+            }
+            if (nCur >= 1 && nLns >= 1) {
+                if (ImGui::MenuItem("Tangent (curve + line)"))
+                    applySketchConstraint(ConstraintType::Tangent);
+            }
+            if (nCur >= 2) {
+                if (ImGui::MenuItem("Concentric"))
+                    applySketchConstraint(ConstraintType::Concentric);
             }
             // ImGui automatically greys out an empty submenu, but we want to
             // hint at the cause when nothing matches the selection.

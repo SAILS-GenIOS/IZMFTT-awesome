@@ -322,6 +322,82 @@ int ShapeRenderer::tessellate(const TopoDS_Shape& shape, float deflection,
     return index;
 }
 
+int ShapeRenderer::setBodyMesh(int bodyId, const TopoDS_Shape& shape,
+                               float deflection, float angularDeflection)
+{
+    // Tessellate first so we don't free the old slot's GL resources unless
+    // the new tessellation actually succeeds.
+    int appendedSlot = tessellate(shape, deflection, angularDeflection);
+    if (appendedSlot < 0) {
+        // Failed — leave the existing slot (if any) in place.
+        auto it = m_bodyToSlot.find(bodyId);
+        return (it == m_bodyToSlot.end()) ? -1 : it->second;
+    }
+    auto it = m_bodyToSlot.find(bodyId);
+    if (it == m_bodyToSlot.end()) {
+        // New body; the appended slot is its home.
+        m_meshes[appendedSlot].bodyId = bodyId;
+        m_bodyToSlot[bodyId] = appendedSlot;
+        return appendedSlot;
+    }
+    // Existing slot — relocate the new mesh's GL data into it so callers
+    // that cached the slot index keep working (setColor / setSelected use
+    // index lookups). Carry over cosmetic state.
+    int oldSlot = it->second;
+    if (oldSlot < 0 || oldSlot >= static_cast<int>(m_meshes.size())) {
+        // Stale mapping — treat as fresh insert.
+        m_meshes[appendedSlot].bodyId = bodyId;
+        m_bodyToSlot[bodyId] = appendedSlot;
+        return appendedSlot;
+    }
+    MeshData& old = m_meshes[oldSlot];
+    if (old.vao) glDeleteVertexArrays(1, &old.vao);
+    if (old.vbo) glDeleteBuffers(1, &old.vbo);
+    glm::vec3 keepColor   = old.color;
+    bool keepSelected     = old.selected;
+    bool keepSubPreview   = old.subtractPreview;
+    glm::mat4 keepModel   = old.modelMatrix;
+    old = m_meshes[appendedSlot];
+    old.bodyId          = bodyId;
+    old.color           = keepColor;
+    old.selected        = keepSelected;
+    old.subtractPreview = keepSubPreview;
+    old.modelMatrix     = keepModel;
+    // The appended slot was always the tail (tessellate's push_back); pop it
+    // so render() doesn't visit a stale duplicate.
+    m_meshes.pop_back();
+    return oldSlot;
+}
+
+void ShapeRenderer::removeBody(int bodyId)
+{
+    auto it = m_bodyToSlot.find(bodyId);
+    if (it == m_bodyToSlot.end()) return;
+    int slot = it->second;
+    m_bodyToSlot.erase(it);
+    if (slot < 0 || slot >= static_cast<int>(m_meshes.size())) return;
+    MeshData& m = m_meshes[slot];
+    if (m.vao) glDeleteVertexArrays(1, &m.vao);
+    if (m.vbo) glDeleteBuffers(1, &m.vbo);
+    m.vao = 0; m.vbo = 0; m.vertexCount = 0; m.bodyId = -1;
+    // Slot stays in the vector so other slots' indices don't shift.
+    // render() skips slots with vertexCount==0.
+}
+
+int ShapeRenderer::findSlotByBody(int bodyId) const
+{
+    auto it = m_bodyToSlot.find(bodyId);
+    return (it == m_bodyToSlot.end()) ? -1 : it->second;
+}
+
+bool ShapeRenderer::uploadTessellatedInto(int /*slot*/, const TopoDS_Shape& /*shape*/,
+                                          float /*defl*/, float /*angDef*/)
+{
+    // Reserved for a future refactor that splits tessellation from upload —
+    // currently unused; setBodyMesh swaps tail-into-slot which avoids the need.
+    return false;
+}
+
 void ShapeRenderer::render(const glm::mat4& view, const glm::mat4& projection,
                            const glm::vec3& viewPos)
 {
@@ -338,6 +414,7 @@ void ShapeRenderer::render(const glm::mat4& view, const glm::mat4& projection,
     // red one so it reads as "this volume will be removed".
     static const glm::vec4 kSubtractOutline(0.95f, 0.12f, 0.12f, 1.0f);
     for (const auto& mesh : m_meshes) {
+        if (mesh.vertexCount == 0) continue; // vacant slot (removeBody)
         if (mesh.selected) renderMeshOutline(mesh, view, projection, m_outlineColor);
         else if (mesh.subtractPreview) renderMeshOutline(mesh, view, projection, kSubtractOutline);
     }
@@ -354,6 +431,7 @@ void ShapeRenderer::render(const glm::mat4& view, const glm::mat4& projection,
     glUniform1f(m_meshLoc_fillStrength, m_lighting.fill ? m_lighting.fillStrength : 0.0f);
 
     for (const auto& mesh : m_meshes) {
+        if (mesh.vertexCount == 0) continue; // vacant slot
         glUniformMatrix4fv(m_meshLoc_model, 1, GL_FALSE, glm::value_ptr(mesh.modelMatrix));
         glUniform3fv(m_meshLoc_objectColor, 1, glm::value_ptr(mesh.color));
         glUniform1i(m_meshLoc_selected, mesh.selected ? 1 : 0);
@@ -449,6 +527,7 @@ void ShapeRenderer::clear()
         if (mesh.vbo) glDeleteBuffers(1, &mesh.vbo);
     }
     m_meshes.clear();
+    m_bodyToSlot.clear();
 }
 
 glm::vec3 ShapeRenderer::bodyColor(int index)

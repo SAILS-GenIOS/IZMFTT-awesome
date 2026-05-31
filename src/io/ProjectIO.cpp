@@ -116,9 +116,17 @@ ProjectSaveResult ProjectIO::save(const std::string& filePath, const Document& d
         gp_Pnt o = pln.Location();
         gp_Dir z = pln.Axis().Direction();
         gp_Dir x = pln.XAxis().Direction();
+        gp_Dir y = pln.YAxis().Direction();
+        // The first 9 values are unchanged for backward compatibility. The
+        // optional 3 trailing values are the Y direction — needed because
+        // gp_Ax3 default-reconstructs a right-handed system, but some
+        // sketches (faces from STEP imports, or post-ZReverse) are left-
+        // handed. Without the explicit Y, those sketches reload mirrored
+        // 180° around the plane normal.
         ofs << "PLANE " << o.X() << " " << o.Y() << " " << o.Z()
             << " " << z.X() << " " << z.Y() << " " << z.Z()
-            << " " << x.X() << " " << x.Y() << " " << x.Z() << "\n";
+            << " " << x.X() << " " << x.Y() << " " << x.Z()
+            << " " << y.X() << " " << y.Y() << " " << y.Z() << "\n";
 
         const auto& pts = sk->getPoints();
         ofs << "POINT_COUNT " << static_cast<int>(pts.size()) << "\n";
@@ -230,6 +238,11 @@ ProjectSaveResult ProjectIO::save(const std::string& filePath, const Document& d
             if (!st.params.empty()) {
                 ofs << "PARAMS \"" << st.params << "\"\n";
             }
+            // Wall-clock timestamp (Unix epoch seconds) when the op was made.
+            // Read back so the HistoryPanel can group steps by date.
+            if (st.timestampUnix > 0) {
+                ofs << "TIMESTAMP " << st.timestampUnix << "\n";
+            }
             ofs << "CHANGED_COUNT " << static_cast<int>(st.changed.size()) << "\n";
             for (const auto& [id, shape] : st.changed)
                 writeBodyBlock(ofs, id, shape);
@@ -288,8 +301,21 @@ void readSketch(std::ifstream& ifs, const std::string& startLine, Document& doc)
         if (tok == "PLANE") {
             double ox, oy, oz, zx, zy, zz, xx, xy, xz;
             iss >> ox >> oy >> oz >> zx >> zy >> zz >> xx >> xy >> xz;
+            // Optional Y direction (present in 0.4.x+ saves). Used to detect
+            // left-handed coordinate systems that the 3-arg gp_Ax3
+            // constructor would otherwise silently force to right-handed —
+            // which mirrors the sketch 180° around the plane normal.
+            double yx = 0, yy = 0, yz = 0;
+            bool haveY = static_cast<bool>(iss >> yx >> yy >> yz);
             try {
                 gp_Ax3 ax(gp_Pnt(ox, oy, oz), gp_Dir(zx, zy, zz), gp_Dir(xx, xy, xz));
+                if (haveY) {
+                    // If the loaded Y disagrees with the saved Y, the
+                    // original system was indirect; flip Y to restore it.
+                    gp_Dir loadedY = ax.YDirection();
+                    gp_Dir savedY(yx, yy, yz);
+                    if (loadedY.Dot(savedY) < 0) ax.YReverse();
+                }
                 sk->setPlane(gp_Pln(ax));
             } catch (...) { /* keep default plane */ }
         } else if (tok == "POINT_COUNT") {
@@ -588,6 +614,8 @@ ProjectLoadResult ProjectIO::load(const std::string& filePath, Document& doc,
                     } else if (t == "DELETED_COUNT") {
                         int p = 0; ls >> p;
                         for (int j = 0; j < p; ++j) { int id = 0; ls >> id; st.deleted.push_back(id); }
+                    } else if (t == "TIMESTAMP") {
+                        ls >> st.timestampUnix;
                     }
                 }
                 historyOut->steps.push_back(std::move(st));

@@ -97,8 +97,34 @@ ToolAction Toolbar::renderSketchTools() {
     ToolAction action = ToolAction::None;
 
     ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Sketch Tools");
+    // Constraint status badge — only appears once the sketch has constraints.
+    // Green = Fully constrained, blue = Under (free DOF), red = Over
+    // (contradictory). Hover shows the precise degree-of-freedom count.
+    if (m_sketchSolverState >= 0) {
+        ImVec4 col;
+        const char* label = "";
+        switch (m_sketchSolverState) {
+            case 0: col = ImVec4(0.20f, 0.85f, 0.35f, 1.0f); label = "Fully constrained"; break;
+            case 1: col = ImVec4(0.30f, 0.65f, 1.00f, 1.0f); label = "Under-constrained"; break;
+            case 2: col = ImVec4(0.95f, 0.30f, 0.30f, 1.0f); label = "Over-constrained";   break;
+            default: col = ImVec4(0.7f,0.7f,0.7f,1.0f);      label = "";                    break;
+        }
+        ImGui::TextColored(col, "● %s", label);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Degrees of freedom: %d\n"
+                              "Negative = contradictory constraints, "
+                              "zero = uniquely determined, "
+                              "positive = free to drag.",
+                              m_sketchSolverDof);
+        }
+    }
     ImGui::Separator();
 
+    // Snap toggle sits above the grid step so it's the primary control —
+    // the step buttons below tune the snap when it's on.
+    ImGui::Checkbox("Snap to grid", &m_snapToGrid);
+    ImGui::SetItemTooltip("When on, every placed / dragged point rounds to "
+                          "the selected grid step. Off = sub-grid free-form.");
     ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Grid:");
     const float steps[] = { 0.1f, 0.5f, 1.0f, 10.0f };
     const char* labels[] = { "0.1", "0.5", "1", "10" };
@@ -164,7 +190,9 @@ ToolAction Toolbar::renderSketchTools() {
     // mode the constraints live exclusively in the sketch-viewport right-
     // click menu so the panel stays uncluttered. Buttons are filtered by
     // selection arity so the user only ever sees options that can apply.
-    if (m_sketchHelperMode == 1 && (m_selPoints > 0 || m_selLines > 0)) {
+    if (m_sketchHelperMode == 1 &&
+        (m_selPoints > 0 || m_selLines > 0 ||
+         m_selCircles > 0 || m_selArcs > 0)) {
         ImGui::Separator();
         ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Constraints");
         ImGui::Separator();
@@ -193,6 +221,19 @@ ToolAction Toolbar::renderSketchTools() {
         if (m_selPoints >= 1) {
             if (ImGui::Button("Fix Position", ImVec2(-1, 24))) action = ToolAction::SketchConstrainFixed;
             tip("Pin the selected point(s) at their current position.");
+        }
+        int curves = m_selCircles + m_selArcs;
+        if (curves >= 1) {
+            if (ImGui::Button("Radius", ImVec2(-1, 24))) action = ToolAction::SketchDimRadius;
+            tip("Lock the radius of the selected circle(s)/arc(s) at its current value.");
+        }
+        if (curves >= 1 && m_selLines >= 1) {
+            if (ImGui::Button("Tangent", ImVec2(-1, 24))) action = ToolAction::SketchConstrainTangent;
+            tip("Make each selected curve tangent to each selected line.");
+        }
+        if (curves >= 2) {
+            if (ImGui::Button("Concentric", ImVec2(-1, 24))) action = ToolAction::SketchConstrainConcentric;
+            tip("Force the selected curves to share a centre with the first.");
         }
     }
 
@@ -274,6 +315,8 @@ ToolAction Toolbar::renderBodyTools(bool includePluginButtons) {
     tip("Mirror the selected bodies across a plane you pick next.");
 
     ImGui::Checkbox("Snap to grid", &m_snapToGrid);
+    ImGui::SetItemTooltip("When on, gizmo drags round to the selected grid step.");
+    ImGui::TextColored(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), "Grid:");
     const float gridSteps[] = { 0.1f, 0.5f, 1.0f, 10.0f };
     const char* gridLabels[] = { "0.1", "0.5", "1", "10" };
     for (int i = 0; i < 4; ++i) {

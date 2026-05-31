@@ -24,6 +24,11 @@ public:
     // ItemsPanel doesn't own STL I/O, so the Application wires this up to
     // route the click into its own per-body export flow.
     void setExportStlCallback(std::function<void(int)> cb) { m_exportStl = std::move(cb); }
+    // Called when the user picks "Edit Sketch" from a sketch's right-click
+    // menu. Routes to Application::editSketch which enters sketch mode on
+    // that sketch — the only way to re-enter a sketch that was created in
+    // a previous session.
+    void setEditSketchCallback(std::function<void(int)> cb) { m_editSketch = std::move(cb); }
 
     // Returns true if a body was deleted (caller must rebuild meshes)
     bool render();
@@ -34,6 +39,7 @@ private:
     History* m_history = nullptr;
     std::function<void()> m_markDirty;
     std::function<void(int)> m_exportStl;
+    std::function<void(int)> m_editSketch;
     int m_renamingId = -1;
     char m_renameBuffer[128] = {};
     bool m_showBodies = true;

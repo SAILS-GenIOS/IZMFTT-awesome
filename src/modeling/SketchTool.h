@@ -49,14 +49,19 @@ public:
     void onMouseUp(glm::vec2 pos);
 
     // --- Sketch-element selection (Select mode) ---
-    const std::set<int>& getSelectedPoints() const { return m_selectedPoints; }
-    const std::set<int>& getSelectedLines()  const { return m_selectedLines; }
+    const std::set<int>& getSelectedPoints()  const { return m_selectedPoints; }
+    const std::set<int>& getSelectedLines()   const { return m_selectedLines; }
+    const std::set<int>& getSelectedCircles() const { return m_selectedCircles; }
+    const std::set<int>& getSelectedArcs()    const { return m_selectedArcs; }
     void clearElementSelection() {
         m_selectedPoints.clear();
         m_selectedLines.clear();
+        m_selectedCircles.clear();
+        m_selectedArcs.clear();
     }
     bool hasElementSelection() const {
-        return !m_selectedPoints.empty() || !m_selectedLines.empty();
+        return !m_selectedPoints.empty() || !m_selectedLines.empty() ||
+               !m_selectedCircles.empty() || !m_selectedArcs.empty();
     }
     // Select every element in the active sketch (used by Ctrl+A / double-click).
     void selectAll();
@@ -64,6 +69,8 @@ public:
     void setSelection(const std::set<int>& pointIds, const std::set<int>& lineIds) {
         m_selectedPoints = pointIds;
         m_selectedLines = lineIds;
+        m_selectedCircles.clear();
+        m_selectedArcs.clear();
     }
     void onConfirm(); // Enter/double-click to finish
     void onCancel();  // Escape to cancel
@@ -168,6 +175,8 @@ private:
     bool m_lastDownAddedToSel = false; // Ctrl state for the current click
     std::set<int> m_selectedPoints;
     std::set<int> m_selectedLines;
+    std::set<int> m_selectedCircles;
+    std::set<int> m_selectedArcs;
 
     std::vector<int> m_splinePoints; // temp storage during spline creation
     int m_polygonSides = 6; // default hexagon

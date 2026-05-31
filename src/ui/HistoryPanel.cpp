@@ -3,7 +3,11 @@
 #include "../core/Document.h"
 #include "../core/Operation.h"
 #include <imgui.h>
+#include <chrono>
+#include <ctime>
 #include <cstdio>
+#include <string>
+#include <tuple>
 
 namespace materializr {
 
@@ -56,68 +60,60 @@ bool HistoryPanel::render() {
 
     int deleteIndex = -1; // set by the context menu, applied after the loop
 
-    for (int i = 0; i < stepCount; i++) {
+    // Render a single step row (used both for ungrouped steps and the
+    // members of an expanded group). Kept as a lambda to avoid duplicating
+    // the body when the surrounding iteration loop branches between
+    // single-step and group-render paths.
+    auto renderOneStep = [&](int i) {
         const Operation* op = m_history->getStep(i);
-        if (!op) continue;
-
-        // Draw breakpoint line before this step if breakpoint is set here
+        if (!op) return;
+        // Breakpoint marker before this step
         if (breakpoint >= 0 && i == breakpoint + 1) {
             ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
             ImGui::Separator();
             ImGui::PopStyleColor();
         }
-
-        // Determine color based on state
         bool isAboveBreakpoint = (breakpoint >= 0 && i > breakpoint);
         bool isCurrentlyEditing = (i == m_editingStep);
         bool isDisabled = !op->isEnabled();
         bool isAboveCurrent = (i > currentStep);
 
         ImGui::PushID(i);
-
-        // Style the selectable
         if (isCurrentlyEditing) {
             ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.5f, 1.0f, 0.3f));
         }
-
-        if (isAboveBreakpoint || isAboveCurrent) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
-        } else if (isDisabled) {
+        if (isAboveBreakpoint || isAboveCurrent || isDisabled) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
         }
-
-        // Format label: index + name + enabled / reloaded state
+        // Step label uses the op's description() when available — gives
+        // dimension steps a useful caption ("Add Distance 25 mm") instead
+        // of the generic name().
+        std::string detail = op->description();
+        if (detail.empty()) detail = op->name();
         char label[256];
         std::snprintf(label, sizeof(label), "%d. %s%s%s",
                       i + 1,
-                      op->name().c_str(),
+                      detail.c_str(),
                       isDisabled ? " [disabled]" : "",
                       op->isReloaded() ? " (reloaded)" : "");
-
         bool selected = (i == m_editingStep);
         if (ImGui::Selectable(label, selected)) {
             m_editingStep = i;
             m_showProperties = true;
             m_deleteConflict = false;
         }
-
-        // Pop text color
         if (isAboveBreakpoint || isAboveCurrent || isDisabled) {
             ImGui::PopStyleColor();
         }
         if (isCurrentlyEditing) {
             ImGui::PopStyleColor();
         }
-
-        // Right-click context menu
         if (ImGui::BeginPopupContextItem("StepContextMenu")) {
             if (ImGui::MenuItem("Edit Parameters")) {
                 m_editingStep = i;
                 m_showProperties = true;
             }
             if (ImGui::MenuItem(op->isEnabled() ? "Disable" : "Enable")) {
-                // We need to cast away const to modify - the operations() method
-                // returns const ref, but we access through History which owns them
                 const_cast<Operation*>(op)->setEnabled(!op->isEnabled());
                 m_history->replayAll(*m_document);
                 modified = true;
@@ -132,12 +128,95 @@ bool HistoryPanel::render() {
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Delete")) {
-                deleteIndex = i; // applied after the loop (mutates the list)
+                deleteIndex = i;
             }
             ImGui::EndPopup();
         }
-
         ImGui::PopID();
+    };
+
+    // Group steps by calendar date — "Today", "Yesterday", or a date string
+    // for older sessions. Each date is a collapsible header so a 100+ step
+    // project doesn't dominate the panel. Default state: today's bucket is
+    // expanded, all older buckets are collapsed (so the panel boots
+    // minimised).
+    using ymd_t = std::tuple<int, int, int>; // year, month, day (0-based mon)
+    auto stepDate = [&](int idx) -> ymd_t {
+        const Operation* op = m_history->getStep(idx);
+        if (!op) return {1970, 0, 1};
+        std::time_t tt = std::chrono::system_clock::to_time_t(op->timestamp());
+        std::tm local{};
+#ifdef _WIN32
+        localtime_s(&local, &tt);
+#else
+        localtime_r(&tt, &local);
+#endif
+        return {local.tm_year + 1900, local.tm_mon, local.tm_mday};
+    };
+    auto dateLabel = [](ymd_t d, ymd_t today, ymd_t yest) -> std::string {
+        if (d == today) return "Today";
+        if (d == yest)  return "Yesterday";
+        char buf[32];
+        static const char* months[] = {
+            "Jan","Feb","Mar","Apr","May","Jun",
+            "Jul","Aug","Sep","Oct","Nov","Dec" };
+        std::snprintf(buf, sizeof(buf), "%s %d, %d",
+                      months[std::get<1>(d)], std::get<2>(d), std::get<0>(d));
+        return buf;
+    };
+    // Build the "today" / "yesterday" reference dates.
+    auto now = std::chrono::system_clock::now();
+    auto toYmd = [](std::chrono::system_clock::time_point t) -> ymd_t {
+        std::time_t tt = std::chrono::system_clock::to_time_t(t);
+        std::tm local{};
+#ifdef _WIN32
+        localtime_s(&local, &tt);
+#else
+        localtime_r(&tt, &local);
+#endif
+        return {local.tm_year + 1900, local.tm_mon, local.tm_mday};
+    };
+    ymd_t today = toYmd(now);
+    ymd_t yest  = toYmd(now - std::chrono::hours{24});
+
+    int i = 0;
+    while (i < stepCount) {
+        ymd_t bucket = stepDate(i);
+        int runEnd = i;
+        while (runEnd + 1 < stepCount && stepDate(runEnd + 1) == bucket) ++runEnd;
+        // Date header is collapsible. Group "key" is the start index so
+        // m_collapsedGroupStarts indexing still works. Default collapse state:
+        // today's bucket expanded, everything older collapsed (so loading a
+        // big project doesn't dump 100 rows on the user). We seed the default
+        // by inserting historical buckets into m_collapsedGroupStarts the
+        // first time we see them; subsequent toggles by the user persist.
+        static const int kSentinel = -1;
+        bool firstSeen = (m_seenGroupStarts.find(i) == m_seenGroupStarts.end());
+        if (firstSeen) {
+            m_seenGroupStarts.insert(i);
+            if (bucket != today) m_collapsedGroupStarts.insert(i);
+        }
+        (void)kSentinel;
+        bool isCollapsed = (m_collapsedGroupStarts.count(i) > 0);
+        int runLen = runEnd - i + 1;
+
+        ImGui::PushID(200000 + i);
+        if (ImGui::SmallButton(isCollapsed ? "\xE2\x96\xB6" : "\xE2\x96\xBC")) {
+            if (isCollapsed) m_collapsedGroupStarts.erase(i);
+            else             m_collapsedGroupStarts.insert(i);
+        }
+        ImGui::PopID();
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.85f, 0.85f, 0.95f, 1.0f),
+                           "%s  (%d step%s)",
+                           dateLabel(bucket, today, yest).c_str(),
+                           runLen, runLen == 1 ? "" : "s");
+        if (!isCollapsed) {
+            ImGui::Indent();
+            for (int k = i; k <= runEnd; ++k) renderOneStep(k);
+            ImGui::Unindent();
+        }
+        i = runEnd + 1;
     }
 
     // Apply a queued delete now that we're done iterating the (about-to-change)

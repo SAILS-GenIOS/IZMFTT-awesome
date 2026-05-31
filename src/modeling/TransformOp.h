@@ -2,7 +2,10 @@
 #include "../core/Operation.h"
 #include "../core/Document.h"
 #include <TopoDS_Shape.hxx>
+#include <gp_Pln.hxx>
 #include <string>
+#include <utility>
+#include <vector>
 
 enum class TransformType { Translate, Rotate, Scale };
 
@@ -45,4 +48,8 @@ private:
     bool m_nonUniform = false;
     double m_cx = 0, m_cy = 0, m_cz = 0;       // centre for rotate/scale
     TopoDS_Shape m_previousShape;
+    // Sketches anchored to this body (sourceBodyId == m_bodyId) get the same
+    // transform applied to their plane so the sketch follows the host face
+    // when the body moves. Cached previous planes for undo restoration.
+    std::vector<std::pair<int, gp_Pln>> m_previousSketchPlanes;
 };

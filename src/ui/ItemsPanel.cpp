@@ -289,6 +289,9 @@ bool ItemsPanel::render() {
                 }
 
                 if (ImGui::BeginPopupContextItem("SketchContextMenu")) {
+                    if (ImGui::MenuItem("Edit Sketch")) {
+                        if (m_editSketch) m_editSketch(id);
+                    }
                     if (ImGui::MenuItem("Rename")) {
                         beginRename();
                     }

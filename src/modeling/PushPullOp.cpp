@@ -73,23 +73,28 @@ bool PushPullOp::execute(Document& doc) {
                     try {
                         TopoDS_Shape body = doc.getBody(tgt.sourceBodyId);
                         if (!body.IsNull()) {
-                            Bnd_Box bb;
-                            BRepBndLib::Add(tgt.profile, bb);
-                            if (!bb.IsVoid()) {
-                                double xmn,ymn,zmn,xmx,ymx,zmx;
-                                bb.Get(xmn,ymn,zmn,xmx,ymx,zmx);
-                                gp_Pnt c((xmn+xmx)*0.5,(ymn+ymx)*0.5,(zmn+zmx)*0.5);
-                                const double eps = 1.0;
-                                gp_Pnt fwd(c.X() + faceNormal.X() * eps,
-                                           c.Y() + faceNormal.Y() * eps,
-                                           c.Z() + faceNormal.Z() * eps);
-                                gp_Pnt back(c.X() - faceNormal.X() * eps,
-                                            c.Y() - faceNormal.Y() * eps,
-                                            c.Z() - faceNormal.Z() * eps);
-                                BRepClass3d_SolidClassifier fc(body, fwd, 1e-6);
-                                BRepClass3d_SolidClassifier bc(body, back, 1e-6);
-                                if (fc.State() == TopAbs_IN &&
-                                    bc.State() == TopAbs_OUT) {
+                            // Pick the outward direction geometrically: the
+                            // body's bbox centre lies roughly in the body's
+                            // interior, so a face whose normal points TOWARD
+                            // the bbox centre is pointing INWARD and needs
+                            // to be flipped. This is far more robust than the
+                            // BRepClass3d probe approach on thin bodies and
+                            // around edges (where the classifier returns
+                            // ON / OUT instead of IN and the reversal misses).
+                            Bnd_Box bodyBB;
+                            BRepBndLib::Add(body, bodyBB);
+                            Bnd_Box faceBB;
+                            BRepBndLib::Add(tgt.profile, faceBB);
+                            if (!bodyBB.IsVoid() && !faceBB.IsVoid()) {
+                                double bxmn,bymn,bzmn,bxmx,bymx,bzmx;
+                                double fxmn,fymn,fzmn,fxmx,fymx,fzmx;
+                                bodyBB.Get(bxmn,bymn,bzmn,bxmx,bymx,bzmx);
+                                faceBB.Get(fxmn,fymn,fzmn,fxmx,fymx,fzmx);
+                                gp_Vec toBodyCentre(
+                                    (bxmn+bxmx)*0.5 - (fxmn+fxmx)*0.5,
+                                    (bymn+bymx)*0.5 - (fymn+fymx)*0.5,
+                                    (bzmn+bzmx)*0.5 - (fzmn+fzmx)*0.5);
+                                if (faceNormal.Dot(toBodyCentre) > 0) {
                                     faceNormal.Reverse();
                                 }
                             }

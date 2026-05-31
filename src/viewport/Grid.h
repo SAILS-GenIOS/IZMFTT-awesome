@@ -32,9 +32,13 @@ public:
     /// units (major lines every 10×). The grid fades with distance from
     /// `fadeCenter` over `fadeDistance` world units — distance-based so it stays
     /// visible under orthographic projection (unlike the old depth-based fade).
+    /// `minorAlpha` (0..1) scales the 1× tier opacity — set to 0 to hide minor
+    /// lines on big projects where they read as clutter. `globalAlpha` (0..1)
+    /// scales the final grid opacity so geometry below stays visible.
     void render(const glm::mat4& view, const glm::mat4& projection,
                 const glm::vec3& fadeCenter, float fadeDistance,
-                const Plane& plane, float minorStep);
+                const Plane& plane, float minorStep,
+                float minorAlpha = 1.0f, float globalAlpha = 0.55f);
 
 private:
     bool compileShader(unsigned int& shader, unsigned int type, const char* source);
@@ -53,6 +57,8 @@ private:
     int m_locPlaneV = -1;
     int m_locPlaneNormal = -1;
     int m_locScale = -1;
+    int m_locMinorAlpha = -1;
+    int m_locGlobalAlpha = -1;
 };
 
 } // namespace materializr

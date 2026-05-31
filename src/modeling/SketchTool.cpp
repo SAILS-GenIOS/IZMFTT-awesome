@@ -143,9 +143,21 @@ void SketchTool::onMouseMove(glm::vec2 pos) {
                 m_sketch->movePoint(m_dragPointId, inferred);
             }
         } else {
+            // Multi-point drag: every dragged point translates by the cursor
+            // delta. With Snap-to-grid on, each resulting position is then
+            // rounded to the nearest grid increment so a group drag still
+            // adheres to the chosen step (otherwise the offset accumulates
+            // sub-grid float drift across many drags).
+            bool gridSnap = m_snapToGridEnabled && m_gridStep > 0.0f;
             for (int pid : pts) {
                 const SketchPoint* p = m_sketch->getPoint(pid);
-                if (p) m_sketch->movePoint(pid, p->pos + delta);
+                if (!p) continue;
+                glm::vec2 target = p->pos + delta;
+                if (gridSnap) {
+                    target.x = std::round(target.x / m_gridStep) * m_gridStep;
+                    target.y = std::round(target.y / m_gridStep) * m_gridStep;
+                }
+                m_sketch->movePoint(pid, target);
             }
             // Multi-point drag doesn't fire inferences; clear any stale ones
             // so the overlay doesn't draw guides from the previous frame.
@@ -223,8 +235,24 @@ bool SketchTool::applyDimension(float value) {
             // was added partway along the segment. The user wanted typing to
             // commit the line and leave a fresh anchor for the next click.
             glm::vec2 endPos = m_firstClick + dir * value;
+            size_t lnBefore = m_sketch->getLines().size();
             handleLineTool(endPos);
             onConfirm();
+            // Typing an exact value is the user explicitly intending that
+            // length — turn it into a Distance constraint so it survives
+            // future drags. Always-on regardless of helper-mode: constraint
+            // creation here is itself an opt-in (the user typed a value).
+            if (m_sketch->getLines().size() > lnBefore) {
+                const auto& l = m_sketch->getLines().back();
+                Constraint c;
+                c.id = 0;
+                c.type = ConstraintType::Distance;
+                c.entityA = l.startPointId;
+                c.entityB = l.endPointId;
+                c.value = static_cast<double>(value);
+                c.isSatisfied = true; // geometry was placed AT the value
+                m_sketch->addConstraint(c);
+            }
             return true;
         }
         case SketchToolMode::Circle: {
@@ -232,7 +260,19 @@ bool SketchTool::applyDimension(float value) {
             // readout). Convert to radius for the underlying circle.
             float radius = value * 0.5f;
             glm::vec2 perimeter = m_firstClick + dir * radius;
+            size_t cBefore = m_sketch->getCircles().size();
             handleCircleTool(perimeter);
+            // Typed diameter → Radius constraint on the new circle.
+            if (m_sketch->getCircles().size() > cBefore) {
+                const auto& circ = m_sketch->getCircles().back();
+                Constraint c;
+                c.id = 0;
+                c.type = ConstraintType::Radius;
+                c.entityA = circ.id;
+                c.value = static_cast<double>(radius);
+                c.isSatisfied = true;
+                m_sketch->addConstraint(c);
+            }
             return true;
         }
         case SketchToolMode::Polygon: {
@@ -751,21 +791,29 @@ void SketchTool::selectAll() {
     if (!m_sketch) return;
     m_selectedPoints.clear();
     m_selectedLines.clear();
-    for (const auto& p : m_sketch->getPoints()) m_selectedPoints.insert(p.id);
-    for (const auto& l : m_sketch->getLines())  m_selectedLines.insert(l.id);
+    m_selectedCircles.clear();
+    m_selectedArcs.clear();
+    for (const auto& p : m_sketch->getPoints())  m_selectedPoints.insert(p.id);
+    for (const auto& l : m_sketch->getLines())   m_selectedLines.insert(l.id);
+    for (const auto& c : m_sketch->getCircles()) m_selectedCircles.insert(c.id);
+    for (const auto& a : m_sketch->getArcs())    m_selectedArcs.insert(a.id);
 }
 
 void SketchTool::handleSelectTool(glm::vec2 pos) {
     if (!m_sketch) return;
 
-    // Hit-test in order of priority: existing point first, then a nearby line.
+    // Hit-test priority: point first, then line, then circle/arc perimeter.
+    // Points and line segments are usually the user's intended target; the
+    // curve perimeters back them up when the click doesn't land on either.
     int nearPt = findCoincidentPoint(pos, -1);
 
     int nearLine = -1;
+    int nearCircle = -1;
+    int nearArc = -1;
+    const float tol = std::max(m_gridStep * 0.5f, 0.5f); // sketch units
     if (nearPt < 0) {
-        // Distance from `pos` to each line segment; pick the closest within tol.
+        // Line segments.
         float bestD = 0.0f;
-        const float tol = std::max(m_gridStep * 0.5f, 0.5f); // sketch units
         const auto& lines = m_sketch->getLines();
         for (const auto& l : lines) {
             const SketchPoint* a = m_sketch->getPoint(l.startPointId);
@@ -782,16 +830,48 @@ void SketchTool::handleSelectTool(glm::vec2 pos) {
                 bestD = d;
             }
         }
+        // Circle / arc perimeters — only consulted when no line landed.
+        if (nearLine < 0) {
+            float bestCircleD = 0.0f;
+            for (const auto& c : m_sketch->getCircles()) {
+                const SketchPoint* center = m_sketch->getPoint(c.centerPointId);
+                if (!center) continue;
+                float d = std::abs(glm::distance(pos, center->pos) -
+                                   static_cast<float>(c.radius));
+                if (d < tol && (nearCircle < 0 || d < bestCircleD)) {
+                    nearCircle = c.id;
+                    bestCircleD = d;
+                }
+            }
+            float bestArcD = 0.0f;
+            for (const auto& a : m_sketch->getArcs()) {
+                const SketchPoint* center = m_sketch->getPoint(a.centerPointId);
+                if (!center) continue;
+                // Approximate as full-circle perimeter — picking on the arc's
+                // sweep range is overkill for selection feel.
+                float d = std::abs(glm::distance(pos, center->pos) -
+                                   static_cast<float>(a.radius));
+                if (d < tol && (nearArc < 0 || d < bestArcD)) {
+                    nearArc = a.id;
+                    bestArcD = d;
+                }
+            }
+        }
     }
 
     // If the user clicked on something that's ALREADY part of the selection,
     // start a drag of the whole selection in-place (don't replace the selection).
-    bool reclickedSelected = (nearPt >= 0 && m_selectedPoints.count(nearPt)) ||
-                             (nearLine >= 0 && m_selectedLines.count(nearLine));
+    bool reclickedSelected =
+        (nearPt    >= 0 && m_selectedPoints.count(nearPt))   ||
+        (nearLine  >= 0 && m_selectedLines.count(nearLine))  ||
+        (nearCircle>= 0 && m_selectedCircles.count(nearCircle)) ||
+        (nearArc   >= 0 && m_selectedArcs.count(nearArc));
 
     if (!m_lastDownAddedToSel && !reclickedSelected) {
         m_selectedPoints.clear();
         m_selectedLines.clear();
+        m_selectedCircles.clear();
+        m_selectedArcs.clear();
     }
 
     if (nearPt >= 0) {
@@ -806,6 +886,20 @@ void SketchTool::handleSelectTool(glm::vec2 pos) {
         } else {
             m_selectedLines.insert(nearLine);
             m_isDragging = true; // dragging the line translates the whole selection
+        }
+    } else if (nearCircle >= 0) {
+        if (m_lastDownAddedToSel) {
+            if (m_selectedCircles.count(nearCircle)) m_selectedCircles.erase(nearCircle);
+            else m_selectedCircles.insert(nearCircle);
+        } else {
+            m_selectedCircles.insert(nearCircle);
+        }
+    } else if (nearArc >= 0) {
+        if (m_lastDownAddedToSel) {
+            if (m_selectedArcs.count(nearArc)) m_selectedArcs.erase(nearArc);
+            else m_selectedArcs.insert(nearArc);
+        } else {
+            m_selectedArcs.insert(nearArc);
         }
     }
     // Empty space + no modifier: selection already cleared above.

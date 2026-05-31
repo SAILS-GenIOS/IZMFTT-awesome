@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <string>
 #include <memory>
 #include <vector>
@@ -57,6 +58,14 @@ public:
     bool isEnabled() const { return m_enabled; }
     void setEnabled(bool enabled) { m_enabled = enabled; }
 
+    // Wall-clock time this op was constructed (or restored to a stored value
+    // on project load). Used by the HistoryPanel to bucket steps into
+    // "Today / Yesterday / <date>" collapsible groups so a 145-step project
+    // is browsable without endless scrolling.
+    std::chrono::system_clock::time_point timestamp() const { return m_timestamp; }
+    void setTimestamp(std::chrono::system_clock::time_point t) { m_timestamp = t; }
+
 protected:
     bool m_enabled = true;
+    std::chrono::system_clock::time_point m_timestamp = std::chrono::system_clock::now();
 };

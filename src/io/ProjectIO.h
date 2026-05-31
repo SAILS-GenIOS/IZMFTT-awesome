@@ -33,6 +33,10 @@ struct ProjectHistoryStep {
     // load. Empty for ops that don't override serialisation or for project
     // files that predate the params extension.
     std::string params;
+    // Unix-epoch seconds at which the op was originally created. 0 == "not
+    // recorded" (legacy projects without timestamps); the loader bumps those
+    // to (now - 1 day) so the History panel buckets them under "Yesterday".
+    long long timestampUnix = 0;
 };
 
 struct ProjectHistory {

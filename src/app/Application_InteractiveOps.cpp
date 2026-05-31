@@ -7,6 +7,7 @@
 #include "app/Application.h"
 #include "viewport/Viewport.h"
 #include "viewport/Camera.h"
+#include "viewport/ShapeRenderer.h"
 #include "core/Document.h"
 #include "core/History.h"
 #include "core/SelectionManager.h"
@@ -805,6 +806,11 @@ void Application::beginPushPull() {
     // Gather all selected SketchRegion entries AND body face selections.
     for (const auto& e : m_selection->getSelection()) {
         if (e.type == SelectionType::SketchRegion) {
+            // For sketches loaded from a previous session, the in-memory
+            // sourceFace may not have been bound yet (it isn't serialised).
+            // Refresh it now so buildRegions correctly subtracts any existing
+            // hole / inner wire the user sketched around.
+            ensureSketchSourceFace(e.sketchId);
             auto sketch = m_document->getSketch(e.sketchId);
             if (!sketch) continue;
             auto regions = sketch->buildRegions();
@@ -866,26 +872,26 @@ void Application::beginPushPull() {
                     try {
                         const TopoDS_Shape& body = m_document->getBody(tgt0.sourceBodyId);
                         if (!body.IsNull()) {
-                            Bnd_Box bb;
-                            BRepBndLib::Add(f, bb);
-                            if (!bb.IsVoid()) {
-                                double xmn,ymn,zmn,xmx,ymx,zmx;
-                                bb.Get(xmn,ymn,zmn,xmx,ymx,zmx);
-                                gp_Pnt fc((xmn+xmx)*0.5,(ymn+ymx)*0.5,(zmn+zmx)*0.5);
-                                gp_Vec nu = n.Normalized();
-                                const double eps = 1.0;
-                                gp_Pnt fwd(fc.X() + nu.X() * eps,
-                                           fc.Y() + nu.Y() * eps,
-                                           fc.Z() + nu.Z() * eps);
-                                gp_Pnt back(fc.X() - nu.X() * eps,
-                                            fc.Y() - nu.Y() * eps,
-                                            fc.Z() - nu.Z() * eps);
-                                BRepClass3d_SolidClassifier fcl(body, fwd,  1e-6);
-                                BRepClass3d_SolidClassifier bcl(body, back, 1e-6);
-                                if (fcl.State() == TopAbs_IN &&
-                                    bcl.State() == TopAbs_OUT) {
-                                    n.Reverse();
-                                }
+                            // Geometric outward check — same as PushPullOp::
+                            // execute. The body bbox centre is in the body's
+                            // interior; if the face normal points TOWARD it,
+                            // the normal is inward and gets flipped. Far
+                            // more reliable than probe-classifier on thin
+                            // bodies / edge-adjacent faces.
+                            Bnd_Box bodyBB;
+                            BRepBndLib::Add(body, bodyBB);
+                            Bnd_Box faceBB;
+                            BRepBndLib::Add(f, faceBB);
+                            if (!bodyBB.IsVoid() && !faceBB.IsVoid()) {
+                                double bxmn,bymn,bzmn,bxmx,bymx,bzmx;
+                                double fxmn,fymn,fzmn,fxmx,fymx,fzmx;
+                                bodyBB.Get(bxmn,bymn,bzmn,bxmx,bymx,bzmx);
+                                faceBB.Get(fxmn,fymn,fzmn,fxmx,fymx,fzmx);
+                                gp_Vec toBodyCentre(
+                                    (bxmn+bxmx)*0.5 - (fxmn+fxmx)*0.5,
+                                    (bymn+bymx)*0.5 - (fymn+fymx)*0.5,
+                                    (bzmn+bzmx)*0.5 - (fzmn+fzmx)*0.5);
+                                if (n.Dot(toBodyCentre) > 0) n.Reverse();
                             }
                         }
                     } catch (...) {}
@@ -950,7 +956,22 @@ void Application::updatePushPull() {
     if (m_history->pushOperation(std::move(op), *m_document)) {
         m_pushPullPreviewPushed = true;
     }
-    m_meshesDirty = true;
+    // Mark only the bodies the push/pull actually touched as dirty. On a
+    // 100+ body project this turns each preview frame from "re-tessellate
+    // every visible body" into "re-tessellate 1-2 bodies", which is the
+    // difference between unusable and smooth.
+    for (const auto& t : m_pushPullTargets) {
+        if (t.sourceBodyId >= 0) markBodyDirty(t.sourceBodyId);
+    }
+    // Free-floating push/pull creates new bodies — mark them too so they
+    // appear / refresh.
+    for (int id : m_document->getAllBodyIds()) {
+        // Cheap heuristic: any body the document has but the renderer
+        // doesn't is new, and any body whose ID is in m_pushPullPreviewBodyIds
+        // is changing every frame. We don't track preview ids here, so just
+        // mark any body whose mesh slot is missing.
+        if (m_shapeRenderer->findSlotByBody(id) < 0) markBodyDirty(id);
+    }
 }
 
 void Application::commitPushPull() {

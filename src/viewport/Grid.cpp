@@ -53,6 +53,8 @@ uniform vec3 u_planeU;         // in-plane basis (grid X), unit length
 uniform vec3 u_planeV;         // in-plane basis (grid Y), unit length
 uniform vec3 u_planeNormal;
 uniform float u_scale;         // lines every 1/u_scale plane units (minor)
+uniform float u_minorAlpha;    // 0..1 multiplier on the minor (1×) tier; 0 hides it
+uniform float u_globalAlpha;   // 0..1 multiplier on the final grid alpha
 
 out vec4 fragColor;
 
@@ -115,6 +117,12 @@ void main() {
     vec4 majorColor = grid(uv, u_scale * 0.1,  vec4(0.85, 0.87, 0.95, 1.0));
     vec4 megaColor  = grid(uv, u_scale * 0.01, vec4(1.00, 1.00, 1.00, 1.0));
 
+    // The minor tier can be dimmed or hidden by the app — e.g. when the
+    // project's bbox is bigger than 100 mm, the 1-mm lines are clutter
+    // (you can barely see the major lines through them). The major and
+    // mega tiers are always full strength.
+    minorColor.a *= u_minorAlpha;
+
     vec4 color = minorColor;
     if (majorColor.a > 0.0) {
         color.rgb = mix(color.rgb, majorColor.rgb, majorColor.a);
@@ -126,6 +134,10 @@ void main() {
     }
 
     color.a *= fade;
+    // Translucent globally so geometry below the grid (looking from above)
+    // remains visible. 0.55 is the sweet spot: lines still read clearly
+    // but a body underneath is no longer obscured.
+    color.a *= u_globalAlpha;
     if (color.a < 0.001) discard;
 
     fragColor = color;
@@ -175,6 +187,8 @@ bool Grid::initialize()
     m_locPlaneV = glGetUniformLocation(m_shaderProgram, "u_planeV");
     m_locPlaneNormal = glGetUniformLocation(m_shaderProgram, "u_planeNormal");
     m_locScale = glGetUniformLocation(m_shaderProgram, "u_scale");
+    m_locMinorAlpha = glGetUniformLocation(m_shaderProgram, "u_minorAlpha");
+    m_locGlobalAlpha = glGetUniformLocation(m_shaderProgram, "u_globalAlpha");
 
     // Create a dummy VAO (required for core profile, even with no vertex attributes)
     glGenVertexArrays(1, &m_vao);
@@ -184,7 +198,8 @@ bool Grid::initialize()
 
 void Grid::render(const glm::mat4& view, const glm::mat4& projection,
                   const glm::vec3& fadeCenter, float fadeDistance,
-                  const Plane& plane, float minorStep)
+                  const Plane& plane, float minorStep,
+                  float minorAlpha, float globalAlpha)
 {
     if (!m_shaderProgram) return;
 
@@ -202,6 +217,8 @@ void Grid::render(const glm::mat4& view, const glm::mat4& projection,
     glUniform3fv(m_locPlaneV, 1, glm::value_ptr(plane.v));
     glUniform3fv(m_locPlaneNormal, 1, glm::value_ptr(plane.normal));
     glUniform1f(m_locScale, scale);
+    glUniform1f(m_locMinorAlpha, minorAlpha);
+    glUniform1f(m_locGlobalAlpha, globalAlpha);
 
     // Enable blending for grid transparency
     glEnable(GL_BLEND);
