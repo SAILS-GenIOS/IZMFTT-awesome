@@ -3,6 +3,110 @@
 All notable changes to Materializr are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [0.5.0] — 2026-05-31
+
+### Added
+
+- **Loft plugin.** New solid op that morphs between two closed sketch
+  profiles via `BRepOffsetAPI_ThruSections`. The plugin contributes a "Loft"
+  button to the Sketch panel AND the Region panel — select two whole
+  sketches or two regions on different sketches and click. With only one
+  selected, a non-modal banner nudges you to Ctrl-click a second profile
+  (the previous modal version blocked viewport picks). On click with two
+  selected, a popup opens with **Solid / Shell**, **Smooth / Ruled**, and
+  **Reverse profile B vertex order** toggles, each re-pushing a live preview
+  `LoftOp` onto history; Apply commits, Cancel/Esc undoes the preview.
+  Tooltip explains the "parallel-plane assumption" so users understand why
+  orthogonal-plane lofts produce a pyramid-tent surface.
+- **Sketch-as-construction-plane** workflow. A standalone sketch can now
+  serve as a movable construction plane:
+  - The viewport picker reaches sketches via either their closed-region
+    interior (`SelectionType::SketchRegion`) or any edge (`SelectionType::
+    Sketch`) — open profiles like an arc or a spline are now selectable too.
+  - Box-select also captures sketches by projecting their points to
+    screen-space.
+  - When a sketch is selected outside ortho / sketch-edit, clicking **Move**
+    or **Rotate** in the Tools panel arms a Move/Rotate gizmo centred on
+    the sketch's bbox centroid. Dragging mutates the sketch's plane (and
+    its geometry rides along) via a new `SketchTransformOp`, snapshotted
+    for undo. A three-input X/Y/Z popup offers exact translations.
+  - Selection-change disarms the gizmo automatically, so picking a sketch
+    just surfaces the toolbar options first — no surprise gizmo on top.
+- **Construction Plane popup.** Replaces the no-op New Construction Plane
+  button: a live-previewed popup with **XY / XZ / YZ** radio buttons, an
+  optional **Parallel to selected face** mode (auto-enabled when a planar
+  face is in the selection), and an **Offset** slider that pushes the plane
+  along its normal. Backed by `ConstructionPlaneOp` on history. (Plane
+  rendering in the viewport + Items-panel listing remain a TODO — for now
+  use the sketch-as-plane workflow above.)
+- **Editable dimension constraints from the History panel.** Clicking a
+  sketch-edit step in History now shows every Distance / Radius / Angle
+  constraint with inline `InputDouble` fields (diameter for radius,
+  matching the in-sketch popup). Typing a value re-solves the snapshot
+  immediately; Apply Changes propagates it through `editStep`. Non-
+  dimensional constraints (Horizontal, Parallel, …) appear as read-only
+  rows.
+- **Snap-grid corner widget** next to the ViewCube. Small square showing
+  the current grid step (0.1 / 0.5 / 1 / 10 mm). Solid-blue border when
+  snap is on, faint grey when off. Left-click opens a Snap & Grid popup
+  (snap toggle + step buttons); right-click quick-toggles snap. Every
+  change persists to `settings.cfg`, so the choice survives launches.
+- **Persistent snap & grid settings** (`snapToGrid`, `sketchGridStep`)
+  written to the same `~/.config/materializr/settings.cfg` as the other
+  preferences, round-tripping through the JSON import/export path too.
+- **App icon + banner.** Replaced the placeholder "C" SVG with the real
+  M-cube `icon.png`, resized to 256×256 + 512×512 hicolor sizes by
+  ImageMagick during the Docker build. `banner.png` lives at the repo
+  root for the GitHub social-preview image.
+
+### Changed
+
+- **Sketch on XY / XZ / YZ now produce visibly distinct camera views.**
+  `alignCameraToActiveSketch`'s continuity-projection used to snap the up
+  vector to the same in-plane axis for both XY and XZ when starting from
+  an empty viewport, making them indistinguishable. The three explicit
+  toolbar entry points now prime the camera up with the canonical
+  Top / Front / Right axis before entering, so the projection lands on
+  the right `faceY` for each.
+- **Gizmo readout shows the dragged axis** and matches the Z-up user
+  convention (red = X, green = Z, blue = Y) instead of the world internals.
+  Translate label leads with the axis letter and the coord tuple is
+  re-ordered to `(user X, user Y, user Z)`. Rotate label does the same
+  for its axis letter.
+- **Gizmo translate snap is now absolute-position** (pivot lands on grid
+  intersections) instead of delta-snap. Matches the rest of the app's
+  grid-snap semantics; off-grid starting positions jump onto grid on the
+  first qualifying drag. Rotate snap is hard 15° when snap-to-grid is on,
+  free with a 7° soft-snap near 45° when off.
+- **Gizmo dimension line draws from the world origin** to the current
+  pivot, with the absolute coords in the label — easier to read "where
+  is this now" than "how far did I drag this".
+- **Gizmo hides during any interactive op** (Push/Pull, Loft, Construction
+  Plane, Pattern, Shell, Resize, sketch-edit, …). Previously the rotate
+  gizmo stuck around on top of those popups' previews.
+- **Toolbar tooltips wrap across multiple lines** instead of running off
+  one line. Long blurbs (Loft, Move/Rotate on sketches, the parallel-plane
+  caveat) now read as paragraphs.
+- **Sketch selection highlight covers open profiles.** `SketchRenderer::
+  renderSketchHighlight` walks every primitive (lines / circles / arcs /
+  splines / polygon edges) in solid yellow at 4 px when a whole sketch is
+  selected, so an arch or open polyline lights up the same way a closed
+  region does.
+
+### Fixed
+
+- **Vertical / open sketches were unpickable** in the viewport. Two causes:
+  the picker only tested closed regions, and the body-vs-sketch occlusion
+  rejected sketches lying on a body face because the mesh-triangle hit and
+  the analytical plane hit can disagree by microns. Picker now falls back
+  to an edge-distance test (returns the parent sketch as `SelectionType::
+  Sketch`) and the occlusion threshold loosened to `max(0.5 mm, 0.5 %
+  view-distance)` with an automatic source-face exemption.
+- **Push/pull on a reloaded sketch around an existing hole** produced a
+  solid bar instead of a tube. `Sketch::buildRegions` now grafts inner
+  wires from the source face onto each sketch face whose outer wire fully
+  contains them, fixing BOPAlgo not partitioning when edges don't intersect.
+
 ## [0.4.0] — 2026-05-30
 
 ### Added

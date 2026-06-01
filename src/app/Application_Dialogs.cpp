@@ -43,6 +43,7 @@
 #include "modeling/ReplayOp.h"
 #include "modeling/PushPullOp.h"
 #include "modeling/TransformOp.h"
+#include "modeling/SketchTransformOp.h"
 #include "modeling/MirrorOp.h"
 #include "modeling/FilletOp.h"
 #include "modeling/ChamferOp.h"
@@ -1051,6 +1052,345 @@ void Application::renderPatternPanel() {
         commitPattern();
     } else if (cancelClicked || escPressed) {
         cancelPattern();
+    }
+
+    ImGui::End();
+}
+
+void Application::renderLoftPanel() {
+    if (!m_loftActive) return;
+
+    // Anchor near the top-right on first open; subsequent frames let the user
+    // drag the popup somewhere convenient (same pattern as Pattern panel).
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 280,
+                                    ImGui::GetWindowPos().y + 50),
+                            ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_Appearing);
+    ImGui::Begin("Loft", nullptr,
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_AlwaysAutoResize);
+
+    bool changed = false;
+    if (ImGui::Checkbox("Solid (off = surface shell)", &m_loftSolid)) changed = true;
+    ImGui::SetItemTooltip("On: ThruSections caps the ends and produces a solid "
+                          "body. Off: open shell — useful when one profile is "
+                          "open or you want a swept surface.");
+    if (ImGui::Checkbox("Ruled surface (off = smooth)", &m_loftRuled)) changed = true;
+    ImGui::SetItemTooltip("Ruled draws straight-line ribs between matching "
+                          "vertices on the two profiles. Smooth interpolates a "
+                          "curved surface — usually nicer between similar "
+                          "profiles, less predictable between dissimilar ones.");
+    if (ImGui::Checkbox("Reverse profile B vertex order", &m_loftReverseB)) changed = true;
+    ImGui::SetItemTooltip("Re-pairs vertices between the two profiles. Use this "
+                          "if the loft pinches to an apex or twists — usually "
+                          "means the wires' start vertices weren't lined up.");
+
+    ImGui::Separator();
+    bool applyClicked  = ImGui::Button("Apply", ImVec2(120, 0));
+    ImGui::SameLine();
+    bool cancelClicked = ImGui::Button("Cancel", ImVec2(120, 0));
+    bool escPressed = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+
+    if (changed) updateLoft();
+    if (applyClicked) {
+        commitLoft();
+    } else if (cancelClicked || escPressed) {
+        cancelLoft();
+    }
+
+    ImGui::End();
+}
+
+void Application::renderSketchMovePanel() {
+    // Only when Move gizmo is active on a single standalone sketch — counted
+    // as the number of DISTINCT parent sketch ids across Sketch and
+    // SketchRegion entries (a region clicked inside is the user pointing at
+    // its sketch). No bodies — those route through the multi-transform path.
+    int distinctSketches = 0;
+    if (m_selection) {
+        std::vector<int> seen;
+        for (const auto& e : m_selection->getSelection()) {
+            if ((e.type == SelectionType::Sketch ||
+                 e.type == SelectionType::SketchRegion) && e.sketchId >= 0) {
+                bool dup = false;
+                for (int x : seen) if (x == e.sketchId) { dup = true; break; }
+                if (!dup) { seen.push_back(e.sketchId); ++distinctSketches; }
+            }
+        }
+    }
+    // Only appears when the user has explicitly armed the sketch gizmo (via
+    // Move in the Tools panel) for the currently-selected sketch — matches
+    // the visibility rule for the gizmo itself. Without this gate the panel
+    // pops up as soon as you select a sketch, because the gizmo's mode
+    // persists across selections and defaults to Translate.
+    bool conditionsMet = m_gizmo && m_gizmo->getMode() == GizmoMode::Translate &&
+                         m_selection && distinctSketches == 1 &&
+                         m_selection->selectedBodyCount() == 0 &&
+                         !m_inSketchMode &&
+                         m_sketchGizmoArmed;
+    if (conditionsMet && !m_sketchMoveConditionsMet) {
+        m_sketchMovePanelOpen = true;
+        m_sketchMove[0] = m_sketchMove[1] = m_sketchMove[2] = 0.0f;
+        for (int i = 0; i < 3; ++i)
+            std::snprintf(m_sketchMoveBuf[i], sizeof(m_sketchMoveBuf[i]), "0");
+    }
+    m_sketchMoveConditionsMet = conditionsMet;
+    if (!conditionsMet || !m_sketchMovePanelOpen) return;
+
+    ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Move Sketch###SketchMove", &m_sketchMovePanelOpen)) {
+        ImGui::End(); return;
+    }
+
+    ImGui::TextWrapped("Type an exact offset to translate the sketch's plane "
+                       "by - useful when you want the second \"construction "
+                       "plane\" at a precise distance instead of dragging the "
+                       "gizmo. Apply nudges the sketch by the typed values "
+                       "(from its current pose) and resets the fields.");
+    ImGui::Spacing();
+
+    // Buffer-based inputs: more reliable than ImGui::InputFloat for our case.
+    // The buffer is the source of truth each frame; atof + writeback into
+    // m_sketchMove keeps the value live without needing an Enter-press.
+    const char* axisLabels[3] = { "X", "Y", "Z" };
+    const ImVec4 axisColors[3] = {
+        ImVec4(1.00f, 0.35f, 0.35f, 1.0f),
+        ImVec4(0.35f, 1.00f, 0.35f, 1.0f),
+        ImVec4(0.40f, 0.55f, 1.00f, 1.0f),
+    };
+    for (int i = 0; i < 3; ++i) {
+        ImGui::PushID(i);
+        ImGui::TextColored(axisColors[i], "%s", axisLabels[i]);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(110);
+        ImGui::InputText("##input", m_sketchMoveBuf[i], sizeof(m_sketchMoveBuf[i]),
+                         ImGuiInputTextFlags_CharsDecimal |
+                         ImGuiInputTextFlags_CharsNoBlank |
+                         ImGuiInputTextFlags_AutoSelectAll);
+        ImGui::SameLine(); ImGui::Text("mm");
+        m_sketchMove[i] = static_cast<float>(std::atof(m_sketchMoveBuf[i]));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(130);
+        if (ImGui::SliderFloat("##slider", &m_sketchMove[i], -100.0f, 100.0f, "%.2f")) {
+            std::snprintf(m_sketchMoveBuf[i], sizeof(m_sketchMoveBuf[i]),
+                          "%.3f", m_sketchMove[i]);
+        }
+        ImGui::PopID();
+    }
+
+    ImGui::Separator();
+    bool anyNonZero = std::abs(m_sketchMove[0]) > 1e-4f ||
+                      std::abs(m_sketchMove[1]) > 1e-4f ||
+                      std::abs(m_sketchMove[2]) > 1e-4f;
+    ImGui::BeginDisabled(!anyNonZero);
+    if (ImGui::Button("Apply", ImVec2(100, 0))) applySketchMove();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Reset", ImVec2(100, 0))) {
+        m_sketchMove[0] = m_sketchMove[1] = m_sketchMove[2] = 0.0f;
+        for (int i = 0; i < 3; ++i)
+            std::snprintf(m_sketchMoveBuf[i], sizeof(m_sketchMoveBuf[i]), "0");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Close", ImVec2(100, 0))) m_sketchMovePanelOpen = false;
+
+    ImGui::End();
+}
+
+void Application::applySketchMove() {
+    if (!m_selection || !m_document || !m_history) {
+        std::fprintf(stderr, "[SketchMove] missing selection/document/history\n");
+        return;
+    }
+    int sketchId = -1;
+    for (const auto& e : m_selection->getSelection()) {
+        if ((e.type == SelectionType::Sketch ||
+             e.type == SelectionType::SketchRegion) && e.sketchId >= 0) {
+            sketchId = e.sketchId; break;
+        }
+    }
+    if (sketchId < 0) {
+        std::fprintf(stderr, "[SketchMove] no sketch in selection\n");
+        return;
+    }
+
+    gp_Trsf trsf;
+    trsf.SetTranslation(gp_Vec(m_sketchMove[0], m_sketchMove[1], m_sketchMove[2]));
+    auto op = std::make_unique<materializr::SketchTransformOp>();
+    op->setSketch(sketchId);
+    op->setTransform(trsf);
+    bool ok = m_history->pushOperation(std::move(op), *m_document);
+    std::fprintf(stderr, "[SketchMove] apply sketch=%d delta=(%.3f, %.3f, %.3f) -> %s\n",
+                 sketchId, m_sketchMove[0], m_sketchMove[1], m_sketchMove[2],
+                 ok ? "ok" : "FAILED");
+
+    m_sketchMove[0] = m_sketchMove[1] = m_sketchMove[2] = 0.0f;
+    for (int i = 0; i < 3; ++i)
+        std::snprintf(m_sketchMoveBuf[i], sizeof(m_sketchMoveBuf[i]), "0");
+    m_meshesDirty = true;
+}
+
+void Application::renderSnapWidget() {
+    // Tucked just under the ViewCube. We borrow the ViewCube's window-anchor
+    // arithmetic (top-right of the viewport window) so the widget sits in a
+    // consistent spot regardless of dock layout.
+    ImVec2 wp = ImGui::GetWindowPos();
+    ImVec2 ws = ImGui::GetWindowSize();
+    const float pad     = 10.0f;
+    // Square shrunk ~25 % from its original 38 px (font stays the same — it
+    // was over-padded before). +20 px nudge right keeps it tucked under the
+    // ViewCube's accessory arc.
+    const float size    = 28.0f;
+    const float widgetR = 38.0f;
+    const float xNudge  = 20.0f;
+    ImVec2 widgetPos(wp.x + ws.x - pad - widgetR - 26.0f - size * 0.5f + xNudge,
+                     wp.y + pad + widgetR * 2.0f + 96.0f);
+    ImVec2 widgetEnd(widgetPos.x + size, widgetPos.y + size);
+
+    ImGui::PushID("snap-corner-widget");
+    ImGui::SetCursorScreenPos(widgetPos);
+    ImGui::InvisibleButton("##snap", ImVec2(size, size));
+    bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    bool rightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
+    bool hovered = ImGui::IsItemHovered();
+    if (hovered) {
+        ImGui::SetTooltip("Snap step: %.3g mm   |   %s\nClick: open snap settings"
+                          "\nRight-click: toggle snap",
+                          m_sketchGridStep,
+                          m_snapToGrid ? "Snap ON" : "Snap off");
+    }
+    if (clicked) ImGui::OpenPopup("SnapSettings");
+    if (rightClicked) {
+        m_snapToGrid = !m_snapToGrid;
+        if (m_toolbar) m_toolbar->setSnapToGrid(m_snapToGrid);
+        saveAppSettings();
+    }
+
+    // Draw the square + step label + blue border when snap is on.
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImU32 bg = hovered ? IM_COL32(60, 70, 90, 230) : IM_COL32(30, 35, 45, 210);
+    dl->AddRectFilled(widgetPos, widgetEnd, bg, 5.0f);
+    if (m_snapToGrid) {
+        dl->AddRect(widgetPos, widgetEnd, IM_COL32(60, 140, 255, 255), 5.0f, 0, 2.5f);
+    } else {
+        dl->AddRect(widgetPos, widgetEnd, IM_COL32(120, 120, 130, 200), 5.0f, 0, 1.0f);
+    }
+    char buf[8];
+    if      (m_sketchGridStep < 0.3f)  std::snprintf(buf, sizeof(buf), "0.1");
+    else if (m_sketchGridStep < 0.75f) std::snprintf(buf, sizeof(buf), "0.5");
+    else if (m_sketchGridStep < 5.0f)  std::snprintf(buf, sizeof(buf), "1");
+    else                               std::snprintf(buf, sizeof(buf), "10");
+    ImGui::PushFont(nullptr);
+    ImVec2 ts = ImGui::CalcTextSize(buf);
+    ImVec2 tp(widgetPos.x + (size - ts.x) * 0.5f,
+              widgetPos.y + (size - ts.y) * 0.5f);
+    dl->AddText(tp, IM_COL32(240, 240, 245, 255), buf);
+    ImGui::PopFont();
+
+    // Settings popup — checkbox + radio buttons. Each change saves to the
+    // settings file immediately so the choice survives the next launch.
+    if (ImGui::BeginPopup("SnapSettings")) {
+        ImGui::TextColored(ImVec4(0.6f, 0.85f, 1.0f, 1.0f), "Snap & Grid");
+        ImGui::Separator();
+        bool snap = m_snapToGrid;
+        if (ImGui::Checkbox("Snap to grid", &snap)) {
+            m_snapToGrid = snap;
+            if (m_toolbar) m_toolbar->setSnapToGrid(m_snapToGrid);
+            saveAppSettings();
+        }
+        ImGui::Spacing();
+        ImGui::Text("Step (mm)");
+        const float steps[] = { 0.1f, 0.5f, 1.0f, 10.0f };
+        const char* labels[] = { "0.1", "0.5", "1", "10" };
+        for (int i = 0; i < 4; ++i) {
+            if (i > 0) ImGui::SameLine();
+            bool active = std::abs(m_sketchGridStep - steps[i]) < 1e-4f;
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.45f, 0.85f, 1.0f));
+            if (ImGui::Button(labels[i], ImVec2(46, 26))) {
+                m_sketchGridStep = steps[i];
+                if (m_toolbar) m_toolbar->setGridStep(m_sketchGridStep);
+                saveAppSettings();
+            }
+            if (active) ImGui::PopStyleColor();
+        }
+        ImGui::Spacing();
+        ImGui::TextDisabled("Settings persist across launches.");
+        ImGui::EndPopup();
+    }
+
+    ImGui::PopID();
+}
+
+void Application::renderConstructionPlanePanel() {
+    if (!m_planeOpActive) return;
+
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 280,
+                                    ImGui::GetWindowPos().y + 50),
+                            ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_Appearing);
+    ImGui::Begin("Construction Plane", nullptr,
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_AlwaysAutoResize);
+
+    ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "Alignment");
+    bool kindChanged = false;
+    auto kindRadio = [&](const char* label, int idx, bool enabled = true) {
+        if (!enabled) ImGui::BeginDisabled();
+        if (idx > 0) ImGui::SameLine();
+        if (ImGui::RadioButton(label, m_planeOpKindIdx == idx)) {
+            m_planeOpKindIdx = idx;
+            kindChanged = true;
+        }
+        if (!enabled) ImGui::EndDisabled();
+    };
+    kindRadio("XY", 0);
+    kindRadio("XZ", 1);
+    kindRadio("YZ", 2);
+    if (m_planeOpHaveFace) {
+        if (ImGui::RadioButton("Parallel to selected face", m_planeOpKindIdx == 3)) {
+            m_planeOpKindIdx = 3;
+            kindChanged = true;
+        }
+    } else {
+        ImGui::TextDisabled("(Select a planar face to enable Parallel-to-face.)");
+    }
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "Offset");
+    ImGui::Text("Distance"); ImGui::SameLine();
+    ImGui::SetNextItemWidth(100);
+    bool offsetChanged = false;
+    if (ImGui::InputText("##planeoffset", m_planeOpOffsetBuf, sizeof(m_planeOpOffsetBuf),
+                         ImGuiInputTextFlags_CharsDecimal)) {
+        double parsed = std::atof(m_planeOpOffsetBuf);
+        if (std::abs(parsed - m_planeOpOffset) > 1e-4) {
+            m_planeOpOffset = parsed;
+            offsetChanged = true;
+        }
+    }
+    ImGui::SameLine(); ImGui::Text("mm");
+    float offsetF = static_cast<float>(m_planeOpOffset);
+    if (ImGui::SliderFloat("##planeoffsetslider", &offsetF, -100.0f, 100.0f, "%.2f mm")) {
+        m_planeOpOffset = offsetF;
+        std::snprintf(m_planeOpOffsetBuf, sizeof(m_planeOpOffsetBuf), "%.2f", m_planeOpOffset);
+        offsetChanged = true;
+    }
+    ImGui::TextDisabled("Pushes the plane along its normal. Negative for the "
+                        "opposite side.");
+
+    ImGui::Separator();
+    bool applyClicked  = ImGui::Button("Apply", ImVec2(120, 0));
+    ImGui::SameLine();
+    bool cancelClicked = ImGui::Button("Cancel", ImVec2(120, 0));
+    bool escPressed = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+
+    if (kindChanged || offsetChanged) updateConstructionPlane();
+    if (applyClicked) {
+        commitConstructionPlane();
+    } else if (cancelClicked || escPressed) {
+        cancelConstructionPlane();
     }
 
     ImGui::End();

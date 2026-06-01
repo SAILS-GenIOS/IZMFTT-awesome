@@ -1,4 +1,6 @@
 #include "SketchEditOp.h"
+#include "SketchSolver.h"
+#include <imgui.h>
 #include <cmath>
 #include <cstdio>
 
@@ -117,6 +119,82 @@ std::string SketchEditOp::description() const {
     if (delta > 0) return "Add sketch element";
     if (delta < 0) return "Remove sketch element";
     return "Modify sketch";
+}
+
+void SketchEditOp::renderProperties() {
+    if (!m_after) {
+        ImGui::TextDisabled("No snapshot");
+        return;
+    }
+    auto& cs = m_after->getMutableConstraints();
+    if (cs.empty()) {
+        ImGui::TextDisabled("No constraints in this step");
+        return;
+    }
+
+    // Edit dimensional values inline. For each change we re-solve `m_after`
+    // so dependent geometry catches up — Apply Changes then copies the
+    // solved snapshot onto the live sketch via editStep / execute().
+    auto resolveAfter = [&]() {
+        SketchSolver solver;
+        solver.solve(*m_after);
+    };
+
+    bool anyDim = false;
+    for (size_t i = 0; i < cs.size(); ++i) {
+        Constraint& c = cs[i];
+        ImGui::PushID(static_cast<int>(i));
+        switch (c.type) {
+            case ConstraintType::Distance: {
+                anyDim = true;
+                double v = c.value;
+                if (ImGui::InputDouble("Distance (mm)", &v, 0.0, 0.0, "%.3f",
+                                       ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    c.value = v;
+                    resolveAfter();
+                }
+                break;
+            }
+            case ConstraintType::Radius: {
+                anyDim = true;
+                // Stored as radius; show as diameter to match the in-sketch
+                // popup ("Ø ..." in descriptions and dimensions).
+                double dia = c.value * 2.0;
+                if (ImGui::InputDouble("\xC3\x98 (mm)", &dia, 0.0, 0.0, "%.3f",
+                                       ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    c.value = std::max(dia, 1e-6) * 0.5;
+                    resolveAfter();
+                }
+                break;
+            }
+            case ConstraintType::Angle: {
+                anyDim = true;
+                double deg = c.value * 180.0 / M_PI;
+                if (ImGui::InputDouble("Angle (\xC2\xB0)", &deg, 0.0, 0.0, "%.2f",
+                                       ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    c.value = deg * M_PI / 180.0;
+                    resolveAfter();
+                }
+                break;
+            }
+            default: {
+                // Non-dimensional constraints have nothing to tune. Show the
+                // name as a read-only row so the user can confirm what's in
+                // the step, then move on.
+                const char* name = constraintName(c.type);
+                ImGui::TextDisabled("• %s", name);
+                break;
+            }
+        }
+        ImGui::PopID();
+    }
+
+    if (!anyDim) {
+        ImGui::TextWrapped("This step contains only non-dimensional "
+                           "constraints — there are no values to edit.");
+    } else {
+        ImGui::TextDisabled("Press Enter to commit a value, then Apply Changes.");
+    }
 }
 
 } // namespace materializr

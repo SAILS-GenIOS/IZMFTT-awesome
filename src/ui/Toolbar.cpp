@@ -12,11 +12,19 @@ namespace materializr {
 
 Toolbar::Toolbar() = default;
 
-// Tooltip helper. ImGui::SetItemTooltip auto-handles the show delay + hovered
-// check, so we just gate on the user's "show toolbar tooltips" preference.
-// Called immediately after each button.
+// Tooltip helper. Wraps long descriptions across multiple lines instead of
+// the single-line behaviour ImGui::SetItemTooltip gives by default — tooltip
+// strings can run to a couple of sentences and used to truncate awkwardly.
+// BeginItemTooltip handles the hover-delay; PushTextWrapPos gives us the
+// width cap (in pixels, roughly 28em at the current font size).
 void Toolbar::tip(const char* text) const {
-    if (m_showTooltips) ImGui::SetItemTooltip("%s", text);
+    if (!m_showTooltips) return;
+    if (ImGui::BeginItemTooltip()) {
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.0f);
+        ImGui::TextUnformatted(text);
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
 }
 
 void Toolbar::setSelectionManager(const SelectionManager* sel) {
@@ -428,6 +436,25 @@ ToolAction Toolbar::renderSketchSelectedTools() {
     ImGui::TextWrapped("Subtract cuts the extruded profile into the body the "
                        "sketch was drawn on (preview shown in red).");
 
+    // Move / Rotate gizmo modes — appear here so a selected sketch behaves
+    // like a movable construction plane. Bodies have these in renderBodyTools;
+    // sketches need their own entry point. The Transform header matches the
+    // "Sketch" / "Loft" section-label convention so the toolbar reads as a
+    // sequence of clearly-titled groups.
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Transform");
+    ImGui::Separator();
+    if (ImGui::Button("Move", ImVec2(-1, 30)))
+        action = ToolAction::Move;
+    tip("Show the Move gizmo on the selected sketch. Drag an axis to reposition "
+        "the sketch in 3D - its geometry rides along, so this effectively turns "
+        "the sketch into a movable construction plane. Only available outside "
+        "ortho view and sketch-edit mode.");
+    if (ImGui::Button("Rotate", ImVec2(-1, 30)))
+        action = ToolAction::Rotate;
+    tip("Show the Rotate gizmo on the selected sketch. Drag a ring to spin the "
+        "sketch around its centroid.");
+
     // Plugin buttons for HasSketches context
     renderPluginButtons(1 << static_cast<int>(SelectionContext::HasSketches));
 
@@ -462,6 +489,23 @@ ToolAction Toolbar::renderSketchRegionTools() {
     if (ImGui::Button("Edit Sketch", ImVec2(-1, 30)))
         action = ToolAction::EditSketch;
     tip("Re-enter sketch mode to revise this region's parent sketch.");
+
+    // Move / Rotate the region's PARENT sketch in 3D — same gizmo path as
+    // the whole-sketch case. A region selection is just a finger pointing at
+    // its sketch for these ops. Hidden in ortho view (gizmo's own rule) but
+    // the buttons stay visible so the user understands the action exists.
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Transform");
+    ImGui::Separator();
+    if (ImGui::Button("Move", ImVec2(-1, 30)))
+        action = ToolAction::Move;
+    tip("Show the Move gizmo on the parent sketch. Drag an axis to reposition "
+        "the sketch in 3D - geometry follows, so the sketch becomes a movable "
+        "construction plane. Outside ortho view only.");
+    if (ImGui::Button("Rotate", ImVec2(-1, 30)))
+        action = ToolAction::Rotate;
+    tip("Show the Rotate gizmo on the parent sketch. Drag a ring to spin the "
+        "sketch around its centroid.");
 
     ImGui::Spacing();
     ImGui::TextWrapped("Drag positive distance to extrude, negative to cut into the body the sketch sits on.");

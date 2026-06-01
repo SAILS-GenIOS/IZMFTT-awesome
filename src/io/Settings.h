@@ -45,6 +45,13 @@ struct AppSettings {
     // available" dialog if the running build is older. Off in --safe-mode
     // (no surprise network calls when the user is recovering from a crash).
     bool  checkForUpdatesOnLaunch = true;
+
+    // --- Snap / grid (persisted) ---
+    // Snap-to-grid toggle and step (mm) shared by the sketch grid and the
+    // body/sketch gizmo translate. Persisting these means the user doesn't
+    // have to re-enable snap and re-pick a 1 mm step every launch.
+    bool  snapToGrid    = true;
+    float sketchGridStep = 1.0f;
 };
 
 // Reads/writes AppSettings as a simple `key = value` text file. The reader is

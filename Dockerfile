@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     libwayland-dev pkg-config \
     libcurl4-openssl-dev \
     file patchelf wget fuse libfuse2 \
+    imagemagick \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -33,7 +34,9 @@ RUN ARCH=$(uname -m) \
 
 # ─── Create AppDir structure ────────────────────────────────────────────────
 
-RUN mkdir -p /AppDir/usr/bin /AppDir/usr/lib /AppDir/usr/share/icons/hicolor/256x256/apps
+RUN mkdir -p /AppDir/usr/bin /AppDir/usr/lib \
+    /AppDir/usr/share/icons/hicolor/256x256/apps \
+    /AppDir/usr/share/icons/hicolor/512x512/apps
 
 # Copy binary
 RUN cp /src/build/materializr /AppDir/usr/bin/materializr
@@ -49,10 +52,25 @@ RUN patchelf --set-rpath '$ORIGIN/../lib' /AppDir/usr/bin/materializr || true
 RUN printf '[Desktop Entry]\nName=Materializr\nExec=materializr\nIcon=materializr\nType=Application\nCategories=Graphics;3DGraphics;Engineering;\nComment=Open-source parametric 3D CAD\n' \
     > /AppDir/materializr.desktop
 
-# Create a simple SVG icon
-RUN printf '<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">\n<rect width="256" height="256" rx="32" fill="#2a2a3a"/>\n<text x="128" y="160" font-size="120" font-family="sans-serif" font-weight="bold" fill="#4a9eff" text-anchor="middle">C</text>\n</svg>\n' \
-    > /AppDir/materializr.svg \
-    && cp /AppDir/materializr.svg /AppDir/usr/share/icons/hicolor/256x256/apps/materializr.svg
+# Use the project's icon.png if present at the repo root, resized to the
+# canonical 256x256 + 512x512 hicolor sizes so desktop environments pick
+# them up cleanly. Falls back to a tiny generated SVG placeholder during
+# early bring-up if no icon.png is committed yet. `-background none` keeps
+# transparency intact; `-resize` preserves aspect and pads with transparent
+# pixels so non-square sources land centred in a square frame.
+RUN if [ -f /src/icon.png ]; then \
+        convert /src/icon.png -background none -resize 256x256 \
+            -gravity center -extent 256x256 /AppDir/materializr.png && \
+        cp /AppDir/materializr.png \
+            /AppDir/usr/share/icons/hicolor/256x256/apps/materializr.png && \
+        convert /src/icon.png -background none -resize 512x512 \
+            -gravity center -extent 512x512 \
+            /AppDir/usr/share/icons/hicolor/512x512/apps/materializr.png ; \
+    else \
+        printf '<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">\n<rect width="256" height="256" rx="32" fill="#2a2a3a"/>\n<text x="128" y="160" font-size="120" font-family="sans-serif" font-weight="bold" fill="#4a9eff" text-anchor="middle">C</text>\n</svg>\n' \
+            > /AppDir/materializr.svg && \
+        cp /AppDir/materializr.svg /AppDir/usr/share/icons/hicolor/256x256/apps/materializr.svg ; \
+    fi
 
 # Create AppRun script
 RUN printf '#!/bin/bash\nHERE="$(dirname "$(readlink -f "$0")")"\nexport LD_LIBRARY_PATH="$HERE/usr/lib:$LD_LIBRARY_PATH"\nexec "$HERE/usr/bin/materializr" "$@"\n' \

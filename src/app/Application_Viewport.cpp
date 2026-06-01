@@ -44,6 +44,7 @@
 #include "modeling/SketchTool.h"
 #include "modeling/ExtrudeOp.h"
 #include "modeling/ReplayOp.h"
+#include "modeling/SketchTransformOp.h"
 #include "modeling/PushPullOp.h"
 #include "modeling/TransformOp.h"
 #include "modeling/MirrorOp.h"
@@ -200,8 +201,19 @@ void Application::renderViewport() {
         // without dropping a move/rotate/scale widget on top of it; the user
         // gets the gizmo back by either explicitly clicking Move/Rotate/Scale
         // (which clears the flag) or by picking again in the viewport.
+        //
+        // Also hidden whenever ANY interactive op is active — Push/Pull,
+        // Loft, Construction Plane, Pattern, Shell, Resize, etc. Without
+        // this guard the rotate/move gizmo "sticks around" on top of those
+        // popups' previews, looking like an extra widget the user can grab.
+        const bool anyInteractiveOpActive =
+            m_inSketchMode || m_extruding || m_edgeOpActive ||
+            m_pushPullActive || m_resizeCylActive || m_shellActive ||
+            m_patternActive || m_loftActive || m_planeOpActive ||
+            m_sketchPatternActive;
+        bool gizmoShown = false;
         if (m_selection->hasSelectedBodies() && !m_selection->navigationOnly() &&
-            !m_inSketchMode && !m_extruding && !m_edgeOpActive) {
+            !anyInteractiveOpActive) {
             const auto& sel = m_selection->getSelection();
             int bodyId = sel[0].bodyId;
             try {
@@ -213,12 +225,80 @@ void Application::renderViewport() {
                 glm::vec3 center((xmin+xmax)*0.5f, (ymin+ymax)*0.5f, (zmin+zmax)*0.5f);
                 m_gizmo->setPosition(center);
                 m_gizmo->setVisible(true);
-            } catch (...) {
-                m_gizmo->setVisible(false);
-            }
-        } else {
-            m_gizmo->setVisible(false);
+                gizmoShown = true;
+            } catch (...) {}
         }
+        // Sketch-as-construction-plane: when a Sketch OR a SketchRegion is
+        // selected (no body in selection), not in sketch-edit, in perspective
+        // view, show the gizmo at the parent sketch's plane origin so the
+        // user can move/rotate it in 3D — effectively repositioning it like
+        // a construction plane. Ortho view is excluded because the user is
+        // then implicitly "looking at" the sketch and dragging in 3D there
+        // is disorienting. SketchRegion picks count: the user clicked
+        // *inside* the sketch, so they're indicating the sketch.
+        // Sketch gizmo arm-state: clear if the first sketch in the selection
+        // changed since the user armed it. That way clicking a different
+        // sketch hides the gizmo and re-surfaces the Tools options first.
+        int firstSketchInSel = -1;
+        if (m_selection) {
+            for (const auto& e : m_selection->getSelection()) {
+                if ((e.type == SelectionType::Sketch ||
+                     e.type == SelectionType::SketchRegion) && e.sketchId >= 0) {
+                    firstSketchInSel = e.sketchId; break;
+                }
+            }
+        }
+        if (m_sketchGizmoArmed && m_sketchGizmoArmedFor != firstSketchInSel) {
+            m_sketchGizmoArmed = false;
+            m_sketchGizmoArmedFor = -1;
+        }
+
+        if (!gizmoShown && !m_selection->hasSelectedBodies() &&
+            (m_selection->hasSelectedSketches() ||
+             m_selection->hasSelectedSketchRegions()) &&
+            !m_selection->navigationOnly() &&
+            !anyInteractiveOpActive &&
+            !cam.isOrthographic() &&
+            m_sketchGizmoArmed) {
+            const auto& sel = m_selection->getSelection();
+            int sketchId = -1;
+            for (const auto& e : sel) {
+                if ((e.type == SelectionType::Sketch ||
+                     e.type == SelectionType::SketchRegion) && e.sketchId >= 0) {
+                    sketchId = e.sketchId; break;
+                }
+            }
+            auto sk = (sketchId >= 0) ? m_document->getSketch(sketchId) : nullptr;
+            if (sk) {
+                // Centre the gizmo on the geometric centroid of the sketch's
+                // 2D points (mapped through the plane). That's the natural
+                // pivot for Move + Rotate: the gizmo sits on the artwork
+                // rather than on whatever world point the sketch's plane
+                // happens to be anchored at. Falls back to the plane origin
+                // when the sketch has no points (e.g., right after creation).
+                const auto& pts = sk->getPoints();
+                glm::vec3 pivot;
+                if (!pts.empty()) {
+                    glm::vec2 mn( FLT_MAX,  FLT_MAX), mx(-FLT_MAX, -FLT_MAX);
+                    for (const auto& p : pts) {
+                        mn = glm::min(mn, p.pos); mx = glm::max(mx, p.pos);
+                    }
+                    glm::vec2 c2 = (mn + mx) * 0.5f;
+                    const gp_Ax3& ax = sk->getPlane().Position();
+                    glm::vec3 O(ax.Location().X(), ax.Location().Y(), ax.Location().Z());
+                    glm::vec3 X(ax.XDirection().X(), ax.XDirection().Y(), ax.XDirection().Z());
+                    glm::vec3 Y(ax.YDirection().X(), ax.YDirection().Y(), ax.YDirection().Z());
+                    pivot = O + X * c2.x + Y * c2.y;
+                } else {
+                    const gp_Pnt& o = sk->getPlane().Position().Location();
+                    pivot = glm::vec3(o.X(), o.Y(), o.Z());
+                }
+                m_gizmo->setPosition(pivot);
+                m_gizmo->setVisible(true);
+                gizmoShown = true;
+            }
+        }
+        if (!gizmoShown) m_gizmo->setVisible(false);
 
         if (m_gizmo->isVisible()) {
             m_gizmo->render(view, proj);
@@ -257,6 +337,16 @@ void Application::renderViewport() {
             if (e.type == SelectionType::SketchRegion) {
                 highlightRegion(e.sketchId, e.subShapeIndex,
                                 glm::vec3(1.0f, 0.85f, 0.1f), 4.0f);
+            } else if (e.type == SelectionType::Sketch && e.sketchId >= 0) {
+                // Whole-sketch highlight — covers every primitive (so open
+                // profiles light up too, not just closed regions).
+                std::shared_ptr<Sketch> sk;
+                if (e.sketchId == m_activeSketchId && m_activeSketch) sk = m_activeSketch;
+                else sk = m_document->getSketch(e.sketchId);
+                if (sk) {
+                    m_sketchRenderer->renderSketchHighlight(
+                        sk.get(), glm::vec3(1.0f, 0.85f, 0.1f), 4.0f, view, proj);
+                }
             }
         }
         // Hovered region in cyan (drawn last so it's on top)
@@ -341,44 +431,83 @@ void Application::renderViewport() {
                 std::snprintf(dbuf, sizeof(dbuf), "%.1f mm", m_edgeOpValue);
                 drawDim(m_edgeOpMid, m_edgeOpMid + m_edgeOpOutDir * m_edgeOpValue, dbuf);
             } else if (m_gizmoDragging && glm::length(m_gizmoTotalDelta) > 1e-3f) {
-                // Translate drag: original body centre -> current centre.
-                try {
-                    Bnd_Box ob, cb;
-                    BRepBndLib::Add(m_gizmoDragOriginalShape, ob);
-                    BRepBndLib::Add(m_document->getBody(m_gizmoDragBodyId), cb);
-                    if (!ob.IsVoid() && !cb.IsVoid()) {
-                        double ox1, oy1, oz1, ox2, oy2, oz2, cx1, cy1, cz1, cx2, cy2, cz2;
-                        ob.Get(ox1, oy1, oz1, ox2, oy2, oz2);
-                        cb.Get(cx1, cy1, cz1, cx2, cy2, cz2);
-                        glm::vec3 oc((ox1 + ox2) * 0.5, (oy1 + oy2) * 0.5, (oz1 + oz2) * 0.5);
-                        glm::vec3 cc((cx1 + cx2) * 0.5, (cy1 + cy2) * 0.5, (cz1 + cz2) * 0.5);
-                        float dist = glm::length(cc - oc);
-                        if (dist > 1e-3f) {
-                            std::snprintf(dbuf, sizeof(dbuf), "%.1f mm", dist);
-                            drawDim(oc, cc, dbuf);
-                        }
-                    }
-                } catch (...) {}
+                // Translate drag: dimension line from the WORLD ORIGIN to the
+                // current pivot. Snap matches the rule used by the actual
+                // transform — absolute-position snap when snap-to-grid is on,
+                // so the readout shows whole-mm (or whole-grid-step) coords
+                // and the label tracks what the body/sketch is doing.
+                glm::vec3 cc = m_gizmoSharedPivot + m_gizmoTotalDelta;
+                if (m_snapToGrid && m_sketchGridStep > 0.0f) {
+                    float step = m_sketchGridStep;
+                    auto s = [&](float v){ return std::round(v/step)*step; };
+                    cc = glm::vec3(s(cc.x), s(cc.y), s(cc.z));
+                }
+                // Label leads with the dragged axis name. We map from the
+                // Y-up world internals to the user's Z-up convention so the
+                // letter and the coord tuple match what the ViewCube + gizmo
+                // arrows say:
+                //   red (world +X) -> user X
+                //   green (world +Y) -> user Z
+                //   blue (world +Z) -> user Y
+                // Same mapping for the parenthetical tuple, which is
+                // shown in (user X, user Y, user Z) order.
+                float ax = std::abs(m_gizmoTotalDelta.x);
+                float ay = std::abs(m_gizmoTotalDelta.y);
+                float az = std::abs(m_gizmoTotalDelta.z);
+                char axL = '?'; float axV = 0.0f;
+                if (ax >= ay && ax >= az && ax > 1e-3f) { axL = 'X'; axV = cc.x; }
+                else if (ay >= az && ay > 1e-3f)         { axL = 'Z'; axV = cc.y; }
+                else if (az > 1e-3f)                      { axL = 'Y'; axV = cc.z; }
+                if (axL == '?') {
+                    std::snprintf(dbuf, sizeof(dbuf),
+                                  "%.2f mm  (%.2f, %.2f, %.2f)",
+                                  glm::length(cc), cc.x, cc.z, cc.y);
+                } else {
+                    std::snprintf(dbuf, sizeof(dbuf),
+                                  "%c %.2f mm   (%.2f, %.2f, %.2f)",
+                                  axL, axV, cc.x, cc.z, cc.y);
+                }
+                glm::vec3 origin(0.0f);
+                drawDim(origin, cc, dbuf);
             }
 
             // Rotate (°) / Scale (%) readout near the body during a gizmo drag —
-            // the analogue of the mm readout for moves.
+            // the analogue of the mm readout for moves. Uses the cached pivot
+            // so sketch-only drags get a readout even with no body shape.
             if (m_gizmoDragging && (m_gizmo->getMode() == GizmoMode::Rotate ||
                                     m_gizmo->getMode() == GizmoMode::Scale)) {
                 try {
-                    Bnd_Box gb; BRepBndLib::Add(m_document->getBody(m_gizmoDragBodyId), gb);
-                    if (!gb.IsVoid()) {
-                        double bx1,by1,bz1,bx2,by2,bz2; gb.Get(bx1,by1,bz1,bx2,by2,bz2);
-                        glm::vec3 bc((bx1+bx2)*0.5,(by1+by2)*0.5,(bz1+bz2)*0.5);
+                    glm::vec3 bc = m_gizmoSharedPivot;
+                    {
                         ImVec2 sp;
                         if (toImg(bc, sp)) {
                             char rb[48];
                             if (m_gizmo->getMode() == GizmoMode::Rotate) {
-                                // Show the ACTUAL applied angle (after soft 45° snap),
-                                // not the raw mouse angle, so the readout matches the body.
-                                float n = std::round(m_gizmoTotalAngle / 45.0f) * 45.0f;
-                                float shown = (std::abs(m_gizmoTotalAngle - n) < 7.0f) ? n : m_gizmoTotalAngle;
-                                std::snprintf(rb, sizeof(rb), "%.0f deg", shown);
+                                // Show the ACTUAL applied angle (matches the
+                                // snap policy: hard 15° when snap-on, soft
+                                // 45° when off) plus the rotation axis name
+                                // so the user sees which axis the value is
+                                // about — m_gizmoRotAxis is the world-axis
+                                // unit vector set when the drag started.
+                                float shown;
+                                if (m_snapToGrid) {
+                                    shown = std::round(m_gizmoTotalAngle / 15.0f) * 15.0f;
+                                } else {
+                                    float n = std::round(m_gizmoTotalAngle / 45.0f) * 45.0f;
+                                    shown = (std::abs(m_gizmoTotalAngle - n) < 7.0f)
+                                                ? n : m_gizmoTotalAngle;
+                                }
+                                // World-axis -> user-axis remap (same as the
+                                // translate label above): world Y is user Z
+                                // (the green "up" axis), world Z is user Y.
+                                char ra = '?';
+                                if (std::abs(m_gizmoRotAxis.x) > 0.5f) ra = 'X';
+                                else if (std::abs(m_gizmoRotAxis.y) > 0.5f) ra = 'Z';
+                                else if (std::abs(m_gizmoRotAxis.z) > 0.5f) ra = 'Y';
+                                if (ra == '?')
+                                    std::snprintf(rb, sizeof(rb), "%.0f\xC2\xB0", shown);
+                                else
+                                    std::snprintf(rb, sizeof(rb), "%c  %.0f\xC2\xB0", ra, shown);
                             } else
                                 std::snprintf(rb, sizeof(rb), "X %.0f%%  Y %.0f%%  Z %.0f%%",
                                               m_gizmoTotalScale.x*100, m_gizmoTotalScale.y*100,
@@ -1003,25 +1132,63 @@ void Application::renderViewport() {
                         if (a == GizmoAxis::Y) return glm::vec3(0, 1, 0);
                         return glm::vec3(0, 0, 1);
                     };
-                    auto softSnap45 = [](float deg) {
+                    // Angle snap policy:
+                    //  - snap-to-grid OFF: free rotation with a 7° soft-snap
+                    //    near every 45° tick, so the user can land squarely
+                    //    on canonical angles without typing.
+                    //  - snap-to-grid ON: hard 15° increments, matching the
+                    //    rest of the app's angle-snap behaviour (line-draw
+                    //    angle snap, sketch rotate popup, etc.).
+                    auto softSnap45 = [this](float deg) {
+                        if (m_snapToGrid) {
+                            return std::round(deg / 15.0f) * 15.0f;
+                        }
                         float n = std::round(deg / 45.0f) * 45.0f;
-                        return (std::abs(deg - n) < 7.0f) ? n : deg; // free, snaps near 45°
+                        return (std::abs(deg - n) < 7.0f) ? n : deg;
                     };
 
                     // Start drag: save originals for every selected body (so Move
-                    // can apply to all of them) and reset accumulators.
+                    // can apply to all of them) and reset accumulators. When the
+                    // selection has no bodies but does have standalone sketches,
+                    // capture their before-planes instead — the per-frame drag
+                    // path below mutates plane(s); on release we push one
+                    // SketchTransformOp per dragged sketch.
                     if (gResult.activeAxis != GizmoAxis::None && !m_gizmoDragging) {
                         m_gizmoDragOriginals.clear();
+                        m_sketchGizmoDragSketches.clear();
+                        auto addedSketch = [&](int sid) {
+                            for (auto& [eid, _] : m_sketchGizmoDragSketches)
+                                if (eid == sid) return true;
+                            return false;
+                        };
                         for (const auto& sel : m_selection->getSelection()) {
-                            if (sel.type != SelectionType::Body) continue;
-                            try {
-                                m_gizmoDragOriginals.push_back(
-                                    {sel.bodyId, m_document->getBody(sel.bodyId)});
-                            } catch (...) {}
+                            if (sel.type == SelectionType::Body) {
+                                try {
+                                    m_gizmoDragOriginals.push_back(
+                                        {sel.bodyId, m_document->getBody(sel.bodyId)});
+                                } catch (...) {}
+                            } else if ((sel.type == SelectionType::Sketch ||
+                                        sel.type == SelectionType::SketchRegion) &&
+                                       sel.sketchId >= 0) {
+                                // Region picks count as picks of their parent
+                                // sketch; dedup so two regions of the same
+                                // sketch don't double-transform it.
+                                if (addedSketch(sel.sketchId)) continue;
+                                auto sk = m_document->getSketch(sel.sketchId);
+                                if (sk) {
+                                    m_sketchGizmoDragSketches.push_back(
+                                        {sel.sketchId, sk->getPlane()});
+                                }
+                            }
                         }
-                        if (!m_gizmoDragOriginals.empty()) {
-                            m_gizmoDragBodyId = m_gizmoDragOriginals.front().first;
-                            m_gizmoDragOriginalShape = m_gizmoDragOriginals.front().second;
+                        if (!m_gizmoDragOriginals.empty() || !m_sketchGizmoDragSketches.empty()) {
+                            if (!m_gizmoDragOriginals.empty()) {
+                                m_gizmoDragBodyId = m_gizmoDragOriginals.front().first;
+                                m_gizmoDragOriginalShape = m_gizmoDragOriginals.front().second;
+                            } else {
+                                m_gizmoDragBodyId = -1;
+                                m_gizmoDragOriginalShape = TopoDS_Shape();
+                            }
                             m_gizmoDragging = true;
                             m_gizmoTotalDelta = glm::vec3(0.0f);
                             m_gizmoTotalAngle = 0.0f;
@@ -1029,8 +1196,35 @@ void Application::renderViewport() {
                             m_gizmoTotalScale = glm::vec3(1.0f);
                             // Pre-compute the shared pivot once — the originals
                             // don't change during the drag, so this is constant.
+                            // For sketch-only drag we use the GEOMETRIC
+                            // CENTROID of each sketch's points (mapped through
+                            // its plane), then average across sketches — same
+                            // pivot the gizmo's display uses. This makes
+                            // Rotate spin the sketch in place instead of
+                            // around a remote plane-anchor point.
                             m_gizmoSharedPivot = glm::vec3(0.0f);
                             int np = 0;
+                            for (auto& [sid, plnBefore] : m_sketchGizmoDragSketches) {
+                                auto sk = m_document->getSketch(sid);
+                                glm::vec3 ctr;
+                                if (sk && !sk->getPoints().empty()) {
+                                    glm::vec2 mn2( FLT_MAX,  FLT_MAX), mx2(-FLT_MAX, -FLT_MAX);
+                                    for (const auto& p : sk->getPoints()) {
+                                        mn2 = glm::min(mn2, p.pos); mx2 = glm::max(mx2, p.pos);
+                                    }
+                                    glm::vec2 c2 = (mn2 + mx2) * 0.5f;
+                                    const gp_Ax3& ax = plnBefore.Position();
+                                    glm::vec3 O(ax.Location().X(), ax.Location().Y(), ax.Location().Z());
+                                    glm::vec3 X(ax.XDirection().X(), ax.XDirection().Y(), ax.XDirection().Z());
+                                    glm::vec3 Y(ax.YDirection().X(), ax.YDirection().Y(), ax.YDirection().Z());
+                                    ctr = O + X * c2.x + Y * c2.y;
+                                } else {
+                                    const gp_Pnt& o = plnBefore.Position().Location();
+                                    ctr = glm::vec3(o.X(), o.Y(), o.Z());
+                                }
+                                m_gizmoSharedPivot += ctr;
+                                ++np;
+                            }
                             for (auto& [id, orig] : m_gizmoDragOriginals) {
                                 try {
                                     Bnd_Box bb; BRepBndLib::Add(orig, bb);
@@ -1048,8 +1242,22 @@ void Application::renderViewport() {
                     // shape each frame, so snapping and per-axis scale stay stable.
                     if (gResult.changed && m_gizmoDragging) {
                         try {
-                            Bnd_Box ob; BRepBndLib::Add(m_gizmoDragOriginalShape, ob);
-                            double ox1,oy1,oz1,ox2,oy2,oz2; ob.Get(ox1,oy1,oz1,ox2,oy2,oz2);
+                            // BBox of the primary body — only valid when at least
+                            // one body is in the drag. For sketch-only drag we
+                            // fall back to a zero-extent box centred on the
+                            // gizmo pivot so the Scale branch's `os` ends up at
+                            // 1 (Scale isn't meaningful for a sketch's plane
+                            // anyway — translate and rotate are the supported
+                            // modes for the sketch-only path below).
+                            double ox1=0,oy1=0,oz1=0,ox2=0,oy2=0,oz2=0;
+                            if (!m_gizmoDragOriginalShape.IsNull()) {
+                                Bnd_Box ob; BRepBndLib::Add(m_gizmoDragOriginalShape, ob);
+                                ob.Get(ox1,oy1,oz1,ox2,oy2,oz2);
+                            } else {
+                                ox1 = ox2 = m_gizmoSharedPivot.x;
+                                oy1 = oy2 = m_gizmoSharedPivot.y;
+                                oz1 = oz2 = m_gizmoSharedPivot.z;
+                            }
                             gp_Pnt center((ox1+ox2)/2,(oy1+oy2)/2,(oz1+oz2)/2);
 
                             TopoDS_Shape result;
@@ -1059,9 +1267,17 @@ void Application::renderViewport() {
                                 m_gizmoTotalDelta += gResult.delta;
                                 glm::vec3 d = m_gizmoTotalDelta;
                                 if (m_snapToGrid && m_sketchGridStep > 0.0f) {
-                                    float step = m_sketchGridStep, thr = step * 0.4f;
-                                    auto s1 = [&](float v){ float n=std::round(v/step)*step; return std::abs(v-n)<thr?n:v; };
-                                    d.x = s1(d.x); d.y = s1(d.y); d.z = s1(d.z);
+                                    // Absolute-position snap (matches sketch
+                                    // grid behaviour everywhere else): the
+                                    // pivot lands on grid intersections, not
+                                    // on delta multiples. So a sketch starting
+                                    // off-grid will jump onto the grid on the
+                                    // first qualifying drag.
+                                    float step = m_sketchGridStep;
+                                    glm::vec3 absAfter = m_gizmoSharedPivot + d;
+                                    auto s = [&](float v){ return std::round(v/step)*step; };
+                                    glm::vec3 absSnap(s(absAfter.x), s(absAfter.y), s(absAfter.z));
+                                    d = absSnap - m_gizmoSharedPivot;
                                 }
                                 gp_Trsf trsf; trsf.SetTranslation(gp_Vec(d.x, d.y, d.z));
                                 // Apply the same translation to every selected body,
@@ -1073,6 +1289,18 @@ void Application::renderViewport() {
                                 for (auto& [id, orig] : m_gizmoDragOriginals) {
                                     BRepBuilderAPI_Transform xf(orig, trsf, /*copy=*/false);
                                     if (xf.IsDone()) m_document->updateBody(id, xf.Shape());
+                                }
+                                // Standalone sketches in the drag: transform
+                                // each one's plane from its captured before-
+                                // plane so the live preview shows the new
+                                // pose; final SketchTransformOp pushed on
+                                // release will replay the same transform.
+                                for (auto& [sid, plnBefore] : m_sketchGizmoDragSketches) {
+                                    auto sk = m_document->getSketch(sid);
+                                    if (!sk) continue;
+                                    gp_Pln pln = plnBefore;
+                                    pln.Transform(trsf);
+                                    sk->setPlane(pln);
                                 }
                                 m_meshesDirty = true;
                                 applied = false; // already handled per-body above
@@ -1093,6 +1321,14 @@ void Application::renderViewport() {
                                 for (auto& [id, orig] : m_gizmoDragOriginals) {
                                     BRepBuilderAPI_Transform xf(orig, trsf, /*copy=*/false);
                                     if (xf.IsDone()) m_document->updateBody(id, xf.Shape());
+                                }
+                                // Same rotation applied to each sketch plane.
+                                for (auto& [sid, plnBefore] : m_sketchGizmoDragSketches) {
+                                    auto sk = m_document->getSketch(sid);
+                                    if (!sk) continue;
+                                    gp_Pln pln = plnBefore;
+                                    pln.Transform(trsf);
+                                    sk->setPlane(pln);
                                 }
                                 m_meshesDirty = true;
                                 applied = false; // per-body above
@@ -1163,6 +1399,13 @@ void Application::renderViewport() {
                             for (auto& [id, orig] : m_gizmoDragOriginals) {
                                 m_document->updateBody(id, orig);
                             }
+                            // Same idea for sketch planes — restore before the
+                            // SketchTransformOps run their own execute() with
+                            // the cumulative gp_Trsf.
+                            for (auto& [sid, plnBefore] : m_sketchGizmoDragSketches) {
+                                auto sk = m_document->getSketch(sid);
+                                if (sk) sk->setPlane(plnBefore);
+                            }
 
                             // Shared pivot captured once at drag start.
                             const glm::vec3& pivot = m_gizmoSharedPivot;
@@ -1170,9 +1413,12 @@ void Application::renderViewport() {
                             glm::vec3 d = m_gizmoTotalDelta;
                             if (gm == GizmoMode::Translate &&
                                 m_snapToGrid && m_sketchGridStep > 0.0f) {
-                                float step = m_sketchGridStep, thr = step * 0.4f;
-                                auto s1 = [&](float v){ float n=std::round(v/step)*step; return std::abs(v-n)<thr?n:v; };
-                                d.x = s1(d.x); d.y = s1(d.y); d.z = s1(d.z);
+                                // Absolute snap — same rule as the live drag.
+                                float step = m_sketchGridStep;
+                                glm::vec3 absAfter = m_gizmoSharedPivot + d;
+                                auto s = [&](float v){ return std::round(v/step)*step; };
+                                glm::vec3 absSnap(s(absAfter.x), s(absAfter.y), s(absAfter.z));
+                                d = absSnap - m_gizmoSharedPivot;
                             }
                             float ang = (gm == GizmoMode::Rotate)
                                             ? softSnap45(m_gizmoTotalAngle) : 0.0f;
@@ -1226,7 +1472,7 @@ void Application::renderViewport() {
                                 // in that state visually.
                                 op->execute(*m_document);
                                 m_history->pushExecuted(std::move(op));
-                            } else {
+                            } else if (m_gizmoDragBodyId >= 0) {
                                 // Single body: keep the TransformOp path so the
                                 // Properties panel still lets the user edit the
                                 // translation/angle/scale after the fact.
@@ -1249,6 +1495,34 @@ void Application::renderViewport() {
                                 }
                                 m_history->pushOperation(std::move(op), *m_document);
                             }
+
+                            // Standalone-sketch commit: push one
+                            // SketchTransformOp per dragged sketch with the
+                            // same cumulative gp_Trsf applied during the live
+                            // drag. Scale is intentionally ignored — scaling
+                            // a sketch's plane is a no-op (the plane is
+                            // 2D-infinite); fall through to the body Scale
+                            // branch when bodies are also present.
+                            if (anyValid && !m_sketchGizmoDragSketches.empty() &&
+                                (gm == GizmoMode::Translate || gm == GizmoMode::Rotate)) {
+                                gp_Trsf trsf;
+                                if (gm == GizmoMode::Translate) {
+                                    trsf.SetTranslation(gp_Vec(d.x, d.y, d.z));
+                                } else {
+                                    trsf.SetRotation(
+                                        gp_Ax1(gp_Pnt(pivot.x, pivot.y, pivot.z),
+                                               gp_Dir(m_gizmoRotAxis.x,
+                                                      m_gizmoRotAxis.y,
+                                                      m_gizmoRotAxis.z)),
+                                        ang * M_PI / 180.0);
+                                }
+                                for (auto& [sid, plnBefore] : m_sketchGizmoDragSketches) {
+                                    auto op = std::make_unique<materializr::SketchTransformOp>();
+                                    op->setSketch(sid);
+                                    op->setTransform(trsf);
+                                    m_history->pushOperation(std::move(op), *m_document);
+                                }
+                            }
                             m_meshesDirty = true;
                         } catch (...) {}
 
@@ -1256,6 +1530,7 @@ void Application::renderViewport() {
                         m_gizmoDragOriginalShape.Nullify();
                         m_gizmoDragBodyId = -1;
                         m_gizmoDragOriginals.clear();
+                        m_sketchGizmoDragSketches.clear();
                     }
 
                     if (gResult.activeAxis != GizmoAxis::None) {
@@ -1275,12 +1550,35 @@ void Application::renderViewport() {
                     // Reject a sketch region that sits behind a body under the cursor —
                     // only what's visible should be selectable. Compare hit distances
                     // from the camera (origin-independent) and drop the region if the
-                    // body face is nearer.
-                    if (regionHit.regionIndex >= 0 && result.hit) {
+                    // body face is meaningfully nearer.
+                    //
+                    // Tolerance: the body-face hit comes from a mesh-triangle
+                    // intersection, the sketch hit from an analytical plane
+                    // intersection, so when the sketch lies ON the body face
+                    // they're coplanar by intent but can differ by mesh
+                    // tessellation jitter. A tight 1µm threshold (the previous
+                    // value) rejected nearly every sketch-on-face hit, making
+                    // vertical sketches drawn on body faces unselectable. Use
+                    // 0.5 mm + 0.5 % of view distance instead; an actually-
+                    // occluding face is normally many mm in front.
+                    //
+                    // Additionally, if the body face under the cursor IS the
+                    // sketch's source face (i.e. the sketch was drawn on this
+                    // exact face), the sketch is intentionally "on top" and
+                    // must never be rejected.
+                    if (regionHit.sketchId >= 0 && result.hit) {
                         glm::vec3 camPos = cam.getPosition();
                         float bodyD = glm::length(result.hitPoint - camPos);
                         float sketchD = glm::length(regionHit.worldPoint - camPos);
-                        if (bodyD < sketchD - 1e-3f) {
+                        float tol = std::max(0.5f, sketchD * 0.005f);
+                        bool onHostFace = false;
+                        auto sk = m_document->getSketch(regionHit.sketchId);
+                        if (sk && !sk->getSourceFace().IsNull() &&
+                            !result.pickedShape.IsNull() &&
+                            result.pickedShape.ShapeType() == TopAbs_FACE) {
+                            onHostFace = sk->getSourceFace().IsSame(result.pickedShape);
+                        }
+                        if (!onHostFace && bodyD < sketchD - tol) {
                             regionHit.sketchId = -1;
                             regionHit.regionIndex = -1;
                         }
@@ -1301,6 +1599,43 @@ void Application::renderViewport() {
                             m_selection->select(entry);
                         }
                         regionConsumedClick = true;
+                    }
+                    // Edge-only hit (open profile — arc, spline, polyline that
+                    // doesn't close) — emit a whole-sketch selection so users
+                    // can pick open vertical sketches that would otherwise be
+                    // unpickable from the viewport. Skipped when a body face
+                    // sits in front of the edge.
+                    else if (regionHit.regionIndex < 0 && regionHit.sketchId >= 0 &&
+                             ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                        // Same generous occlusion tolerance + source-face
+                        // exemption as the region branch above — sketches on
+                        // body faces are coplanar by intent.
+                        bool occluded = false;
+                        if (result.hit) {
+                            glm::vec3 camPos = cam.getPosition();
+                            float bodyD = glm::length(result.hitPoint - camPos);
+                            float sketchD = glm::length(regionHit.worldPoint - camPos);
+                            float tol = std::max(0.5f, sketchD * 0.005f);
+                            bool onHostFace = false;
+                            auto sk = m_document->getSketch(regionHit.sketchId);
+                            if (sk && !sk->getSourceFace().IsNull() &&
+                                !result.pickedShape.IsNull() &&
+                                result.pickedShape.ShapeType() == TopAbs_FACE) {
+                                onHostFace = sk->getSourceFace().IsSame(result.pickedShape);
+                            }
+                            if (!onHostFace && bodyD < sketchD - tol) occluded = true;
+                        }
+                        if (!occluded) {
+                            SelectionEntry entry;
+                            entry.type = SelectionType::Sketch;
+                            entry.sketchId = regionHit.sketchId;
+                            if (io.KeyCtrl) {
+                                m_selection->addToSelection(entry);
+                            } else {
+                                m_selection->select(entry);
+                            }
+                            regionConsumedClick = true;
+                        }
                     }
 
                     // Mirror "across a face" mode: the next planar face click
@@ -1476,6 +1811,75 @@ void Application::renderViewport() {
                                             m_selection->addToSelection(e);
                                         }
                                     } catch (...) {}
+                                }
+
+                                // Sketches also participate in box-select. We
+                                // compute each sketch's on-screen AABB from the
+                                // 3D world positions of its 2D points (lines /
+                                // circles / arcs / splines / polygons all share
+                                // the SketchPoint table for their endpoints,
+                                // start/end, controls, and vertices respectively
+                                // — circles add a centre + radius extent which
+                                // we account for explicitly). Sketches with no
+                                // points are skipped. Active sketch included.
+                                auto projectSketch = [&](const Sketch& sk,
+                                                         glm::vec2& outMin,
+                                                         glm::vec2& outMax) -> bool {
+                                    const gp_Pln& pln = sk.getPlane();
+                                    const gp_Ax3& ax = pln.Position();
+                                    glm::vec3 origin(ax.Location().X(), ax.Location().Y(), ax.Location().Z());
+                                    glm::vec3 xd(ax.XDirection().X(), ax.XDirection().Y(), ax.XDirection().Z());
+                                    glm::vec3 yd(ax.YDirection().X(), ax.YDirection().Y(), ax.YDirection().Z());
+                                    auto to3d = [&](glm::vec2 p) {
+                                        return origin + xd * p.x + yd * p.y;
+                                    };
+                                    outMin = glm::vec2( FLT_MAX,  FLT_MAX);
+                                    outMax = glm::vec2(-FLT_MAX, -FLT_MAX);
+                                    bool any = false;
+                                    auto addWorld = [&](glm::vec3 w) {
+                                        glm::vec4 cp = vp * glm::vec4(w, 1.0f);
+                                        if (cp.w <= 0.0f) return;
+                                        glm::vec2 ndc(cp.x / cp.w, cp.y / cp.w);
+                                        glm::vec2 sp(
+                                            (ndc.x * 0.5f + 0.5f) * contentSize.x,
+                                            (1.0f - (ndc.y * 0.5f + 0.5f)) * contentSize.y);
+                                        outMin = glm::min(outMin, sp);
+                                        outMax = glm::max(outMax, sp);
+                                        any = true;
+                                    };
+                                    for (const auto& pt : sk.getPoints()) addWorld(to3d(pt.pos));
+                                    for (const auto& c : sk.getCircles()) {
+                                        const SketchPoint* ctr = sk.getPoint(c.centerPointId);
+                                        if (!ctr) continue;
+                                        float r = static_cast<float>(c.radius);
+                                        addWorld(to3d(glm::vec2(ctr->pos.x + r, ctr->pos.y)));
+                                        addWorld(to3d(glm::vec2(ctr->pos.x - r, ctr->pos.y)));
+                                        addWorld(to3d(glm::vec2(ctr->pos.x, ctr->pos.y + r)));
+                                        addWorld(to3d(glm::vec2(ctr->pos.x, ctr->pos.y - r)));
+                                    }
+                                    return any;
+                                };
+                                auto considerSketch = [&](int sid, const Sketch& sk) {
+                                    glm::vec2 bMin, bMax;
+                                    if (!projectSketch(sk, bMin, bMax)) return;
+                                    if (bMax.x >= mn.x && bMin.x <= mx.x &&
+                                        bMax.y >= mn.y && bMin.y <= mx.y) {
+                                        SelectionEntry e;
+                                        e.type = SelectionType::Sketch;
+                                        e.sketchId = sid;
+                                        m_selection->addToSelection(e);
+                                    }
+                                };
+                                for (int sid : m_document->getAllSketchIds()) {
+                                    if (!m_document->isSketchVisible(sid)) continue;
+                                    auto sk = m_document->getSketch(sid);
+                                    if (sk) considerSketch(sid, *sk);
+                                }
+                                if (m_activeSketch && m_activeSketchId < 0) {
+                                    // In-progress sketch (not yet committed to
+                                    // the document) — its id is -1, which the
+                                    // selection layer accepts.
+                                    considerSketch(m_activeSketchId, *m_activeSketch);
                                 }
                             }
                         }
@@ -2078,6 +2482,11 @@ void Application::renderViewport() {
     if (vcAction != ViewCubeAction::None) {
         handleViewCubeAction(static_cast<int>(vcAction));
     }
+
+    // Snap-grid corner widget — small square next to the ViewCube showing the
+    // current grid step. Click to open settings (snap toggle + step radios);
+    // changes save immediately.
+    renderSnapWidget();
 
     // Right-click face context menu
     if (m_contextMenuPending) {

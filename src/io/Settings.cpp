@@ -70,6 +70,8 @@ void applyKv(const std::map<std::string, std::string>& kv, AppSettings& s) {
     readBool(kv, "autoOpenLastProject",  s.autoOpenLastProject);
     readString(kv, "lastProjectPath",    s.lastProjectPath);
     readBool(kv, "checkForUpdatesOnLaunch", s.checkForUpdatesOnLaunch);
+    readBool(kv, "snapToGrid",           s.snapToGrid);
+    readFloat(kv, "sketchGridStep",      s.sketchGridStep);
 }
 
 // Make sure the parent directory of `path` exists. Best-effort: a failure here
@@ -220,6 +222,8 @@ bool SettingsIO::save(const std::string& path, const AppSettings& s) {
     ofs << "autoOpenLastProject = " << (s.autoOpenLastProject ? "true" : "false") << "\n";
     ofs << "lastProjectPath = "     << s.lastProjectPath     << "\n";
     ofs << "checkForUpdatesOnLaunch = " << (s.checkForUpdatesOnLaunch ? "true" : "false") << "\n";
+    ofs << "snapToGrid = "              << (s.snapToGrid ? "true" : "false") << "\n";
+    ofs << "sketchGridStep = "          << s.sketchGridStep      << "\n";
 
     return ofs.good();
 }
@@ -252,7 +256,9 @@ bool SettingsIO::exportJson(const std::string& path, const AppSettings& s) {
     ofs << "  \"showToolbarTooltips\": "     << b(s.showToolbarTooltips)<< ",\n";
     ofs << "  \"sketchHelperMode\": "        << s.sketchHelperMode      << ",\n";
     ofs << "  \"autoOpenLastProject\": "     << b(s.autoOpenLastProject)<< ",\n";
-    ofs << "  \"checkForUpdatesOnLaunch\": " << b(s.checkForUpdatesOnLaunch) << "\n";
+    ofs << "  \"checkForUpdatesOnLaunch\": " << b(s.checkForUpdatesOnLaunch) << ",\n";
+    ofs << "  \"snapToGrid\": "              << b(s.snapToGrid)         << ",\n";
+    ofs << "  \"sketchGridStep\": "          << s.sketchGridStep        << "\n";
     ofs << "}\n";
 
     return ofs.good();

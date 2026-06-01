@@ -8,6 +8,7 @@
 #include <glm/glm.hpp>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
+#include <TopoDS_Wire.hxx>
 #include <gp_Pln.hxx>
 
 #include "modeling/ExtrudeOp.h" // for ExtrudeMode
@@ -388,6 +389,22 @@ private:
     std::vector<std::pair<int, TopoDS_Shape>> m_gizmoDragOriginals;
     glm::vec3 m_gizmoSharedPivot{0.0f};
 
+    // Standalone-sketch gizmo drag — set when the gizmo is shown on a Sketch
+    // selection (no body in the selection, not in sketch-edit, perspective
+    // view). m_sketchGizmoDragSketches holds {sketchId, planeBefore} for
+    // every dragged sketch; on release a SketchTransformOp per sketch is
+    // pushed to history. Distinct from the body-attached sketch path: those
+    // ride along through TransformOp's m_previousSketchPlanes machinery.
+    std::vector<std::pair<int, gp_Pln>> m_sketchGizmoDragSketches;
+
+    // Sketches do NOT show the gizmo automatically on selection — that lets
+    // the Tools toolbar surface its Move / Rotate / Loft / Edit options
+    // cleanly without a gizmo dropped on top. The user clicks Move or Rotate
+    // to "arm" the gizmo for the current sketch; selection-change clears it.
+    // (Bodies still get the gizmo on selection as before.)
+    bool m_sketchGizmoArmed = false;
+    int  m_sketchGizmoArmedFor = -1; // sketch id armed for; cleared when sel changes
+
     // Multi-body Rotate type-in panel. When the Rotate gizmo is active and 2+
     // bodies are selected, this panel offers per-axis sliders + numeric input
     // so the user can apply an exact rotation in a single commit, bypassing the
@@ -533,6 +550,70 @@ private:
     void cancelPattern();      // undo preview if any + clean up state
     void renderPatternPanel(); // ImGui popup contents
 
+    // Interactive Loft popup — two profile wires snapshotted from the selected
+    // sketches at begin time, plus Solid/Shell + Smooth/Ruled + Reverse-B
+    // toggles, all driving a live preview pushed onto history (same pattern
+    // as Linear/Radial Pattern). Reverse-B flips profile B's wire direction
+    // before passing it to LoftOp, which is the usual fix for the "apex
+    // pinch / pyramid" output when the two wires' start vertices don't
+    // line up.
+    bool m_loftActive = false;
+    TopoDS_Wire m_loftWireA;
+    TopoDS_Wire m_loftWireB;
+    bool m_loftSolid = true;
+    bool m_loftRuled = false;
+    bool m_loftReverseB = false;
+    bool m_loftPreviewPushed = false;
+
+    void beginLoft();          // reads selection, snapshots wires, pushes initial preview
+    void updateLoft();         // re-push preview with current params
+    void commitLoft();
+    void cancelLoft();
+    void renderLoftPanel();
+
+    // Interactive Construction Plane popup. ConstructionPlanePlugin fires
+    // requestInteractiveOp("ConstructionPlane"); Application reads the
+    // current selection (a planar face enables Parallel-to-Face mode) and
+    // opens a small popup with XY / XZ / YZ / Parallel-to-Face + an offset
+    // slider, live-previewed via ConstructionPlaneOp on history. Same Apply
+    // / Cancel idiom as Loft and Pattern.
+    bool m_planeOpActive = false;
+    int  m_planeOpKindIdx = 0;   // 0=XY, 1=XZ, 2=YZ, 3=ParallelToFace
+    double m_planeOpOffset = 0.0;
+    gp_Pln m_planeOpBaseFace;     // host face's plane when Parallel-to-Face is available
+    bool m_planeOpHaveFace = false;
+    bool m_planeOpPreviewPushed = false;
+    char m_planeOpOffsetBuf[32] = "0.0";
+
+    void beginConstructionPlane();
+    void updateConstructionPlane();
+    void commitConstructionPlane();
+    void cancelConstructionPlane();
+    void renderConstructionPlanePanel();
+
+    // Sketch Move type-in panel: when the Move gizmo is active on a single
+    // selected standalone sketch (the sketch-as-construction-plane workflow),
+    // this small popup offers X/Y/Z inputs for an exact translation. Apply
+    // pushes a single SketchTransformOp with the typed offset; same auto-
+    // reopen-when-conditions-met pattern as the multi-transform rotate panel.
+    float m_sketchMove[3] = {0.0f, 0.0f, 0.0f};
+    // Text-buffer mirrors of m_sketchMove for the three input fields. We keep
+    // a buffer + atof flow (rather than ImGui::InputFloat) because InputFloat
+    // doesn't commit until Enter / focus-out, which the user routinely missed
+    // before clicking Apply.
+    char m_sketchMoveBuf[3][32] = { "0", "0", "0" };
+    bool m_sketchMovePanelOpen = true;
+    bool m_sketchMoveConditionsMet = false;
+
+    void renderSketchMovePanel();
+    void applySketchMove();
+
+    // Snap-grid corner widget (next to the ViewCube). Shows the current step
+    // (0.1 / 1 / 10 mm) and gets a solid-blue border when snap is on. Click
+    // opens a small popup with the snap toggle + step radios. Changes save
+    // immediately so the choice persists across launches.
+    void renderSnapWidget();
+
     // Sketch-mode Linear / Radial patterns. Simpler than body patterns: the
     // sketch is on a fixed 2D plane so there's no axis radio. Linear copies
     // along the sketch's +X axis by `m_sketchPatternDistance` per step;
@@ -617,6 +698,13 @@ private:
     bool m_showSavePrompt = false;
     bool m_confirmedClose = false;
     bool m_closeAfterSave = false;             // set when user picked Save in the prompt
+
+    // Loft (plugin) prompt: LoftPlugin sets this via PluginContext::request
+    // InteractiveOp("LoftPickSecond") when the user clicks Loft with only one
+    // sketch selected. We render a modal popup nudging them to Ctrl-click a
+    // second sketch. Latched + cleared by the popup.
+    bool m_loftPickHintPending = false;
+    bool m_loftPickHintVisible = false;  // non-modal banner, dismissed on 2-sketch select or X
     enum class PostSaveAction { None, CloseProject };
     PostSaveAction m_postSaveAction = PostSaveAction::None;
 

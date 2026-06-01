@@ -615,6 +615,8 @@ AppSettings Application::currentSettings() const {
     s.autoOpenLastProject = m_autoOpenLastProject;
     s.lastProjectPath = m_currentProjectPath; // empty after closeProject()
     s.checkForUpdatesOnLaunch = m_checkForUpdatesOnLaunch;
+    s.snapToGrid = m_snapToGrid;
+    s.sketchGridStep = m_sketchGridStep;
     return s;
 }
 
@@ -643,6 +645,14 @@ void Application::applyAppSettings(const AppSettings& s) {
     m_sketchHelperMode = s.sketchHelperMode;
     m_autoOpenLastProject = s.autoOpenLastProject;
     m_checkForUpdatesOnLaunch = s.checkForUpdatesOnLaunch;
+    m_snapToGrid = s.snapToGrid;
+    m_sketchGridStep = s.sketchGridStep;
+    // Mirror onto the toolbar so the in-sketch grid controls show the loaded
+    // values right away rather than waiting for the first frame's sync.
+    if (m_toolbar) {
+        m_toolbar->setSnapToGrid(s.snapToGrid);
+        m_toolbar->setGridStep(s.sketchGridStep);
+    }
 }
 
 void Application::saveAppSettings() {
@@ -696,11 +706,21 @@ void Application::handleToolAction(int action) {
         // up = plane YDirection) reproduces the matching ViewCube view exactly, in
         // this Y-up world: XY = Top, XZ = Front, YZ = Right. gp_Ax3(origin, normal,
         // xDir); YDirection (the camera up) = normal × xDir.
-        case ToolAction::StartSketchXY: // Top: camera +Y, up -Z
+        // For the explicit base-plane buttons we prime the camera with the
+        // canonical Top / Front / Right "up" first — without it, alignCamera
+        // ToActiveSketch's continuity-preservation logic snaps the up vector
+        // to whichever in-plane axis happened to project from the previous
+        // view (e.g. world +X), making XY / XZ visually indistinguishable
+        // with an empty viewport. Setting the canonical up here makes each
+        // plane land on its CAD-traditional orientation.
+        case ToolAction::StartSketchXY: // Top: camera +Y, screen-up = world +Z (user +Y)
+            if (m_viewport) m_viewport->getCamera().setUp({0.0f, 0.0f, 1.0f});
             enterSketchOnPlane(gp_Pln(gp_Ax3(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0), gp_Dir(1, 0, 0)))); break;
-        case ToolAction::StartSketchXZ: // Front: camera +Z, up +Y
+        case ToolAction::StartSketchXZ: // Front: camera +Z, screen-up = world +Y (user +Z)
+            if (m_viewport) m_viewport->getCamera().setUp({0.0f, 1.0f, 0.0f});
             enterSketchOnPlane(gp_Pln(gp_Ax3(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1), gp_Dir(1, 0, 0)))); break;
-        case ToolAction::StartSketchYZ: // Right: camera +X, up +Y
+        case ToolAction::StartSketchYZ: // Right: camera +X, screen-up = world +Y (user +Z)
+            if (m_viewport) m_viewport->getCamera().setUp({0.0f, 1.0f, 0.0f});
             enterSketchOnPlane(gp_Pln(gp_Ax3(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0), gp_Dir(0, 0, -1)))); break;
         case ToolAction::SketchOnFace: {
             const auto& sel = m_selection->getSelection();
@@ -970,18 +990,46 @@ void Application::handleToolAction(int action) {
             break;
 
         case ToolAction::Move: {
-            if (!m_selection->hasSelectedBodies()) break;
+            // Bodies AND standalone sketches both get the Move gizmo — the
+            // viewport gizmo-visibility block handles whichever selection
+            // type is active. SketchRegion picks count as the parent sketch.
+            // For sketches the click "arms" the gizmo for the current
+            // sketch id; selection-change clears the arm so the next sketch
+            // selection again shows just the toolbar options.
+            if (!m_selection->hasSelectedBodies() &&
+                !m_selection->hasSelectedSketches() &&
+                !m_selection->hasSelectedSketchRegions()) break;
             m_gizmo->setMode(GizmoMode::Translate);
-            m_selection->setNavigationOnly(false); // user explicitly wants the gizmo
+            m_selection->setNavigationOnly(false);
+            for (const auto& e : m_selection->getSelection()) {
+                if ((e.type == SelectionType::Sketch ||
+                     e.type == SelectionType::SketchRegion) && e.sketchId >= 0) {
+                    m_sketchGizmoArmed = true;
+                    m_sketchGizmoArmedFor = e.sketchId;
+                    break;
+                }
+            }
             break;
         }
         case ToolAction::Rotate: {
-            if (!m_selection->hasSelectedBodies()) break;
+            if (!m_selection->hasSelectedBodies() &&
+                !m_selection->hasSelectedSketches() &&
+                !m_selection->hasSelectedSketchRegions()) break;
             m_gizmo->setMode(GizmoMode::Rotate);
             m_selection->setNavigationOnly(false);
+            for (const auto& e : m_selection->getSelection()) {
+                if ((e.type == SelectionType::Sketch ||
+                     e.type == SelectionType::SketchRegion) && e.sketchId >= 0) {
+                    m_sketchGizmoArmed = true;
+                    m_sketchGizmoArmedFor = e.sketchId;
+                    break;
+                }
+            }
             break;
         }
         case ToolAction::Scale: {
+            // Scale-on-sketch is a no-op (the plane is 2D-infinite), so we
+            // keep this body-only.
             if (!m_selection->hasSelectedBodies()) break;
             m_gizmo->setMode(GizmoMode::Scale);
             m_selection->setNavigationOnly(false);
@@ -2652,6 +2700,9 @@ void Application::run() {
                 if (!pending.empty()) {
                     if      (pending == "LinearPattern") beginPattern(PatternKind::Linear);
                     else if (pending == "RadialPattern") beginPattern(PatternKind::Radial);
+                    else if (pending == "Loft")          beginLoft();
+                    else if (pending == "LoftPickSecond") m_loftPickHintPending = true;
+                    else if (pending == "ConstructionPlane") beginConstructionPlane();
                     // Unknown ids are silently ignored — future plugins can
                     // ship their own without modifying Application by routing
                     // through whatever new dispatcher is added here.
@@ -2674,6 +2725,61 @@ void Application::run() {
             renderSettings();
             renderMirrorPopup();
 
+            // Loft (plugin) "pick a second sketch" hint banner. LoftPlugin
+            // triggers this when the user clicks Loft with one sketch in the
+            // selection. A modal would grey out the viewport and prevent
+            // picking the second sketch, so we render it as a non-blocking
+            // floating window pinned near the top of the viewport instead.
+            // Auto-dismisses once the selection covers two sketches (or
+            // two sketch regions from distinct sketches) — at which point a
+            // second click on Loft will commit. Manual dismiss via the X.
+            if (m_loftPickHintPending) {
+                m_loftPickHintVisible = true;
+                m_loftPickHintPending = false;
+            }
+            if (m_loftPickHintVisible) {
+                // Count distinct parent sketches in the current selection.
+                int distinct = 0;
+                std::vector<int> seen;
+                if (m_selection) {
+                    for (const auto& e : m_selection->getSelection()) {
+                        if ((e.type == SelectionType::Sketch ||
+                             e.type == SelectionType::SketchRegion) &&
+                            e.sketchId >= 0) {
+                            bool dup = false;
+                            for (int x : seen) if (x == e.sketchId) { dup = true; break; }
+                            if (!dup) { seen.push_back(e.sketchId); ++distinct; }
+                        }
+                    }
+                }
+                if (distinct >= 2) {
+                    m_loftPickHintVisible = false;
+                } else {
+                    ImGuiViewport* vp = ImGui::GetMainViewport();
+                    ImGui::SetNextWindowPos(
+                        ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f,
+                               vp->WorkPos.y + 60.0f),
+                        ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+                    ImGui::SetNextWindowBgAlpha(0.92f);
+                    ImGuiWindowFlags flags =
+                        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                        ImGuiWindowFlags_NoSavedSettings |
+                        ImGuiWindowFlags_AlwaysAutoResize |
+                        ImGuiWindowFlags_NoFocusOnAppearing |
+                        ImGuiWindowFlags_NoNav;
+                    bool open = true;
+                    if (ImGui::Begin("Pick a second sketch", &open, flags)) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.35f, 1.0f),
+                                           "Loft needs a second profile.");
+                        ImGui::TextWrapped("Ctrl-click another sketch (or one "
+                                           "of its regions), then click Loft "
+                                           "again to commit.");
+                    }
+                    ImGui::End();
+                    if (!open) m_loftPickHintVisible = false;
+                }
+            }
+
             // Help system: dockable user guide, modal About, modal "Check for
             // Updates" popup that fires a one-shot HTTPS GET to GitHub on open.
             m_helpPanel->render();
@@ -2684,6 +2790,9 @@ void Application::run() {
             renderResizeCylindricalPanel();
             renderShellPanel();
             renderPatternPanel();
+            renderLoftPanel();
+            renderConstructionPlanePanel();
+            renderSketchMovePanel();
             renderSketchPatternPopup();
 
             // Keep measurement results in sync with the current selection,

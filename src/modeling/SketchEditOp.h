@@ -22,7 +22,13 @@ public:
     bool undo(Document& doc) override;
     std::string name() const override { return "Sketch Edit"; }
     std::string description() const override;
-    void renderProperties() override {}
+    // Lists every dimension constraint (Distance / Radius / Angle) on the
+    // post-edit snapshot with an editable value. Mutating a value here updates
+    // m_after AND re-solves the snapshot so dependent geometry shifts to match
+    // before the user clicks Apply Changes. Non-dimensional constraints
+    // (Horizontal, Parallel, etc.) are shown as read-only entries because
+    // they have nothing user-tunable.
+    void renderProperties() override;
     std::string typeId() const override { return "sketchedit"; }
 
 private:

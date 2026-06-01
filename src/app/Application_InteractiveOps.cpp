@@ -22,6 +22,10 @@
 #include "modeling/ShellOp.h"
 #include "modeling/ResizeCylindricalOp.h"
 #include "modeling/PatternOp.h"
+#include "modeling/LoftOp.h"
+#include "modeling/ConstructionPlaneOp.h"
+#include <Geom_Plane.hxx>
+#include <Geom_Surface.hxx>
 
 #include <BRep_Tool.hxx>
 #include <BRepTools.hxx>
@@ -773,14 +777,111 @@ Application::SketchRegionHit Application::pickSketchRegion(float screenX, float 
         if (projectToPlane(o2, d2, t2, p2d2)) tol = glm::length(p2d2 - p2d);
 
         auto regions = sketch.buildRegions();
+        bool matched = false;
         for (size_t i = 0; i < regions.size(); ++i) {
             if (sketch.isPointInOrNearRegion(regions[i], p2d, tol)) {
                 bestT = t;
                 hit.sketchId = sketchId;
                 hit.regionIndex = static_cast<int>(i);
                 hit.worldPoint = rayOrigin + rayDir * t;
+                matched = true;
                 break; // first match per sketch is fine; nesting handled by the test
             }
+        }
+        if (matched) return;
+
+        // Fallback: edge picking. Open profiles (an arc, an unclosed polyline,
+        // a spline used as a loft rib, …) have no closed region, so the loop
+        // above misses them entirely — which used to make such sketches
+        // unselectable from the viewport. Test 2D distance from the click
+        // point to each primitive; if it lands within `tol` of any line /
+        // circle / arc / spline / polygon edge, treat that as a whole-
+        // sketch hit (regionIndex stays -1) so the viewport input handler
+        // can emit a SelectionType::Sketch.
+        auto getPoint2D = [&](int ptId) -> glm::vec2 {
+            const SketchPoint* sp = sketch.getPoint(ptId);
+            return sp ? sp->pos : glm::vec2(0.0f);
+        };
+        auto distPointToSegment = [](glm::vec2 p, glm::vec2 a, glm::vec2 b) -> float {
+            glm::vec2 ab = b - a;
+            float len2 = glm::dot(ab, ab);
+            if (len2 < 1e-12f) return glm::length(p - a);
+            float u = glm::clamp(glm::dot(p - a, ab) / len2, 0.0f, 1.0f);
+            return glm::length(p - (a + u * ab));
+        };
+
+        bool nearEdge = false;
+        for (const auto& ln : sketch.getLines()) {
+            if (distPointToSegment(p2d, getPoint2D(ln.startPointId),
+                                        getPoint2D(ln.endPointId)) <= tol) {
+                nearEdge = true; break;
+            }
+        }
+        if (!nearEdge) {
+            for (const auto& c : sketch.getCircles()) {
+                glm::vec2 ctr = getPoint2D(c.centerPointId);
+                float r = static_cast<float>(c.radius);
+                float d = std::abs(glm::length(p2d - ctr) - r);
+                if (d <= tol) { nearEdge = true; break; }
+            }
+        }
+        if (!nearEdge) {
+            for (const auto& a : sketch.getArcs()) {
+                glm::vec2 ctr = getPoint2D(a.centerPointId);
+                float r = static_cast<float>(a.radius);
+                glm::vec2 s = getPoint2D(a.startPointId);
+                glm::vec2 e = getPoint2D(a.endPointId);
+                float d = std::abs(glm::length(p2d - ctr) - r);
+                if (d > tol) continue;
+                // Angle-in-arc test: only count if p2d's angle from centre
+                // falls within the CCW sweep from start to end.
+                float a0 = std::atan2(s.y - ctr.y, s.x - ctr.x);
+                float a1 = std::atan2(e.y - ctr.y, e.x - ctr.x);
+                float ap = std::atan2(p2d.y - ctr.y, p2d.x - ctr.x);
+                auto norm = [](float x) {
+                    while (x < 0) x += 2.0f * static_cast<float>(M_PI);
+                    while (x >= 2.0f * static_cast<float>(M_PI)) x -= 2.0f * static_cast<float>(M_PI);
+                    return x;
+                };
+                float span = norm(a1 - a0);
+                float here = norm(ap - a0);
+                if (here <= span) { nearEdge = true; break; }
+            }
+        }
+        if (!nearEdge) {
+            // Splines + polygons: approximate by walking the control / vertex
+            // chain as a polyline. Good enough for picking; the renderer
+            // tessellates the same control sequence anyway.
+            for (const auto& sp : sketch.getSplines()) {
+                const auto& ids = sp.controlPointIds;
+                for (size_t i = 1; i < ids.size(); ++i) {
+                    if (distPointToSegment(p2d, getPoint2D(ids[i-1]),
+                                                getPoint2D(ids[i])) <= tol) {
+                        nearEdge = true; break;
+                    }
+                }
+                if (nearEdge) break;
+            }
+        }
+        if (!nearEdge) {
+            for (const auto& poly : sketch.getPolygons()) {
+                const auto& ids = poly.vertexPointIds;
+                for (size_t i = 0; i < ids.size(); ++i) {
+                    glm::vec2 a = getPoint2D(ids[i]);
+                    glm::vec2 b = getPoint2D(ids[(i + 1) % ids.size()]);
+                    if (distPointToSegment(p2d, a, b) <= tol) {
+                        nearEdge = true; break;
+                    }
+                }
+                if (nearEdge) break;
+            }
+        }
+
+        if (nearEdge) {
+            bestT = t;
+            hit.sketchId = sketchId;
+            hit.regionIndex = -1; // edge-only hit; caller emits SelectionType::Sketch
+            hit.worldPoint = rayOrigin + rayDir * t;
         }
     };
 
@@ -1125,6 +1226,206 @@ void Application::cancelPattern() {
     m_patternActive        = false;
     m_patternPickingOrigin = false;
     m_patternBodyId        = -1;
+    m_meshesDirty = true;
+}
+
+// ─── Loft (interactive popup) ──────────────────────────────────────────────
+//
+// LoftPlugin walks the selection and, when 2+ distinct sketches are present,
+// fires requestInteractiveOp("Loft"). The main frame loop dispatches that to
+// beginLoft(), which snapshots the two profile wires (the outer wire of each
+// sketch's first region) and opens the popup. updateLoft re-pushes a preview
+// LoftOp each frame the user changes a toggle, commitLoft leaves the final
+// op on history, cancelLoft undoes the preview.
+
+void Application::beginLoft() {
+    if (!m_selection || !m_document) return;
+
+    // Snapshot the first two distinct sketches in click order.
+    std::vector<int> sketchIds;
+    auto addId = [&](int id) {
+        if (id < 0) return;
+        for (int x : sketchIds) if (x == id) return;
+        sketchIds.push_back(id);
+    };
+    for (const auto& e : m_selection->getSelection()) {
+        if ((e.type == SelectionType::Sketch ||
+             e.type == SelectionType::SketchRegion) && e.sketchId >= 0) {
+            addId(e.sketchId);
+        }
+    }
+    if (sketchIds.size() < 2) return;
+
+    auto wireFromSketch = [&](int id) -> TopoDS_Wire {
+        auto sk = m_document->getSketch(id);
+        if (!sk) return {};
+        auto regions = sk->buildRegions();
+        if (!regions.empty()) return regions[0].outerWire;
+        auto wires = sk->buildWires();
+        if (!wires.empty()) return wires[0];
+        return {};
+    };
+
+    m_loftWireA = wireFromSketch(sketchIds[0]);
+    m_loftWireB = wireFromSketch(sketchIds[1]);
+    if (m_loftWireA.IsNull() || m_loftWireB.IsNull()) {
+        std::fprintf(stderr,
+            "[Loft] could not derive a closed wire from one of the "
+            "selected sketches (need a closed region in each).\n");
+        return;
+    }
+
+    m_loftSolid = true;
+    m_loftRuled = false;
+    m_loftReverseB = false;
+    m_loftPreviewPushed = false;
+    m_loftActive = true;
+
+    updateLoft();
+}
+
+void Application::updateLoft() {
+    if (!m_loftActive || !m_history || !m_document) return;
+    if (m_loftWireA.IsNull() || m_loftWireB.IsNull()) return;
+
+    // Undo previous preview so history accumulates exactly one LoftOp.
+    if (m_loftPreviewPushed && m_history->canUndo()) {
+        m_history->undo(*m_document);
+        m_loftPreviewPushed = false;
+    }
+
+    auto op = std::make_unique<LoftOp>();
+    op->addProfile(m_loftWireA);
+    // Reverse profile B's wire when requested: this re-orders B's vertices so
+    // they pair differently against A's, which is the standard remedy for
+    // the "apex pinch / pyramid" output when start vertices are misaligned.
+    if (m_loftReverseB) op->addProfile(TopoDS::Wire(m_loftWireB.Reversed()));
+    else                op->addProfile(m_loftWireB);
+    op->setSolid(m_loftSolid);
+    op->setRuled(m_loftRuled);
+    if (m_history->pushOperation(std::move(op), *m_document)) {
+        m_loftPreviewPushed = true;
+    }
+    m_meshesDirty = true;
+}
+
+void Application::commitLoft() {
+    m_loftActive = false;
+    m_loftPreviewPushed = false;
+    m_loftWireA = TopoDS_Wire();
+    m_loftWireB = TopoDS_Wire();
+    m_meshesDirty = true;
+}
+
+void Application::cancelLoft() {
+    if (m_loftPreviewPushed && m_history->canUndo()) {
+        m_history->undo(*m_document);
+        m_loftPreviewPushed = false;
+    }
+    m_loftActive = false;
+    m_loftWireA = TopoDS_Wire();
+    m_loftWireB = TopoDS_Wire();
+    m_meshesDirty = true;
+}
+
+// ─── Construction Plane (interactive popup) ────────────────────────────────
+//
+// Same architecture as Loft: ConstructionPlanePlugin fires a plain
+// requestInteractiveOp("ConstructionPlane"). Application reads the current
+// selection (a planar face unlocks the "Parallel to face" option), opens a
+// live-previewed popup with XY/XZ/YZ + offset, then commits a single
+// ConstructionPlaneOp on Apply or undoes the preview on Cancel.
+
+void Application::beginConstructionPlane() {
+    if (!m_history || !m_document) return;
+
+    m_planeOpHaveFace = false;
+    if (m_selection) {
+        for (const auto& e : m_selection->getSelection()) {
+            if (e.type == SelectionType::Face && !e.shape.IsNull() &&
+                e.shape.ShapeType() == TopAbs_FACE) {
+                try {
+                    TopoDS_Face f = TopoDS::Face(e.shape);
+                    Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
+                    if (!surf.IsNull() && surf->IsKind(STANDARD_TYPE(Geom_Plane))) {
+                        m_planeOpBaseFace = Handle(Geom_Plane)::DownCast(surf)->Pln();
+                        m_planeOpHaveFace = true;
+                        break;
+                    }
+                } catch (...) {}
+            }
+        }
+    }
+
+    // Default to Parallel-to-Face when a face is selected (typical user flow:
+    // pick a face, click the button, drag the offset). Otherwise XY.
+    m_planeOpKindIdx = m_planeOpHaveFace ? 3 : 0;
+    m_planeOpOffset = 0.0;
+    std::snprintf(m_planeOpOffsetBuf, sizeof(m_planeOpOffsetBuf), "%.2f",
+                  m_planeOpOffset);
+    m_planeOpPreviewPushed = false;
+    m_planeOpActive = true;
+
+    updateConstructionPlane();
+}
+
+void Application::updateConstructionPlane() {
+    if (!m_planeOpActive || !m_history || !m_document) return;
+
+    if (m_planeOpPreviewPushed && m_history->canUndo()) {
+        m_history->undo(*m_document);
+        m_planeOpPreviewPushed = false;
+    }
+
+    auto op = std::make_unique<ConstructionPlaneOp>();
+    switch (m_planeOpKindIdx) {
+        case 0: op->setType(PlaneCreationType::XY);
+                op->setOffset(m_planeOpOffset);
+                op->setName("XY Plane"); break;
+        case 1: op->setType(PlaneCreationType::XZ);
+                op->setOffset(m_planeOpOffset);
+                op->setName("XZ Plane"); break;
+        case 2: op->setType(PlaneCreationType::YZ);
+                op->setOffset(m_planeOpOffset);
+                op->setName("YZ Plane"); break;
+        case 3:
+            if (m_planeOpHaveFace) {
+                // ParallelToFace places the plane at p1 with the base plane's
+                // normal — push p1 along that normal by the offset so the
+                // slider drives it away from the face like the user expects.
+                gp_Dir n = m_planeOpBaseFace.Axis().Direction();
+                gp_Pnt o = m_planeOpBaseFace.Axis().Location();
+                gp_Pnt p(o.X() + n.X() * m_planeOpOffset,
+                         o.Y() + n.Y() * m_planeOpOffset,
+                         o.Z() + n.Z() * m_planeOpOffset);
+                op->setBasePlane(m_planeOpBaseFace);
+                op->setPoints(p, gp_Pnt(0,0,0), gp_Pnt(0,0,0));
+                op->setType(PlaneCreationType::ParallelToFace);
+                op->setName("Face Plane");
+            } else {
+                op->setType(PlaneCreationType::XY);
+                op->setName("XY Plane");
+            }
+            break;
+    }
+    if (m_history->pushOperation(std::move(op), *m_document)) {
+        m_planeOpPreviewPushed = true;
+    }
+    m_meshesDirty = true;
+}
+
+void Application::commitConstructionPlane() {
+    m_planeOpActive = false;
+    m_planeOpPreviewPushed = false;
+    m_meshesDirty = true;
+}
+
+void Application::cancelConstructionPlane() {
+    if (m_planeOpPreviewPushed && m_history->canUndo()) {
+        m_history->undo(*m_document);
+        m_planeOpPreviewPushed = false;
+    }
+    m_planeOpActive = false;
     m_meshesDirty = true;
 }
 

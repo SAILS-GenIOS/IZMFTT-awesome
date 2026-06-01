@@ -26,6 +26,14 @@ public:
                               const glm::vec3& color, float lineWidth,
                               const glm::mat4& view, const glm::mat4& projection);
 
+    // Highlight every primitive in a sketch (lines, circles, arcs, splines,
+    // polygon edges) in a single colour at the given line width — used when
+    // the whole sketch is in the selection, including open profiles that
+    // have no closed region for renderRegionBoundary to outline.
+    void renderSketchHighlight(const Sketch* sketch,
+                               const glm::vec3& color, float lineWidth,
+                               const glm::mat4& view, const glm::mat4& projection);
+
     // Draw a face-local measurement grid covering the active sketch face.
     // `faceExtent` is the half-width of the grid (in sketch units) around the sketch origin.
     void renderFaceGrid(const Sketch* sketch, float faceExtent, float gridStep,

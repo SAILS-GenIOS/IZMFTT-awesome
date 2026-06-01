@@ -28,6 +28,7 @@ void forceLink_PushPull();
 // Phase 4 plugins
 void forceLink_Sketch();
 void forceLink_GizmoDrag();
+void forceLink_Loft();
 
 void linkAll() {
     // Phase 1
@@ -55,6 +56,7 @@ void linkAll() {
     // Phase 4
     forceLink_Sketch();
     forceLink_GizmoDrag();
+    forceLink_Loft();
 }
 
 }} // namespace materializr::force_link
