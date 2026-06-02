@@ -101,9 +101,12 @@ plugin side, letting plugins suppress visuals during sketch-edit.
   the `ConstructionPlaneOp` history step on reload, which works in
   practice but ties their lifecycle to the history). Items panel listing
   still TODO.
-- The construction-plane quad still shows for a frame or two when
-  leaving ortho mid-sketch — the hide is gated on ortho, so the moment
-  you orbit it reappears. Disappears again when you exit sketch.
+- The construction-plane quad's hide rule is **inverted** from intent:
+  it disappears the moment you leave ortho while still in sketch-edit
+  (orbit, perspective, etc.), and reappears when you snap back to ortho
+  via `View Sketch`. Exiting sketch entirely or saving also restores it
+  normally. Cosmetic only — clicking through doesn't block any
+  workflow; will be flipped in a follow-up.
 
 ## Upgrading
 
