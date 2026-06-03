@@ -615,7 +615,8 @@ private:
     bool m_patternActive = false;
     PatternKind m_patternKind = PatternKind::Linear;
     int m_patternBodyId = -1;
-    int m_patternAxisIdx = 0; // 0=X, 1=Y, 2=Z
+    int m_patternAxisIdx = 0; // 0=X, 1=Y, 2=Z (used when m_patternAxisId < 0)
+    int m_patternAxisId = -1; // selected construction axis id; -1 = world axis
     int m_patternCount = 3;
     float m_patternDistance = 5.0f; // linear: spacing in mm along chosen axis
     float m_patternAngle = 360.0f;   // radial: total sweep in degrees

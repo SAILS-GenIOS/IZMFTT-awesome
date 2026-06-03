@@ -1104,16 +1104,52 @@ void Application::renderPatternPanel() {
         ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_AlwaysAutoResize);
 
-    // ---- Axis radio buttons (X / Y / Z) ----
-    ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "%s",
-                       m_patternKind == PatternKind::Linear ? "Direction" : "Rotation axis");
-    const char* labels[] = { "X", "Y", "Z" };
     bool axisChanged = false;
-    for (int i = 0; i < 3; ++i) {
-        if (i > 0) ImGui::SameLine();
-        if (ImGui::RadioButton(labels[i], m_patternAxisIdx == i)) {
-            m_patternAxisIdx = i;
-            axisChanged = true;
+    if (m_patternKind == PatternKind::Linear) {
+        // ---- Direction radio buttons (X / Y / Z) ----
+        ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "Direction");
+        const char* labels[] = { "X", "Y", "Z" };
+        for (int i = 0; i < 3; ++i) {
+            if (i > 0) ImGui::SameLine();
+            if (ImGui::RadioButton(labels[i], m_patternAxisIdx == i)) {
+                m_patternAxisIdx = i;
+                axisChanged = true;
+            }
+        }
+    } else {
+        // ---- Rotation axis combo: construction axes + world X/Y/Z ----
+        // Mirrors the Revolve axis picker so any construction axis the user
+        // made can drive the pattern (the headline of "axes feed patterns").
+        ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "Rotation axis");
+        std::vector<int> axisIds = m_document->getAllAxisIds();
+        std::string current;
+        const char* userLabels[3] = {"X (user)", "Y (user)", "Z (user, floor-up)"};
+        if (m_patternAxisId >= 0) {
+            current = m_document->getAxisName(m_patternAxisId) +
+                      " (id " + std::to_string(m_patternAxisId) + ")";
+        } else {
+            current = userLabels[std::clamp(m_patternAxisIdx, 0, 2)];
+        }
+        if (ImGui::BeginCombo("##patAxisCombo", current.c_str())) {
+            for (int aid : axisIds) {
+                const auto* a = m_document->getAxis(aid);
+                if (!a) continue;
+                std::string label = a->name + "  (id " + std::to_string(aid) + ")";
+                if (ImGui::Selectable(label.c_str(), m_patternAxisId == aid)) {
+                    m_patternAxisId = aid;
+                    axisChanged = true;
+                }
+            }
+            if (!axisIds.empty()) ImGui::Separator();
+            for (int i = 0; i < 3; ++i) {
+                bool sel = (m_patternAxisId < 0 && m_patternAxisIdx == i);
+                if (ImGui::Selectable(userLabels[i], sel)) {
+                    m_patternAxisId = -1;
+                    m_patternAxisIdx = i;
+                    axisChanged = true;
+                }
+            }
+            ImGui::EndCombo();
         }
     }
     ImGui::Separator();
@@ -1172,18 +1208,27 @@ void Application::renderPatternPanel() {
         // ---- Axis origin (radial only) ----
         ImGui::Separator();
         ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "Axis origin");
-        ImGui::Text("(%.2f, %.2f, %.2f)", m_patternOriginX, m_patternOriginY, m_patternOriginZ);
-        if (m_patternPickingOrigin) {
-            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f),
-                               "Pick a point in the viewport… (Esc to cancel)");
-            if (ImGui::Button("Cancel picking", ImVec2(-1, 0))) {
-                m_patternPickingOrigin = false;
+        if (m_patternAxisId >= 0) {
+            // A construction axis defines its own origin — copies orbit its
+            // centreline, so the manual origin picker doesn't apply.
+            if (const auto* a = m_document->getAxis(m_patternAxisId)) {
+                ImGui::Text("(%.2f, %.2f, %.2f)", a->origin.X(), a->origin.Y(), a->origin.Z());
             }
+            ImGui::TextDisabled("From the selected construction axis.");
         } else {
-            if (ImGui::Button("Pick axis origin in viewport", ImVec2(-1, 0))) {
-                m_patternPickingOrigin = true;
+            ImGui::Text("(%.2f, %.2f, %.2f)", m_patternOriginX, m_patternOriginY, m_patternOriginZ);
+            if (m_patternPickingOrigin) {
+                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f),
+                                   "Pick a point in the viewport… (Esc to cancel)");
+                if (ImGui::Button("Cancel picking", ImVec2(-1, 0))) {
+                    m_patternPickingOrigin = false;
+                }
+            } else {
+                if (ImGui::Button("Pick axis origin in viewport", ImVec2(-1, 0))) {
+                    m_patternPickingOrigin = true;
+                }
+                ImGui::TextDisabled("Click a point in the viewport — snaps to the grid.");
             }
-            ImGui::TextDisabled("Click a point in the viewport — snaps to the grid.");
         }
     }
 

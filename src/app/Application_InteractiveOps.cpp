@@ -1180,6 +1180,7 @@ void Application::beginPattern(PatternKind kind) {
     m_patternKind   = kind;
     m_patternBodyId = bodyId;
     m_patternAxisIdx = (kind == PatternKind::Linear) ? 0 : 2; // default X for linear, Z for radial
+    m_patternAxisId = -1; // start on a world axis; user can pick a construction axis
     m_patternCount    = (kind == PatternKind::Linear) ? 3   : 6;
     m_patternDistance = 5.0f;
     m_patternAngle    = 360.0f;
@@ -1225,18 +1226,35 @@ void Application::updatePattern() {
 
     auto op = std::make_unique<PatternOp>();
     op->setBody(m_patternBodyId);
-    glm::vec3 worldAxis = userAxisToWorldVec(m_patternAxisIdx);
+
+    // Axis direction comes from the chosen world axis, or — when the user
+    // picked a construction axis from the dropdown — from that axis's own
+    // direction (and, for radial, its origin too, since the axis defines the
+    // full rotation line).
+    glm::vec3 axisDir = userAxisToWorldVec(m_patternAxisIdx);
+    float originX = m_patternOriginX, originY = m_patternOriginY, originZ = m_patternOriginZ;
+    if (m_patternAxisId >= 0) {
+        if (const auto* a = m_document->getAxis(m_patternAxisId)) {
+            axisDir = glm::vec3((float)a->direction.X(),
+                                (float)a->direction.Y(),
+                                (float)a->direction.Z());
+            originX = (float)a->origin.X();
+            originY = (float)a->origin.Y();
+            originZ = (float)a->origin.Z();
+        }
+    }
+
     if (m_patternKind == PatternKind::Linear) {
         op->setType(PatternType::Linear);
         op->setCount(m_patternCount);
-        op->setLinearSpacing(worldAxis.x * m_patternDistance,
-                             worldAxis.y * m_patternDistance,
-                             worldAxis.z * m_patternDistance);
+        op->setLinearSpacing(axisDir.x * m_patternDistance,
+                             axisDir.y * m_patternDistance,
+                             axisDir.z * m_patternDistance);
     } else {
         op->setType(PatternType::Radial);
         op->setCount(m_patternCount);
-        op->setRadialAxis(worldAxis.x, worldAxis.y, worldAxis.z);
-        op->setRadialOrigin(m_patternOriginX, m_patternOriginY, m_patternOriginZ);
+        op->setRadialAxis(axisDir.x, axisDir.y, axisDir.z);
+        op->setRadialOrigin(originX, originY, originZ);
         op->setTotalAngle(m_patternAngle);
     }
     if (m_history->pushOperation(std::move(op), *m_document)) {
