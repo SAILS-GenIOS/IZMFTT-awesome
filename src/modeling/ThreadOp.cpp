@@ -80,7 +80,9 @@ bool ThreadOp::execute(Document& doc) {
         double pad   = 0.05 * m_pitch + 1e-3;
         double baseR = m_isHole ? (m_radius - pad) : (m_radius + pad);
         double apexR = m_isHole ? (m_radius + m_depth) : (m_radius - m_depth);
-        double halfW = 0.3 * m_pitch; // groove half-width at the surface
+        // 60° ISO flanks: half-width = depth·tan(30°). Capped at 0.45·pitch
+        // so adjacent grooves can't merge and shave the crests off entirely.
+        double halfW = std::min(0.57735 * m_depth, 0.45 * m_pitch);
 
         auto pt = [&](double rad, double dz) {
             return gp_Pnt(loc.X() + zd.X() * dz + xd.X() * rad,

@@ -505,11 +505,25 @@ void Application::beginThread() {
     m_threadAxis[6] = m_resizeCylAxisXX; m_threadAxis[7] = m_resizeCylAxisXY;
     m_threadAxis[8] = m_resizeCylAxisXZ;
 
-    // Metric-coarse-ish defaults from the diameter, clamped to sane bounds;
-    // depth defaults to ~0.6·pitch (close to the ISO thread depth ratio).
+    // ISO metric coarse defaults: nearest standard pitch for this diameter
+    // (M10 → 1.5, M6 → 1.0, …), thread depth at the ISO ratio 0.6134·P.
+    // Gives a recognisable "standard coarse bolt" out of the box instead of
+    // a hairline scratch.
+    static const struct { double d, p; } kIsoCoarse[] = {
+        {1.6, 0.35}, {2.0, 0.4}, {2.5, 0.45}, {3.0, 0.5}, {4.0, 0.7},
+        {5.0, 0.8},  {6.0, 1.0}, {8.0, 1.25}, {10.0, 1.5}, {12.0, 1.75},
+        {16.0, 2.0}, {20.0, 2.5}, {24.0, 3.0}, {30.0, 3.5}, {36.0, 4.0},
+        {42.0, 4.5}, {48.0, 5.0},
+    };
     double dia = m_threadRadius * 2.0;
-    m_threadPitch = static_cast<float>(std::min(3.0, std::max(0.5, 0.125 * dia)));
-    m_threadDepth = static_cast<float>(0.6 * m_threadPitch);
+    double pitch = kIsoCoarse[0].p;
+    double bestDelta = 1e9;
+    for (const auto& e : kIsoCoarse) {
+        double delta = std::abs(e.d - dia);
+        if (delta < bestDelta) { bestDelta = delta; pitch = e.p; }
+    }
+    m_threadPitch = static_cast<float>(pitch);
+    m_threadDepth = static_cast<float>(0.6134 * pitch);
     m_threadRightHanded = true;
     std::snprintf(m_threadPitchBuf, sizeof(m_threadPitchBuf), "%.2f", m_threadPitch);
     std::snprintf(m_threadDepthBuf, sizeof(m_threadDepthBuf), "%.2f", m_threadDepth);
