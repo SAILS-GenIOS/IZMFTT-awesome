@@ -101,7 +101,11 @@ namespace materializr { namespace force_link { void linkAll(); } }
 #include <TopoDS.hxx>
 #include <stdexcept>
 #include <cstdio>
+#ifdef _WIN32
+#include <windows.h> // GetModuleFileNameA for exe dir (font path lookup)
+#else
 #include <unistd.h>  // readlink for resolving /proc/self/exe → exe dir (font path lookup)
+#endif
 
 namespace materializr {
 
@@ -367,14 +371,24 @@ void Application::initImGui() {
     // a font miss never bricks the UI.
     {
         char exePath[4096];
-        ssize_t n = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
         std::string exeDir;
+#ifdef _WIN32
+        DWORD n = GetModuleFileNameA(nullptr, exePath, sizeof(exePath) - 1);
+        if (n > 0) {
+            exePath[n] = '\0';
+            std::string p(exePath);
+            auto slash = p.find_last_of("\\/");
+            if (slash != std::string::npos) exeDir = p.substr(0, slash);
+        }
+#else
+        ssize_t n = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
         if (n > 0) {
             exePath[n] = '\0';
             std::string p(exePath);
             auto slash = p.find_last_of('/');
             if (slash != std::string::npos) exeDir = p.substr(0, slash);
         }
+#endif
         const std::string candidates[] = {
             exeDir + "/../share/materializr/fonts/JetBrainsMono-Regular.ttf",
             exeDir + "/../assets/fonts/JetBrainsMono-Regular.ttf",
