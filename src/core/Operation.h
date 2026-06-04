@@ -65,6 +65,10 @@ public:
     struct ReloadState {
         std::vector<int> created;
         std::vector<std::pair<int, TopoDS_Shape>> modifiedBefore;
+        // The same modified bodies AFTER this step — sub-shape-referencing ops
+        // resolve their generated-geometry indices (e.g. fillet blend faces
+        // for click-to-edit) against the result shape.
+        std::vector<std::pair<int, TopoDS_Shape>> modifiedAfter;
         std::vector<std::pair<int, TopoDS_Shape>> deletedBefore;
     };
 

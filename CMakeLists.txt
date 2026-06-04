@@ -163,6 +163,7 @@ add_executable(materializr
     src/modeling/PushPullOp.cpp
     src/modeling/ReplayOp.cpp
     src/modeling/OperationFactory.cpp
+    src/modeling/SubShapeIndex.cpp
     src/modeling/FilletOp.cpp
     src/modeling/ChamferOp.cpp
     src/modeling/ResizeCylindricalOp.cpp

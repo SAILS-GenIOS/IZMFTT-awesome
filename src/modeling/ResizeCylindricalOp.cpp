@@ -543,16 +543,27 @@ bool ResizeCylindricalOp::execute(Document& doc) {
 }
 
 std::string ResizeCylindricalOp::serializeParams() const {
-    char buf[256];
+    // The cylinder axis (gp_Ax2: location + main dir + X dir) is geometric, so
+    // it serialises directly — execute() rebuilds the cut/fuse tools from it.
+    const gp_Pnt& loc = m_axis.Location();
+    const gp_Dir& dir = m_axis.Direction();
+    const gp_Dir& xd  = m_axis.XDirection();
+    char buf[420];
     std::snprintf(buf, sizeof(buf),
-        "oldBot=%.6f;oldTop=%.6f;newBot=%.6f;newTop=%.6f;height=%.6f;isHole=%d",
-        m_oldBottomR, m_oldTopR, m_newBottomR, m_newTopR, m_height,
-        m_isHole ? 1 : 0);
+        "body=%d;oldBot=%.6f;oldTop=%.6f;newBot=%.6f;newTop=%.6f;height=%.6f;isHole=%d;"
+        "axx=%.9g;axy=%.9g;axz=%.9g;adx=%.9g;ady=%.9g;adz=%.9g;"
+        "aux=%.9g;auy=%.9g;auz=%.9g",
+        m_bodyId, m_oldBottomR, m_oldTopR, m_newBottomR, m_newTopR, m_height,
+        m_isHole ? 1 : 0,
+        loc.X(), loc.Y(), loc.Z(), dir.X(), dir.Y(), dir.Z(),
+        xd.X(), xd.Y(), xd.Z());
     return buf;
 }
 
 bool ResizeCylindricalOp::deserializeParams(const std::string& blob) {
     bool any = false;
+    double lx = 0, ly = 0, lz = 0, dx = 0, dy = 0, dz = 1, ux = 1, uy = 0, uz = 0;
+    bool haveAxis = false;
     size_t pos = 0;
     while (pos < blob.size()) {
         size_t eq = blob.find('=', pos);
@@ -568,9 +579,38 @@ bool ResizeCylindricalOp::deserializeParams(const std::string& blob) {
         else if (key == "newTop") { m_newTopR    = d; any = true; }
         else if (key == "height") { m_height     = d; any = true; }
         else if (key == "isHole") { m_isHole = (std::atoi(val.c_str()) != 0); any = true; }
+        else if (key == "body")   { m_bodyId = std::atoi(val.c_str()); any = true; }
+        else if (key == "axx") { lx = d; haveAxis = true; }
+        else if (key == "axy") { ly = d; }
+        else if (key == "axz") { lz = d; }
+        else if (key == "adx") { dx = d; }
+        else if (key == "ady") { dy = d; }
+        else if (key == "adz") { dz = d; }
+        else if (key == "aux") { ux = d; }
+        else if (key == "auy") { uy = d; }
+        else if (key == "auz") { uz = d; }
         pos = end + 1;
     }
+    if (haveAxis) {
+        try {
+            m_axis = gp_Ax2(gp_Pnt(lx, ly, lz), gp_Dir(dx, dy, dz),
+                            gp_Dir(ux, uy, uz));
+            any = true;
+        } catch (...) { /* degenerate dirs: keep default axis */ }
+    }
     return any;
+}
+
+bool ResizeCylindricalOp::rehydrateFromReload(const ReloadState& state,
+                                              Document& /*doc*/) {
+    if (m_bodyId < 0) return false;
+    m_previousShape.Nullify();
+    for (const auto& [id, shp] : state.modifiedBefore)
+        if (id == m_bodyId) { m_previousShape = shp; break; }
+    // Without the before-shape undo can't restore; without an axis execute
+    // can't rebuild the change volume. (Old files lack body=/ax* keys → the
+    // step stays a baked ReplayOp.)
+    return !m_previousShape.IsNull();
 }
 
 bool ResizeCylindricalOp::undo(Document& doc) {

@@ -1,4 +1,5 @@
 #include "PushPullOp.h"
+#include "SubShapeIndex.h"
 #include "Sketch.h"
 #include <cstdio>
 #include <cstdlib>
@@ -300,6 +301,22 @@ std::string PushPullOp::serializeParams() const {
         std::snprintf(buf, sizeof(buf), ";s%zu=%d;r%zu=%d;b%zu=%d",
                       i, sk, i, rg, i, m_targets[i].sourceBodyId);
         blob += buf;
+        // Face-driven target (no sketch source): persist the profile face as
+        // an ordinal index into the source body's PRE-OP shape (the face was
+        // picked off the body before this op mutated it).
+        if (sk < 0 && m_targets[i].sourceBodyId >= 0 &&
+            !m_targets[i].profile.IsNull()) {
+            for (const auto& [id, shape] : m_previousBodies) {
+                if (id != m_targets[i].sourceBodyId) continue;
+                int fIdx = SubShapeIndex::indexOf(shape, m_targets[i].profile,
+                                                  TopAbs_FACE);
+                if (fIdx > 0) {
+                    std::snprintf(buf, sizeof(buf), ";f%zu=%d", i, fIdx);
+                    blob += buf;
+                }
+                break;
+            }
+        }
     }
     return blob;
 }
@@ -325,6 +342,7 @@ bool PushPullOp::deserializeParams(const std::string& blob) {
     m_targets.assign(count, Target{});          // profiles rebuilt on rehydrate
     m_sketchSourceIds.assign(count, -1);
     m_sketchSourceRegions.assign(count, -1);
+    m_faceIndices.assign(count, 0);
     pos = 0;
     while (pos < blob.size()) {
         size_t eq = blob.find('=', pos);
@@ -333,12 +351,14 @@ bool PushPullOp::deserializeParams(const std::string& blob) {
         if (end == std::string::npos) end = blob.size();
         std::string key = blob.substr(pos, eq - pos);
         std::string val = blob.substr(eq + 1, end - eq - 1);
-        if (key.size() >= 2 && (key[0] == 's' || key[0] == 'r' || key[0] == 'b')) {
+        if (key.size() >= 2 && (key[0] == 's' || key[0] == 'r' ||
+                                key[0] == 'b' || key[0] == 'f')) {
             int idx = std::atoi(key.c_str() + 1);
             int v   = std::atoi(val.c_str());
             if (idx >= 0 && idx < count) {
                 if      (key[0] == 's') m_sketchSourceIds[idx]      = v;
                 else if (key[0] == 'r') m_sketchSourceRegions[idx]  = v;
+                else if (key[0] == 'f') m_faceIndices[idx]          = v;
                 else                    m_targets[idx].sourceBodyId = v;
                 any = true;
             }
@@ -350,17 +370,35 @@ bool PushPullOp::deserializeParams(const std::string& blob) {
 
 bool PushPullOp::rehydrateFromReload(const ReloadState& state, Document& doc) {
     if (m_targets.empty()) return false;
-    // Every target must be sketch-sourced to re-derive its profile; a single
-    // face-driven target poisons the whole op (its face can't be rebuilt), so
-    // decline and let the loader fall back to a baked ReplayOp.
+    // Each target re-derives its profile one of two ways:
+    //   - sketch-sourced: rebuild the region face from the persistent sketch
+    //   - face-driven: resolve the saved ordinal face index against the
+    //     source body's PRE-OP shape from the reload state
+    // Any target that can do neither poisons the whole op → ReplayOp.
     for (size_t i = 0; i < m_targets.size(); ++i) {
-        if (i >= m_sketchSourceIds.size() || m_sketchSourceIds[i] < 0) return false;
+        bool sketchSourced = i < m_sketchSourceIds.size() && m_sketchSourceIds[i] >= 0;
+        bool faceIndexed   = i < m_faceIndices.size() && m_faceIndices[i] > 0 &&
+                             m_targets[i].sourceBodyId >= 0;
+        if (!sketchSourced && !faceIndexed) return false;
     }
-    // Rebuild each distinct source sketch's targets (the helper fills every
-    // target bound to that sketch in one call).
+    // Sketch-sourced targets: rebuild each distinct source sketch's targets
+    // (the helper fills every target bound to that sketch in one call).
     for (size_t i = 0; i < m_targets.size(); ++i) {
+        if (m_sketchSourceIds[i] < 0) continue;
         if (!m_targets[i].profile.IsNull()) continue; // already rebuilt
         if (!rebuildProfileFromSketch(doc, m_sketchSourceIds[i])) return false;
+    }
+    // Face-driven targets: resolve against the source body's before-shape.
+    for (size_t i = 0; i < m_targets.size(); ++i) {
+        if (m_sketchSourceIds[i] >= 0) continue;
+        const TopoDS_Shape* before = nullptr;
+        for (const auto& [id, shp] : state.modifiedBefore) {
+            if (id == m_targets[i].sourceBodyId) { before = &shp; break; }
+        }
+        if (!before) return false;
+        TopoDS_Shape f = SubShapeIndex::at(*before, m_faceIndices[i], TopAbs_FACE);
+        if (f.IsNull() || f.ShapeType() != TopAbs_FACE) return false;
+        m_targets[i].profile = TopoDS::Face(f);
     }
     for (const auto& t : m_targets) {
         if (t.profile.IsNull()) return false;

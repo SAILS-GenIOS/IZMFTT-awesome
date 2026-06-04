@@ -7,6 +7,10 @@
 #include "RevolveOp.h"
 #include "ConstructionPlaneOp.h"
 #include "ConstructionAxisOp.h"
+#include "FilletOp.h"
+#include "ChamferOp.h"
+#include "ShellOp.h"
+#include "ResizeCylindricalOp.h"
 
 namespace OperationFactory {
 
@@ -28,6 +32,12 @@ std::unique_ptr<Operation> create(const std::string& typeId) {
     if (typeId == "revolve")  return std::make_unique<RevolveOp>();
     if (typeId == "construction_plane") return std::make_unique<ConstructionPlaneOp>();
     if (typeId == "construction_axis")  return std::make_unique<ConstructionAxisOp>();
+    //   - Tier 2b (persistent sub-shape identity, see SubShapeIndex.h):
+    //     edges/faces persist as ordinal indices into the step's input shape.
+    if (typeId == "fillet")  return std::make_unique<FilletOp>();
+    if (typeId == "chamfer") return std::make_unique<ChamferOp>();
+    if (typeId == "shell")   return std::make_unique<ShellOp>();
+    if (typeId == "resize_cylindrical") return std::make_unique<ResizeCylindricalOp>();
 
     return nullptr;
 }

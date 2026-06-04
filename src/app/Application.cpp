@@ -1916,8 +1916,12 @@ void Application::rebuildHistoryFromProject(const ProjectHistory& hist) {
         // post-execution bookkeeping (Operation::rehydrateFromReload).
         Operation::ReloadState reload;
         for (const auto& [id, shape] : st.changed) {
-            if (running.find(id) == running.end()) reload.created.push_back(id);
-            else reload.modifiedBefore.push_back({id, running[id]});
+            if (running.find(id) == running.end()) {
+                reload.created.push_back(id);
+            } else {
+                reload.modifiedBefore.push_back({id, running[id]});
+                reload.modifiedAfter.push_back({id, shape});
+            }
         }
         for (int id : st.deleted) {
             auto it = running.find(id);

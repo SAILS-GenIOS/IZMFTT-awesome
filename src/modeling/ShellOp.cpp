@@ -1,4 +1,8 @@
 #include "ShellOp.h"
+#include "SubShapeIndex.h"
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <TopoDS.hxx>
 #include <imgui.h>
@@ -80,9 +84,20 @@ void ShellOp::renderProperties() {
 }
 
 std::string ShellOp::serializeParams() const {
+    // The opened faces persist as ordinal indices into the INPUT shape's
+    // canonical face map (see SubShapeIndex.h).
+    std::string blob;
     char buf[96];
-    std::snprintf(buf, sizeof(buf), "thickness=%.6f", m_thickness);
-    return buf;
+    std::snprintf(buf, sizeof(buf), "body=%d;thickness=%.6f", m_bodyId, m_thickness);
+    blob += buf;
+    if (!m_previousShape.IsNull() && !m_facesToRemove.IsEmpty()) {
+        std::vector<TopoDS_Shape> faces;
+        for (const TopoDS_Shape& f : m_facesToRemove) faces.push_back(f);
+        std::string idx = SubShapeIndex::serialize(m_previousShape, faces,
+                                                   TopAbs_FACE);
+        if (!idx.empty()) blob += ";faces=" + idx;
+    }
+    return blob;
 }
 
 bool ShellOp::deserializeParams(const std::string& blob) {
@@ -95,10 +110,35 @@ bool ShellOp::deserializeParams(const std::string& blob) {
         if (end == std::string::npos) end = blob.size();
         std::string key = blob.substr(pos, eq - pos);
         std::string val = blob.substr(eq + 1, end - eq - 1);
-        if (key == "thickness") { m_thickness = std::atof(val.c_str()); any = true; }
+        if      (key == "thickness") { m_thickness = std::atof(val.c_str()); any = true; }
+        else if (key == "body")      { m_bodyId = std::atoi(val.c_str()); any = true; }
+        else if (key == "faces")     { m_faceIndices = SubShapeIndex::parse(val); any = true; }
         pos = end + 1;
     }
     return any;
+}
+
+bool ShellOp::rehydrateFromReload(const ReloadState& state, Document& /*doc*/) {
+    if (m_bodyId < 0) return false;
+
+    m_previousShape.Nullify();
+    for (const auto& [id, shp] : state.modifiedBefore)
+        if (id == m_bodyId) { m_previousShape = shp; break; }
+    if (m_previousShape.IsNull()) return false;
+
+    // Re-resolve the opened faces. A closed shell (no faces removed) is
+    // legitimate — m_faceIndices empty just means MakeThickSolid hollows
+    // without an opening. But if indices WERE saved, all must resolve.
+    m_facesToRemove.Clear();
+    if (!m_faceIndices.empty()) {
+        std::vector<TopoDS_Shape> resolved;
+        if (!SubShapeIndex::resolveAll(m_previousShape, m_faceIndices,
+                                       TopAbs_FACE, resolved)) {
+            return false;
+        }
+        for (const auto& f : resolved) m_facesToRemove.Append(f);
+    }
+    return true;
 }
 
 OperationDiff ShellOp::captureDiff() const {

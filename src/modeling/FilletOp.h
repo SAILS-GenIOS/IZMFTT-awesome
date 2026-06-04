@@ -36,6 +36,7 @@ public:
     OperationDiff captureDiff() const override;
     std::string serializeParams() const override;
     bool deserializeParams(const std::string& blob) override;
+    bool rehydrateFromReload(const ReloadState& state, Document& doc) override;
 
 private:
     int m_bodyId = -1;
@@ -45,4 +46,12 @@ private:
     // Fillet (blend) faces produced by the last execute(), so a clicked face can
     // be mapped back to this op for re-editing.
     std::vector<TopoDS_Shape> m_generatedFaces;
+    // The filleted result, captured by execute(). serializeParams indexes the
+    // generated faces against it (they're sub-shapes of the result, not the
+    // input); rehydrate restores it from the reload's after-state.
+    TopoDS_Shape m_resultShape;
+    // Sub-shape indices parsed from a saved project (see SubShapeIndex.h);
+    // resolved against the before/after shapes in rehydrateFromReload.
+    std::vector<int> m_edgeIndices;
+    std::vector<int> m_genFaceIndices;
 };

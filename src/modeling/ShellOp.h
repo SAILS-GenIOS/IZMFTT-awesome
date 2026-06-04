@@ -31,10 +31,14 @@ public:
     OperationDiff captureDiff() const override;
     std::string serializeParams() const override;
     bool deserializeParams(const std::string& blob) override;
+    bool rehydrateFromReload(const ReloadState& state, Document& doc) override;
 
 private:
     int m_bodyId = -1;
     double m_thickness = 1.0;
     TopTools_ListOfShape m_facesToRemove;
     TopoDS_Shape m_previousShape;
+    // Indices of the removed (opened) faces within the input shape's
+    // canonical face map, parsed from a saved project (see SubShapeIndex.h).
+    std::vector<int> m_faceIndices;
 };

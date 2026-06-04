@@ -62,4 +62,8 @@ private:
     // Cascade plumbing — see setSketchSource() in the public section.
     std::vector<int> m_sketchSourceIds;     // sketch id per target (-1 = none)
     std::vector<int> m_sketchSourceRegions; // region index per target (-1 = first)
+    // Reload support for FACE-driven targets: per-target ordinal index of the
+    // profile face within the source body's pre-op shape (see
+    // SubShapeIndex.h). 0 = not a face target / not resolvable.
+    std::vector<int> m_faceIndices;
 };

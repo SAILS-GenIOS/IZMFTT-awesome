@@ -36,6 +36,7 @@ public:
     OperationDiff captureDiff() const override;
     std::string serializeParams() const override;
     bool deserializeParams(const std::string& blob) override;
+    bool rehydrateFromReload(const ReloadState& state, Document& doc) override;
 
 private:
     int m_bodyId = -1;
@@ -45,4 +46,9 @@ private:
     // Chamfer faces produced by the last execute(), so a clicked face can be
     // mapped back to this op for re-editing.
     std::vector<TopoDS_Shape> m_generatedFaces;
+    // Result shape + parsed sub-shape indices — same reload scheme as
+    // FilletOp (see SubShapeIndex.h).
+    TopoDS_Shape m_resultShape;
+    std::vector<int> m_edgeIndices;
+    std::vector<int> m_genFaceIndices;
 };

@@ -1,4 +1,7 @@
 #include "FilletOp.h"
+#include "SubShapeIndex.h"
+#include <cstdio>
+#include <cstdlib>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
@@ -73,8 +76,10 @@ bool FilletOp::execute(Document& doc) {
             } catch (...) {}
         }
 
-        // Update the body with the filleted shape
-        doc.updateBody(m_bodyId, fillet.Shape());
+        // Update the body with the filleted shape (kept on the op too, so
+        // serializeParams can index the generated faces against the result).
+        m_resultShape = fillet.Shape();
+        doc.updateBody(m_bodyId, m_resultShape);
         return true;
     } catch (...) {
         return false;
@@ -117,12 +122,27 @@ OperationDiff FilletOp::captureDiff() const {
 }
 
 std::string FilletOp::serializeParams() const {
-    // Single-line key=value blob. Only scalar inputs for now — the edge set is
-    // tied to OCCT TopoDS pointers that don't survive save/load, so re-edit
-    // after reload is gated on a future face-/edge-ID stability pass.
+    // The edge set is persisted as ordinal indices into the INPUT shape's
+    // canonical sub-shape map (see SubShapeIndex.h) — BREP round-trips the
+    // shape byte-identically, so the indices resolve on reload. Generated
+    // blend faces are indexed against the RESULT shape for click-to-edit.
+    std::string blob;
     char buf[96];
-    std::snprintf(buf, sizeof(buf), "radius=%.6f", m_radius);
-    return buf;
+    std::snprintf(buf, sizeof(buf), "body=%d;radius=%.6f", m_bodyId, m_radius);
+    blob += buf;
+    if (!m_previousShape.IsNull() && !m_edges.empty()) {
+        std::vector<TopoDS_Shape> edges(m_edges.begin(), m_edges.end());
+        std::string idx = SubShapeIndex::serialize(m_previousShape, edges,
+                                                   TopAbs_EDGE);
+        if (!idx.empty()) blob += ";edges=" + idx;
+    }
+    if (!m_resultShape.IsNull() && !m_generatedFaces.empty()) {
+        std::string idx = SubShapeIndex::serialize(m_resultShape,
+                                                   m_generatedFaces,
+                                                   TopAbs_FACE);
+        if (!idx.empty()) blob += ";gen=" + idx;
+    }
+    return blob;
 }
 
 bool FilletOp::deserializeParams(const std::string& blob) {
@@ -137,10 +157,48 @@ bool FilletOp::deserializeParams(const std::string& blob) {
         if (end == std::string::npos) end = blob.size();
         std::string key = blob.substr(pos, eq - pos);
         std::string val = blob.substr(eq + 1, end - eq - 1);
-        if (key == "radius") { m_radius = std::atof(val.c_str()); any = true; }
+        if      (key == "radius") { m_radius = std::atof(val.c_str()); any = true; }
+        else if (key == "body")   { m_bodyId = std::atoi(val.c_str()); any = true; }
+        else if (key == "edges")  { m_edgeIndices = SubShapeIndex::parse(val); any = true; }
+        else if (key == "gen")    { m_genFaceIndices = SubShapeIndex::parse(val); any = true; }
         pos = end + 1;
     }
     return any;
+}
+
+bool FilletOp::rehydrateFromReload(const ReloadState& state, Document& /*doc*/) {
+    if (m_bodyId < 0 || m_edgeIndices.empty()) return false;
+
+    // Bind the before/after shapes for our body from the saved step.
+    m_previousShape.Nullify();
+    m_resultShape.Nullify();
+    for (const auto& [id, shp] : state.modifiedBefore)
+        if (id == m_bodyId) { m_previousShape = shp; break; }
+    for (const auto& [id, shp] : state.modifiedAfter)
+        if (id == m_bodyId) { m_resultShape = shp; break; }
+    if (m_previousShape.IsNull()) return false;
+
+    // Re-resolve the filleted edges against the input shape. ALL must resolve
+    // — a partial set would fillet the wrong geometry, so decline to ReplayOp.
+    std::vector<TopoDS_Shape> resolved;
+    if (!SubShapeIndex::resolveAll(m_previousShape, m_edgeIndices,
+                                   TopAbs_EDGE, resolved)) {
+        return false;
+    }
+    m_edges.clear();
+    for (const auto& s : resolved) m_edges.push_back(TopoDS::Edge(s));
+
+    // Blend faces (click-to-edit mapping) resolve against the result —
+    // best-effort: their absence only disables face-click mapping.
+    m_generatedFaces.clear();
+    if (!m_resultShape.IsNull() && !m_genFaceIndices.empty()) {
+        std::vector<TopoDS_Shape> gen;
+        if (SubShapeIndex::resolveAll(m_resultShape, m_genFaceIndices,
+                                      TopAbs_FACE, gen)) {
+            m_generatedFaces = std::move(gen);
+        }
+    }
+    return true;
 }
 
 bool FilletOp::ownsFace(const TopoDS_Shape& face) const {

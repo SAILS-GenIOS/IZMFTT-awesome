@@ -1,4 +1,7 @@
 #include "ChamferOp.h"
+#include "SubShapeIndex.h"
+#include <cstdio>
+#include <cstdlib>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopAbs_ShapeEnum.hxx>
@@ -86,8 +89,10 @@ bool ChamferOp::execute(Document& doc) {
             } catch (...) {}
         }
 
-        // Update the body with the chamfered shape
-        doc.updateBody(m_bodyId, chamfer.Shape());
+        // Update the body with the chamfered shape (kept on the op too, so
+        // serializeParams can index the generated faces against the result).
+        m_resultShape = chamfer.Shape();
+        doc.updateBody(m_bodyId, m_resultShape);
         return true;
     } catch (...) {
         return false;
@@ -130,9 +135,25 @@ OperationDiff ChamferOp::captureDiff() const {
 }
 
 std::string ChamferOp::serializeParams() const {
+    // Same persistent sub-shape scheme as FilletOp: edges indexed into the
+    // INPUT shape, generated faces into the RESULT (see SubShapeIndex.h).
+    std::string blob;
     char buf[96];
-    std::snprintf(buf, sizeof(buf), "distance=%.6f", m_distance);
-    return buf;
+    std::snprintf(buf, sizeof(buf), "body=%d;distance=%.6f", m_bodyId, m_distance);
+    blob += buf;
+    if (!m_previousShape.IsNull() && !m_edges.empty()) {
+        std::vector<TopoDS_Shape> edges(m_edges.begin(), m_edges.end());
+        std::string idx = SubShapeIndex::serialize(m_previousShape, edges,
+                                                   TopAbs_EDGE);
+        if (!idx.empty()) blob += ";edges=" + idx;
+    }
+    if (!m_resultShape.IsNull() && !m_generatedFaces.empty()) {
+        std::string idx = SubShapeIndex::serialize(m_resultShape,
+                                                   m_generatedFaces,
+                                                   TopAbs_FACE);
+        if (!idx.empty()) blob += ";gen=" + idx;
+    }
+    return blob;
 }
 
 bool ChamferOp::deserializeParams(const std::string& blob) {
@@ -145,10 +166,43 @@ bool ChamferOp::deserializeParams(const std::string& blob) {
         if (end == std::string::npos) end = blob.size();
         std::string key = blob.substr(pos, eq - pos);
         std::string val = blob.substr(eq + 1, end - eq - 1);
-        if (key == "distance") { m_distance = std::atof(val.c_str()); any = true; }
+        if      (key == "distance") { m_distance = std::atof(val.c_str()); any = true; }
+        else if (key == "body")     { m_bodyId = std::atoi(val.c_str()); any = true; }
+        else if (key == "edges")    { m_edgeIndices = SubShapeIndex::parse(val); any = true; }
+        else if (key == "gen")      { m_genFaceIndices = SubShapeIndex::parse(val); any = true; }
         pos = end + 1;
     }
     return any;
+}
+
+bool ChamferOp::rehydrateFromReload(const ReloadState& state, Document& /*doc*/) {
+    if (m_bodyId < 0 || m_edgeIndices.empty()) return false;
+
+    m_previousShape.Nullify();
+    m_resultShape.Nullify();
+    for (const auto& [id, shp] : state.modifiedBefore)
+        if (id == m_bodyId) { m_previousShape = shp; break; }
+    for (const auto& [id, shp] : state.modifiedAfter)
+        if (id == m_bodyId) { m_resultShape = shp; break; }
+    if (m_previousShape.IsNull()) return false;
+
+    std::vector<TopoDS_Shape> resolved;
+    if (!SubShapeIndex::resolveAll(m_previousShape, m_edgeIndices,
+                                   TopAbs_EDGE, resolved)) {
+        return false;
+    }
+    m_edges.clear();
+    for (const auto& s : resolved) m_edges.push_back(TopoDS::Edge(s));
+
+    m_generatedFaces.clear();
+    if (!m_resultShape.IsNull() && !m_genFaceIndices.empty()) {
+        std::vector<TopoDS_Shape> gen;
+        if (SubShapeIndex::resolveAll(m_resultShape, m_genFaceIndices,
+                                      TopAbs_FACE, gen)) {
+            m_generatedFaces = std::move(gen);
+        }
+    }
+    return true;
 }
 
 bool ChamferOp::ownsFace(const TopoDS_Shape& face) const {
