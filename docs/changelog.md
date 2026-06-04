@@ -3,6 +3,63 @@
 All notable changes to Materializr are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [0.7.0] — 2026-06-04
+
+The "real parametric CAD" release: a reopened project is no longer a frozen
+replay — its history comes back **live and editable**.
+
+### Added
+
+- **Cross-session parametric editing.** History steps reload as their real,
+  re-editable operations instead of baked snapshots: **Pattern** (count,
+  spacing, angle, axis), **Extrude** (distance, draft), **Push/Pull** —
+  sketch-region *and* bare-face targets — (distance), **Revolve** (angle,
+  axis), **Fillet** (radius), **Chamfer** (distance), **Shell** (thickness,
+  preserved openings), **Cylinder resize** (diameters), and **construction
+  plane/axis creation** (undo/redo with stable ids). Sketch-sourced profiles
+  re-derive from their sketch; edges and faces persist via a new
+  sub-shape-identity scheme and survive reloads exactly.
+- **Geometric edge re-binding.** Editing an upstream feature regenerates the
+  body — downstream fillets/chamfers now re-locate their edges on the new
+  shape by carrier geometry (same line/circle), so fillet→chamfer chains
+  survive re-edits. A genuinely consumed edge still fails loudly rather than
+  blending the wrong one.
+- **Recompute failure handling.** A step that can't recompute is suspended
+  with an explanation in the History panel and comes back automatically when
+  the upstream edit is reverted; an edit the operation itself can't build
+  (fillet radius larger than its host) snaps back to the last working value
+  and leaves the model untouched.
+- **Radial pattern around construction axes** — the rotation-axis dropdown
+  lists every construction axis (plus world X/Y/Z), taking both direction and
+  origin from the axis.
+- **Editable cylinder-resize step** — diameter field(s) in Properties.
+- **Editor ergonomics** — Enter commits a parameter edit; the History panel
+  pins Apply below a scrollable parameter area; interactive fillet/chamfer
+  re-edit (select a blend face → *Edit Fillet*) previews the full downstream
+  replay live.
+
+### Fixed
+
+- **Loft with ring profiles forms tubes** — inner boundaries loft into
+  channels and are cut from the outer body; loft and revolve both pick the
+  outermost sketch region instead of an arbitrary one.
+- **Revolve popup defaults to "Sweep Sketch profile"** when a sketch is
+  selected (previously stayed on Rotate Body and committed a snapshot step).
+- **History fidelity across saves**: nine operations saved empty body diffs
+  (pattern, loft, sweep, copy, boolean, shell, cylinder-resize, align,
+  snapshot transforms) making their reloaded steps un-undoable; re-saving a
+  reloaded project no longer collapses its history; revolve steps now record
+  their diff at all.
+- **Autosave can no longer truncate history** — it holds off while you're
+  below the history tip (mid-undo), and Close Project routes to the explicit
+  prompt instead of quietly saving a gutted file.
+- **Close Project clears the viewport fully** — construction planes/axes no
+  longer linger as unclickable ghosts.
+- Emptied sketches leave the Items panel on finish.
+- Fillet/chamfer drag quantises to the displayed 0.1 mm (an on-screen "2.0"
+  no longer stores 1.9948).
+- **Windows build restored** (broken since 0.5.2 by a POSIX-only include).
+
 ## [0.6.3] — 2026-06-02
 
 ### Added
