@@ -17,6 +17,11 @@
 #include <gp_Ax2d.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
+#include <BRep_Tool.hxx>
+#include <BRepTools.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS_Face.hxx>
+#include <Geom_Surface.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <ShapeFix_Shape.hxx>
 #include <TopTools_ListOfShape.hxx>
@@ -24,6 +29,7 @@
 #include <BRepGProp.hxx>
 #include <TopoDS.hxx>
 #include <gp_Ax3.hxx>
+#include <gp_Cylinder.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Dir2d.hxx>
 #include <imgui.h>
@@ -69,6 +75,45 @@ TopoDS_Shape ThreadOp::buildResult(const TopoDS_Shape& body) const {
     std::fprintf(stderr, "[Thread] buildResult: pitch=%.3f depth=%.3f r=%.3f "
                          "len=%.3f hole=%d\n",
                  m_pitch, m_depth, m_radius, m_length, m_isHole ? 1 : 0);
+
+    // PRE-FLIGHT GATE: threads only ever cut FULL, CLOSED cylinders. After
+    // ~40 harness experiments, any boolean between the helical band tool and
+    // a PARTIAL cylinder (e.g. the half of a lengthwise split) is
+    // unreliable in OCCT — it coin-flips between no-ops, inverted removal,
+    // and plausible-volume cuts of the WRONG material (the "stacked poker
+    // chips" body), and those garbage solids go on to crash the tessellator.
+    // Require a cylindrical face on this body matching our axis + radius
+    // with a full 2π wrap; otherwise decline cleanly (the step suspends with
+    // the explainer banner).
+    {
+        bool fullCylinder = false;
+        gp_Pnt axLoc(m_axOX, m_axOY, m_axOZ);
+        gp_Dir axDir(m_axDX, m_axDY, m_axDZ);
+        for (TopExp_Explorer fx(body, TopAbs_FACE);
+             fx.More() && !fullCylinder; fx.Next()) {
+            TopoDS_Face f = TopoDS::Face(fx.Current());
+            Handle(Geom_CylindricalSurface) cs =
+                Handle(Geom_CylindricalSurface)::DownCast(BRep_Tool::Surface(f));
+            if (cs.IsNull()) continue;
+            gp_Cylinder cyl = cs->Cylinder();
+            if (std::abs(cyl.Radius() - m_radius) > 1e-4) continue;
+            if (std::abs(cyl.Position().Direction().Dot(axDir)) < 0.9999)
+                continue;
+            // axis line coincidence: location must lie on our axis
+            gp_Vec d(axLoc, cyl.Position().Location());
+            if (d.Magnitude() > 1e-6 &&
+                d.Crossed(gp_Vec(axDir)).Magnitude() > 1e-3) continue;
+            double u1, u2, v1, v2;
+            BRepTools::UVBounds(f, u1, u2, v1, v2);
+            if (std::abs((u2 - u1) - 2.0 * M_PI) < 1e-3) fullCylinder = true;
+        }
+        if (!fullCylinder) {
+            std::fprintf(stderr, "[Thread] declined: body no longer has the "
+                                 "full cylindrical face (partial cylinders "
+                                 "cannot be threaded reliably)\n");
+            return {};
+        }
+    }
     try {
         // Rebuild the axis from the serialisable components (identical for
         // fresh and reloaded ops).
