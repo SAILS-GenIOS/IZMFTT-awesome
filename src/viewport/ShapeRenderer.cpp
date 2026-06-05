@@ -54,11 +54,19 @@ uniform float u_ambient;       // base illumination 0..1 (softens shadows)
 uniform bool u_headlight;      // key light tracks the camera when true
 uniform float u_fillStrength;  // fill light contribution (0 disables it)
 uniform bool u_previewCut;     // tint red: this volume will be subtracted
+uniform bool u_sectionEnabled; // section view: clip away one side of a plane
+uniform vec3 u_sectionPoint;   // a point on the section plane (world)
+uniform vec3 u_sectionNormal;  // plane normal; the normal side is removed
 
 out vec4 fragColor;
 
 void main() {
+    if (u_sectionEnabled &&
+        dot(v_worldPos - u_sectionPoint, u_sectionNormal) > 0.0) discard;
     vec3 normal = normalize(v_worldNormal);
+    // A section cut exposes interior back faces; flip their normals so the
+    // inside is lit instead of rendering black.
+    if (!gl_FrontFacing) normal = -normal;
     vec3 viewDir = normalize(u_viewPos - v_worldPos);
     // Headlight: the key light comes from the camera, so the face the user is
     // looking at is always lit and large cast shadows disappear.
@@ -163,6 +171,9 @@ bool ShapeRenderer::initialize()
     m_meshLoc_headlight = glGetUniformLocation(m_meshProgram, "u_headlight");
     m_meshLoc_fillStrength = glGetUniformLocation(m_meshProgram, "u_fillStrength");
     m_meshLoc_previewCut = glGetUniformLocation(m_meshProgram, "u_previewCut");
+    m_meshLoc_sectionEnabled = glGetUniformLocation(m_meshProgram, "u_sectionEnabled");
+    m_meshLoc_sectionPoint = glGetUniformLocation(m_meshProgram, "u_sectionPoint");
+    m_meshLoc_sectionNormal = glGetUniformLocation(m_meshProgram, "u_sectionNormal");
 
     // Compile outline shader
     unsigned int outlineVert = 0, outlineFrag = 0;
@@ -404,6 +415,14 @@ void ShapeRenderer::render(const glm::mat4& view, const glm::mat4& projection,
     if (!m_meshProgram || m_meshes.empty()) return;
 
     glEnable(GL_DEPTH_TEST);
+
+    // Section-view clip uniforms. Set before BOTH passes — the outline pass
+    // below also runs the mesh program for its stencil fill, and it must
+    // clip identically or the selection glow paints over the removed half.
+    glUseProgram(m_meshProgram);
+    glUniform1i(m_meshLoc_sectionEnabled, m_sectionEnabled ? 1 : 0);
+    glUniform3fv(m_meshLoc_sectionPoint, 1, glm::value_ptr(m_sectionPoint));
+    glUniform3fv(m_meshLoc_sectionNormal, 1, glm::value_ptr(m_sectionNormal));
 
     // First pass: render all selected meshes with stencil write
     // Then render the outline for selected meshes

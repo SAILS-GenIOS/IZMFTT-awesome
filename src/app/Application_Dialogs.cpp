@@ -1349,6 +1349,12 @@ void Application::renderThreadPanel() {
                            "Too many turns (max 300) — raise the pitch.");
     }
     ImGui::TextDisabled("Computed on Apply — may take a few seconds.");
+    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.35f, 1.0f),
+                       "Apply threads LAST.");
+    ImGui::TextWrapped("Make all other cuts (holes, slots, splits, chamfers) "
+                       "first — modeling operations on threaded bodies are "
+                       "refused. To change a threaded part: delete the "
+                       "Thread step in History, edit, then re-thread.");
 
     ImGui::Separator();
     bool applyClicked  = ImGui::Button("Apply", ImVec2(120, 0));
@@ -2464,6 +2470,96 @@ void Application::renderConstructionAxisPanel() {
     }
 
     ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// Section View — render-only clip plane for inspecting interiors (thread
+// profiles, wall thickness) without destructive booleans.
+
+gp_Pln Application::sectionBasePlane() const {
+    gp_Pln pl;
+    bool fromDatum = false;
+    if (m_sectionPlaneId >= 0) {
+        if (const PlaneEntry* pe = m_document->getPlane(m_sectionPlaneId)) {
+            pl = pe->plane;
+            fromDatum = true;
+        }
+    }
+    if (!fromDatum) {
+        switch (m_sectionWorldPlane) {
+            case 0:  pl = gp_Pln(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)); break; // XY
+            case 1:  pl = gp_Pln(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0)); break; // XZ
+            default: pl = gp_Pln(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)); break; // YZ
+        }
+    }
+    if (m_sectionFlip) {
+        const gp_Ax3& ax = pl.Position();
+        pl = gp_Pln(gp_Ax3(ax.Location(), ax.Direction().Reversed()));
+    }
+    return pl;
+}
+
+void Application::renderSectionPanel() {
+    if (!m_sectionEnabled) return;
+
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        ImVec2(vp->WorkPos.x + vp->WorkSize.x - 16.0f, vp->WorkPos.y + 60.0f),
+        ImGuiCond_FirstUseEver, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.92f);
+    bool open = true;
+    if (ImGui::Begin("Section View", &open,
+                     ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoSavedSettings)) {
+        static const char* kWorldNames[3] = {
+            "World XY (front)", "World XZ (ground)", "World YZ (side)"};
+
+        // The selected construction plane may have been deleted — fall back
+        // to a world plane rather than sectioning by a stale gp_Pln.
+        std::string current;
+        if (m_sectionPlaneId >= 0) {
+            const PlaneEntry* pe = m_document->getPlane(m_sectionPlaneId);
+            if (pe) current = pe->name;
+            else { m_sectionPlaneId = -1; m_sectionDirty = true; }
+        }
+        if (m_sectionPlaneId < 0) current = kWorldNames[m_sectionWorldPlane];
+
+        ImGui::SetNextItemWidth(200.0f);
+        if (ImGui::BeginCombo("Plane", current.c_str())) {
+            for (int w = 0; w < 3; ++w) {
+                bool sel = m_sectionPlaneId < 0 && m_sectionWorldPlane == w;
+                if (ImGui::Selectable(kWorldNames[w], sel)) {
+                    m_sectionPlaneId = -1;
+                    m_sectionWorldPlane = w;
+                    m_sectionDirty = true;
+                }
+            }
+            auto planeIds = m_document->getAllPlaneIds();
+            if (!planeIds.empty()) ImGui::Separator();
+            for (int id : planeIds) {
+                const PlaneEntry* pe = m_document->getPlane(id);
+                if (!pe) continue;
+                ImGui::PushID(id);
+                if (ImGui::Selectable(pe->name.c_str(),
+                                      m_sectionPlaneId == id)) {
+                    m_sectionPlaneId = id;
+                    m_sectionDirty = true;
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+
+        ImGui::SetNextItemWidth(200.0f);
+        if (ImGui::DragFloat("Offset (mm)", &m_sectionOffset, 0.25f))
+            m_sectionDirty = true;
+        if (ImGui::Checkbox("Flip side", &m_sectionFlip))
+            m_sectionDirty = true;
+
+        ImGui::TextDisabled("View-only: bodies are not modified.");
+    }
+    ImGui::End();
+    if (!open) m_sectionEnabled = false;
 }
 
 } // namespace materializr

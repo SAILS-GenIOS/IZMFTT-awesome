@@ -34,6 +34,7 @@ class Picker;
 class Gizmo;
 class SelectionHighlight;
 class BoxSelect;
+class SectionView;
 class Toolbar;
 class HistoryPanel;
 class AboutDialog;
@@ -56,6 +57,7 @@ class Document;
 class History;
 class SelectionManager;
 class ThreadOp;
+class PushPullOp;
 
 namespace materializr {
 
@@ -217,6 +219,7 @@ private:
     std::unique_ptr<Gizmo> m_gizmo;
     std::unique_ptr<SelectionHighlight> m_selectionHighlight;
     std::unique_ptr<BoxSelect> m_boxSelect;
+    std::unique_ptr<SectionView> m_sectionView;
     std::unique_ptr<Document> m_document;
     std::unique_ptr<History> m_history;
     std::unique_ptr<SelectionManager> m_selection;
@@ -334,6 +337,12 @@ private:
     glm::vec3 m_pushPullOrigin{0.0f};
     glm::vec3 m_pushPullNormal{0.0f, 0.0f, 1.0f};
     bool m_pushPullHasArrow = false;
+    // Dense-body drag protection: when any target body has >250 faces (a
+    // threaded rod), the per-frame preview shows a tinted GHOST of the tool
+    // volume instead of running the real boolean (which would also trigger
+    // the thread reflow) every frame. The real op runs once, on commit.
+    bool m_pushPullHeavyPreview = false;
+    std::unique_ptr<PushPullOp> makePushPullOpFromState() const;
 
     // Snap-to-grid for gizmo translate (shares the grid step with the sketch grid).
     bool m_snapToGrid = true;
@@ -609,6 +618,21 @@ private:
     // thread polls it each frame and pushes the op when ready.
     std::future<TopoDS_Shape> m_threadFuture;
     bool   m_threadComputing = false;
+
+    // Section View — render-only clipping of the scene by a plane so the
+    // user can inspect interiors (thread profiles, wall thickness) without
+    // destructive booleans. Plane source is a construction plane or a world
+    // plane; offset slides it along its normal; flip swaps which half is
+    // hidden. ShapeRenderer discards clipped fragments; SectionView overlays
+    // the true B-rep intersection curves on the cut.
+    bool   m_sectionEnabled    = false;
+    int    m_sectionPlaneId    = -1;  // construction plane id; -1 = world
+    int    m_sectionWorldPlane = 1;   // 0=XY 1=XZ 2=YZ (when planeId < 0)
+    float  m_sectionOffset     = 0.0f;
+    bool   m_sectionFlip       = false;
+    bool   m_sectionDirty      = true; // recompute overlay curves next frame
+    gp_Pln sectionBasePlane() const;  // flip applied, offset NOT applied
+    void   renderSectionPanel();      // floating controls while enabled
 
     void beginThread();        // copies detector output, opens the popup
     std::unique_ptr<ThreadOp> makeThreadOpFromState() const;

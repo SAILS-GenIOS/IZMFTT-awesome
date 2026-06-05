@@ -22,6 +22,7 @@
 #include "viewport/Gizmo.h"
 #include "viewport/SelectionHighlight.h"
 #include "viewport/BoxSelect.h"
+#include "viewport/SectionView.h"
 #include "viewport/EdgeRenderer.h"
 #include "viewport/BackgroundRenderer.h"
 #include "core/Document.h"
@@ -121,7 +122,8 @@ void Application::renderViewport() {
     if (w > 0 && h > 0) {
         m_viewport->resize(w, h);
 
-        if (m_meshesDirty || !m_dirtyBodyIds.empty()) {
+        bool geomChanged = m_meshesDirty || !m_dirtyBodyIds.empty();
+        if (geomChanged) {
             rebuildMeshes();
             m_meshesDirty = false;
             // rebuildMeshes() also clears m_dirtyBodyIds on completion.
@@ -215,8 +217,32 @@ void Application::renderViewport() {
                 if (pass.render) pass.render(*m_pluginContext, view, proj);
             }
         }
+        // Section view: feed the clip plane to the body shader and refresh
+        // the intersection-curve overlay when geometry or the plane changed.
+        if (m_sectionEnabled && m_sectionView) {
+            gp_Pln pl = sectionBasePlane();
+            gp_Pnt o = pl.Location();
+            gp_Dir n = pl.Axis().Direction();
+            glm::vec3 p(o.X() + n.X() * m_sectionOffset,
+                        o.Y() + n.Y() * m_sectionOffset,
+                        o.Z() + n.Z() * m_sectionOffset);
+            m_shapeRenderer->setSectionPlane(true, p,
+                                             glm::vec3(n.X(), n.Y(), n.Z()));
+            if (m_sectionDirty || geomChanged) {
+                m_sectionView->setEnabled(true);
+                m_sectionView->setPlane(pl);
+                m_sectionView->setOffset(m_sectionOffset);
+                m_sectionView->update();
+                m_sectionDirty = false;
+            }
+        } else {
+            m_shapeRenderer->setSectionPlane(false, glm::vec3(0.0f),
+                                             glm::vec3(0.0f, 1.0f, 0.0f));
+            if (m_sectionView) m_sectionView->setEnabled(false);
+        }
         m_shapeRenderer->render(view, proj, cam.getPosition());
         m_edgeRenderer->render(view, proj);
+        if (m_sectionView) m_sectionView->render(view, proj);
 
         // Render selection highlight (face/edge/body)
         // Selection highlight is cached in world coords — it wouldn't follow

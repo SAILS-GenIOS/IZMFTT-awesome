@@ -10,20 +10,23 @@ bool History::pushOperation(std::unique_ptr<Operation> op, Document& doc) {
         return false;
     }
 
-    // Thread-last reflow: threads are a finishing pass. An op that touches
-    // a threaded body is inserted BEFORE the trailing Thread steps so its
-    // boolean runs against clean geometry (OCCT cannot classify cuts along
-    // helical groove fields — established empirically at length), and the
-    // threads re-cut parametrically afterwards.
+    // THREADS ARE A FINISHING PASS — by user discipline, not by automatic
+    // reflow. The reflow machinery (reflowInsertionIndex +
+    // insertStepAndReplay, kept below for the future hybrid) silently
+    // re-ran a full validated per-turn thread recompute on the main thread
+    // for EVERY op touching a threaded body — Steve: "it is too resource
+    // intensive to just artificially shuffle to the end". An op that
+    // targets a thread-modified body is now REFUSED with guidance instead:
+    // delete the Thread step, make the change, re-thread (the thread step
+    // is parametric and cheap to re-apply).
     {
         int at = reflowInsertionIndex(*op);
         if (at >= 0) {
-            std::fprintf(stderr, "[History] reflow: inserting '%s' before "
-                                 "thread step %d\n",
-                         op->name().c_str(), at);
-            if (insertStepAndReplay(at, std::move(op), doc)) return true;
-            // Reflow declined or the op failed against clean geometry — the
-            // op was consumed either way.
+            std::fprintf(stderr, "[History] '%s' declined: this body has "
+                                 "Thread steps. Threads must be applied "
+                                 "LAST — delete the Thread step, make this "
+                                 "change, then re-apply the thread.\n",
+                         op->name().c_str());
             return false;
         }
     }
@@ -350,18 +353,17 @@ int History::reflowInsertionIndex(const Operation& op) const {
     // Walk down from the top, SKIPPING steps unrelated to the op's bodies
     // (real histories always have sketches / other-body work above the
     // thread). Reorder beneath the deepest thread that touched a planned
-    // body; stop cold at any NON-thread step touching a planned body — the
-    // op may depend on its result, so we can't jump past it.
+    // body. NON-thread touching steps above that thread no longer block:
+    // insertStepAndReplay replays them BEFORE the new op (thread-last
+    // partition), so an op that depends on their results — e.g. a Boolean
+    // subtract whose tool body was push/pulled into existence AFTER the
+    // thread — still sees them applied. (The old stop-cold rule made that
+    // Boolean run directly against the threaded rod: kernel garbage.)
     int insertAt = -1;
     for (int i = limit; i >= 0; --i) {
         const Operation* s = m_operations[i].get();
         if (!s->isEnabled()) continue;
-        bool touches = touchesPlanned(s);
-        if (s->typeId() == "thread") {
-            if (touches) insertAt = i;
-            continue;
-        }
-        if (touches) break;
+        if (s->typeId() == "thread" && touchesPlanned(s)) insertAt = i;
     }
     return insertAt;
 }
@@ -409,29 +411,84 @@ bool History::insertStepAndReplay(int index, std::unique_ptr<Operation> op,
         m_operations[touched[k]]->undo(doc);
     }
 
-    // The new op runs against clean geometry.
-    if (!op->execute(doc)) {
-        for (int i : touched) {
-            Operation* s = m_operations[i].get();
+    // EXTRACT the touched ops (highest index first so the indices stay
+    // valid), preserving their original relative order. They go back in
+    // THREAD-LAST order: non-thread steps first (rebuilding e.g. the tool
+    // body a Boolean depends on), then the new op, then the threads — so
+    // every boolean in the chain runs against clean geometry and the
+    // threads re-cut parametrically at the end.
+    std::vector<std::unique_ptr<Operation>> extracted;
+    for (int k = static_cast<int>(touched.size()) - 1; k >= 0; --k) {
+        extracted.insert(extracted.begin(),
+                         std::move(m_operations[touched[k]]));
+        m_operations.erase(m_operations.begin() + touched[k]);
+    }
+    std::vector<size_t> ntIdx, thIdx; // partition, original order kept
+    for (size_t k = 0; k < extracted.size(); ++k) {
+        if (extracted[k]->typeId() == "thread") thIdx.push_back(k);
+        else ntIdx.push_back(k);
+    }
+
+    // Bail-out: re-execute everything in ORIGINAL order against the rolled-
+    // back state and re-insert the block at `index` (untouched window steps
+    // end up after the block, but they share no bodies with it).
+    auto restoreOriginal = [&]() {
+        for (auto& s : extracted) {
             if (s->execute(doc)) s->rememberGoodParams();
         }
+        m_operations.insert(m_operations.begin() + index,
+                            std::make_move_iterator(extracted.begin()),
+                            std::make_move_iterator(extracted.end()));
+    };
+
+    // 1. Replay the non-thread steps the op may depend on.
+    for (size_t n = 0; n < ntIdx.size(); ++n) {
+        Operation* s = extracted[ntIdx[n]].get();
+        if (!s->execute(doc)) {
+            std::fprintf(stderr, "[History] reflow declined: step '%s' "
+                                 "failed against pre-thread geometry\n",
+                         s->name().c_str());
+            for (size_t u = n; u-- > 0;) extracted[ntIdx[u]]->undo(doc);
+            restoreOriginal();
+            return false;
+        }
+        s->rememberGoodParams();
+    }
+
+    // 2. The new op runs against clean geometry.
+    if (!op->execute(doc)) {
+        for (size_t u = ntIdx.size(); u-- > 0;) extracted[ntIdx[u]]->undo(doc);
+        restoreOriginal();
         return false;
     }
     op->rememberGoodParams();
 
-    // Splice it in and replay the touched steps on the new geometry.
-    m_operations.insert(m_operations.begin() + index, std::move(op));
+    // 3. Splice the reordered block in: [non-threads..., op, threads...].
+    std::vector<std::unique_ptr<Operation>> block;
+    block.reserve(extracted.size() + 1);
+    for (size_t k : ntIdx) block.push_back(std::move(extracted[k]));
+    const int opPos = index + static_cast<int>(ntIdx.size());
+    block.push_back(std::move(op));
+    for (size_t k : thIdx) block.push_back(std::move(extracted[k]));
+    m_operations.insert(m_operations.begin() + index,
+                        std::make_move_iterator(block.begin()),
+                        std::make_move_iterator(block.end()));
     if (m_breakpoint >= index) m_breakpoint++;
     m_currentIndex = limit + 1;
-    for (int i : touched) {
-        Operation* s = m_operations[i + 1].get(); // shifted by the insert
+
+    // 4. The threads re-cut on the new geometry.
+    const int thBase = opPos + 1;
+    bool replayFailed = false;
+    for (int t = 0; t < static_cast<int>(thIdx.size()); ++t) {
+        Operation* s = m_operations[thBase + t].get();
         if (!s->execute(doc)) {
             // E.g. the thread's cylindrical span was consumed. The user's op
             // DID apply; the step suspends with the explainer banner.
             std::fprintf(stderr, "[History] reflow: step %d '%s' could not "
                                  "re-execute\n",
-                         i + 1, s->name().c_str());
-            m_failedReplayAt = i + 1;
+                         thBase + t, s->name().c_str());
+            m_failedReplayAt = thBase + t;
+            replayFailed = true;
             break;
         }
         s->rememberGoodParams();
@@ -441,13 +498,14 @@ bool History::insertStepAndReplay(int index, std::unique_ptr<Operation> op,
     // lengthwise through a bolt must leave threads on BOTH halves, not just
     // the half that kept the original body id ("half of it is smooth").
     // Clone each displaced thread for each created body and append the
-    // clones as real (undoable, saveable) steps.
-    if (m_failedReplayAt < 0) {
-        OperationDiff nd = m_operations[index]->captureDiff();
+    // clones as real (undoable, saveable) steps. Gate on THIS replay's
+    // outcome — a stale m_failedReplayAt from an earlier suspension must
+    // not silently skip propagation.
+    if (!replayFailed) {
+        OperationDiff nd = m_operations[opPos]->captureDiff();
         for (int createdId : nd.created) {
-            for (int i : touched) {
-                Operation* s = m_operations[i + 1].get();
-                if (s->typeId() != "thread") continue;
+            for (int t = 0; t < static_cast<int>(thIdx.size()); ++t) {
+                Operation* s = m_operations[thBase + t].get();
                 std::unique_ptr<Operation> clone = s->cloneForBody(createdId);
                 if (!clone) continue;
                 if (!clone->execute(doc)) {

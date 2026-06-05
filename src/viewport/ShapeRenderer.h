@@ -77,6 +77,15 @@ public:
     /// Update the scene lighting parameters (applied on the next render).
     void setLighting(const LightingParams& params) { m_lighting = params; }
 
+    /// Section view: clip away the half-space on the `normal` side of the
+    /// plane through `point`. Render-only — geometry is untouched.
+    void setSectionPlane(bool enabled, const glm::vec3& point,
+                         const glm::vec3& normal) {
+        m_sectionEnabled = enabled;
+        m_sectionPoint = point;
+        m_sectionNormal = normal;
+    }
+
     /// Remove all meshes.
     void clear();
 
@@ -128,6 +137,9 @@ private:
     int m_meshLoc_headlight = -1;
     int m_meshLoc_fillStrength = -1;
     int m_meshLoc_previewCut = -1;
+    int m_meshLoc_sectionEnabled = -1;
+    int m_meshLoc_sectionPoint = -1;
+    int m_meshLoc_sectionNormal = -1;
 
     // Outline shader program
     unsigned int m_outlineProgram = 0;
@@ -144,6 +156,11 @@ private:
     LightingParams m_lighting{};
     glm::vec4 m_outlineColor = glm::vec4(0.2f, 0.5f, 1.0f, 1.0f);
     float m_outlineWidth = 0.02f;
+
+    // Section view clip plane (see setSectionPlane)
+    bool m_sectionEnabled = false;
+    glm::vec3 m_sectionPoint = glm::vec3(0.0f);
+    glm::vec3 m_sectionNormal = glm::vec3(0.0f, 1.0f, 0.0f);
 };
 
 } // namespace materializr

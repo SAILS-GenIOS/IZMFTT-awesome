@@ -76,17 +76,20 @@ TopoDS_Shape ThreadOp::buildResult(const TopoDS_Shape& body) const {
                          "len=%.3f hole=%d\n",
                  m_pitch, m_depth, m_radius, m_length, m_isHole ? 1 : 0);
 
-    // PRE-FLIGHT GATE: threads only ever cut FULL, CLOSED cylinders. After
-    // ~40 harness experiments, any boolean between the helical band tool and
-    // a PARTIAL cylinder (e.g. the half of a lengthwise split) is
-    // unreliable in OCCT — it coin-flips between no-ops, inverted removal,
-    // and plausible-volume cuts of the WRONG material (the "stacked poker
-    // chips" body), and those garbage solids go on to crash the tessellator.
-    // Require a cylindrical face on this body matching our axis + radius
-    // with a full 2π wrap; otherwise decline cleanly (the step suspends with
-    // the explainer banner).
+    // PRE-FLIGHT STRATEGY CHECK. The single compound band tool only cuts
+    // reliably against FULL, CLOSED cylinders — after ~40 harness
+    // experiments, any boolean between it and a PARTIAL or INTERRUPTED
+    // cylinder (the half of a lengthwise split, a rod with a cross-hole)
+    // coin-flips between no-ops, inverted removal, and plausible-volume cuts
+    // of the WRONG material (the "stacked poker chips" body), and those
+    // garbage solids go on to crash the tessellator. Such bodies take the
+    // PER-TURN SEQUENTIAL path below instead: one boolean per turn, each
+    // validated by removed volume, failed turns retried through a variant
+    // ladder (micro-jitters that break the surface coincidences that make
+    // the kernel misclassify). Proven in the volume harness: lengthwise
+    // halves thread 21/21 turns, holed rods ~20/21.
+    bool fullCylinder = false;
     {
-        bool fullCylinder = false;
         gp_Pnt axLoc(m_axOX, m_axOY, m_axOZ);
         gp_Dir axDir(m_axDX, m_axDY, m_axDZ);
         for (TopExp_Explorer fx(body, TopAbs_FACE);
@@ -105,13 +108,11 @@ TopoDS_Shape ThreadOp::buildResult(const TopoDS_Shape& body) const {
                 d.Crossed(gp_Vec(axDir)).Magnitude() > 1e-3) continue;
             double u1, u2, v1, v2;
             BRepTools::UVBounds(f, u1, u2, v1, v2);
+            // A face with an inner wire (cross-hole mouth) keeps full outer
+            // UV bounds, so "full 2π wrap" here really means "uninterrupted
+            // enough for the compound tool to have a chance" — the volume
+            // guard in tryCut still arbitrates, and per-turn is the net.
             if (std::abs((u2 - u1) - 2.0 * M_PI) < 1e-3) fullCylinder = true;
-        }
-        if (!fullCylinder) {
-            std::fprintf(stderr, "[Thread] declined: body no longer has the "
-                                 "full cylindrical face (partial cylinders "
-                                 "cannot be threaded reliably)\n");
-            return {};
         }
     }
     try {
@@ -167,21 +168,39 @@ TopoDS_Shape ThreadOp::buildResult(const TopoDS_Shape& body) const {
         // runs are CHUNKED per turn — the tame-patch segmentation that makes
         // the boolean cut reliably (a single 30-turn lofted spline removes
         // nothing or worse; proven via the headless volume harness).
+        // `vRef` anchors the helix PHASE: u = 0 at v = vRef (shifted by whole
+        // turns so u stays near 0 within [lo, hi] — the surface is periodic
+        // and phase mod 2π is what aligns the groove). The compound path
+        // passes vRef = lo (the historical anchor); the per-turn path passes
+        // the same vRef for every turn so all its tools lie on ONE helix.
+        // `tlLo`/`tlHi` are the taper lengths at each end of the band; a
+        // value <= 0 produces a SQUARE end (the band stops on a straight
+        // axial edge instead of tapering to a tip). Interior per-turn tools
+        // use square ends — their end walls sit INSIDE the neighbouring
+        // void, away from every existing surface. The interlocking 0.5P
+        // tapers were inherited from the compound recipe's runout, and they
+        // are exactly the surfaces that made every neighbouring-void
+        // boolean coin-flip (the whole shrink/debt/repair saga, all of
+        // whose repairs OCCT inverted). Tapers remain only at the thread's
+        // real ends, where runout belongs.
         auto bandWire = [&](const Handle(Geom_CylindricalSurface)& surf,
-                            double uSign, double lo, double hi, double off,
-                            int nSeg) -> TopoDS_Wire {
+                            double uSign, double vRef, double lo, double hi,
+                            double off, int nSeg, double tlLo,
+                            double tlHi) -> TopoDS_Wire {
+            double kTurn = std::floor((lo - vRef) / m_pitch + 1e-9);
             auto onHelix = [&](double v) {
-                return gp_Pnt2d(uSign * 2.0 * M_PI * (v - lo) / m_pitch, v);
+                return gp_Pnt2d(
+                    uSign * 2.0 * M_PI * ((v - vRef) / m_pitch - kTurn), v);
             };
             auto offHelix = [&](double v, double dv) {
                 gp_Pnt2d p = onHelix(v);
                 return gp_Pnt2d(p.X(), p.Y() + dv);
             };
-            double tl = 0.5 * m_pitch; // taper length at each end
-            gp_Pnt2d A  = onHelix(lo);
-            gp_Pnt2d L1 = offHelix(lo + tl, -off), L2 = offHelix(hi - tl, -off);
-            gp_Pnt2d D  = onHelix(hi);
-            gp_Pnt2d U2 = offHelix(hi - tl, off),  U1 = offHelix(lo + tl, off);
+            bool sqLo = tlLo <= 0.0, sqHi = tlHi <= 0.0;
+            gp_Pnt2d L1 = offHelix(lo + std::max(tlLo, 0.0), -off);
+            gp_Pnt2d L2 = offHelix(hi - std::max(tlHi, 0.0), -off);
+            gp_Pnt2d U2 = offHelix(hi - std::max(tlHi, 0.0), off);
+            gp_Pnt2d U1 = offHelix(lo + std::max(tlLo, 0.0), off);
             BRepBuilderAPI_MakeWire mw;
             auto addChunked = [&](gp_Pnt2d p, gp_Pnt2d q, int n) {
                 for (int i = 0; i < n; ++i) {
@@ -196,22 +215,43 @@ TopoDS_Shape ThreadOp::buildResult(const TopoDS_Shape& body) const {
                     mw.Add(e);
                 }
             };
-            addChunked(A, L1, 1);
             addChunked(L1, L2, nSeg);
-            addChunked(L2, D, 1);
-            addChunked(D, U2, 1);
+            if (sqHi) {
+                addChunked(L2, U2, 1); // square top: straight axial edge
+            } else {
+                gp_Pnt2d D = onHelix(hi);
+                addChunked(L2, D, 1);
+                addChunked(D, U2, 1);
+            }
             addChunked(U2, U1, nSeg);
-            addChunked(U1, A, 1);
+            if (sqLo) {
+                addChunked(U1, L1, 1); // square bottom
+            } else {
+                gp_Pnt2d A = onHelix(lo);
+                addChunked(U1, A, 1);
+                addChunked(A, L1, 1);
+            }
             return mw.Wire();
         };
 
-        auto buildCutter = [&](double lo, double hi) -> TopoDS_Shape {
+        // Full-parameter cutter builder. `outClear`/`wFac`/`dJit` are the
+        // per-turn variant ladder's micro-jitters (clearance, groove width
+        // factor, extra depth) — they break the exact surface coincidences
+        // between a turn's tool and the surfaces the previous turn's cut
+        // created, which is what makes the kernel misclassify. `nSeg` is the
+        // chunk count of the long runs; one chunk PER TURN, exactly.
+        auto buildCutterEx = [&](double lo, double hi, double vRef,
+                                 double outClear, double wFac, double dJit,
+                                 int nSeg, double tlLo,
+                                 double tlHi) -> TopoDS_Shape {
             try {
-                // Outer surface 0.1 mm on the material-free side of the face
-                // (clean detachment without near-tangency); inner surface at
-                // the groove apex. (For a hole, "outer" is inside the void.)
-                double rOut = m_isHole ? (m_radius - 0.10) : (m_radius + 0.10);
-                double rIn  = m_isHole ? (m_radius + depth) : (m_radius - depth);
+                // Outer surface on the material-free side of the face (clean
+                // detachment without near-tangency); inner surface at the
+                // groove apex. (For a hole, "outer" is inside the void.)
+                double d   = depth + dJit;
+                double rOut = m_isHole ? (m_radius - outClear)
+                                       : (m_radius + outClear);
+                double rIn  = m_isHole ? (m_radius + d) : (m_radius - d);
                 Handle(Geom_CylindricalSurface) sOut =
                     new Geom_CylindricalSurface(ax3, rOut);
                 Handle(Geom_CylindricalSurface) sIn =
@@ -219,17 +259,17 @@ TopoDS_Shape ThreadOp::buildResult(const TopoDS_Shape& body) const {
 
                 // u+ is a right-handed screw for any face axis orientation
                 // (chirality is invariant under axis flip).
-                double t = (hi - lo) / m_pitch;
                 double uSign = m_rightHanded ? 1.0 : -1.0;
                 // Groove opening = 7/8 of the pitch, leaving an ISO-like
                 // crest land of P/8. The old 0.45·pitch cap (a leftover sweep
                 // -era safety) left two-thirds of the pitch as flat land —
                 // Steve: "looks more like a leadscrew than an actual screw".
-                double halfW = 0.4375 * m_pitch;
-                int nSeg = std::max(4, static_cast<int>(std::ceil(t)));
+                double halfW = 0.4375 * m_pitch * wFac;
 
-                TopoDS_Wire w1 = bandWire(sOut, uSign, lo, hi, halfW, nSeg);
-                TopoDS_Wire w2 = bandWire(sIn, uSign, lo, hi, halfW * 0.25, nSeg);
+                TopoDS_Wire w1 = bandWire(sOut, uSign, vRef, lo, hi,
+                                          halfW, nSeg, tlLo, tlHi);
+                TopoDS_Wire w2 = bandWire(sIn, uSign, vRef, lo, hi,
+                                          halfW * 0.25, nSeg, tlLo, tlHi);
 
                 BRepOffsetAPI_ThruSections tool(Standard_True);
                 tool.AddWire(w1);
@@ -243,6 +283,14 @@ TopoDS_Shape ThreadOp::buildResult(const TopoDS_Shape& body) const {
                 return tool.Shape();
             } catch (...) { return {}; }
         };
+        // The historical compound-tool builder (full-cylinder fast path) —
+        // parameters bit-identical to every shipped release.
+        auto buildCutter = [&](double lo, double hi) -> TopoDS_Shape {
+            double t = (hi - lo) / m_pitch;
+            int nSeg = std::max(4, static_cast<int>(std::ceil(t)));
+            return buildCutterEx(lo, hi, lo, 0.10, 1.0, 0.0, nSeg,
+                                 0.5 * m_pitch, 0.5 * m_pitch);
+        };
 
         auto shapeVol = [](const TopoDS_Shape& s) -> double {
             try {
@@ -253,19 +301,96 @@ TopoDS_Shape ThreadOp::buildResult(const TopoDS_Shape& body) const {
         };
         const double bodyVol = shapeVol(body);
 
-        auto cutOnce = [&](const TopoDS_Shape& tool) -> TopoDS_Shape {
+        auto cutOn = [&](const TopoDS_Shape& target, const TopoDS_Shape& tool,
+                         double fuzz) -> TopoDS_Shape {
             try {
                 BRepAlgoAPI_Cut cut;
                 TopTools_ListOfShape args, tools;
-                args.Append(body);
+                args.Append(target);
                 tools.Append(tool);
                 cut.SetArguments(args);
                 cut.SetTools(tools);
-                cut.SetFuzzyValue(1.0e-3);
+                cut.SetFuzzyValue(fuzz);
+                // The per-turn path runs dozens of these sequentially on
+                // the worker thread; let each boolean use the machine
+                // (Steve watched a 27-turn rod pin ONE of 16 cores for a
+                // minute).
+                cut.SetRunParallel(Standard_True);
                 cut.Build();
                 if (!cut.IsDone()) return {};
                 return cut.Shape();
             } catch (...) { return {}; }
+        };
+        auto cutOnce = [&](const TopoDS_Shape& tool) -> TopoDS_Shape {
+            return cutOn(body, tool, 1.0e-3);
+        };
+
+        // ---- Shape-aware cut validation. Volume bands alone cannot tell a
+        // real groove from a WRONG-MATERIAL cut at similar volume (Steve's
+        // stacked-disc bodies: the boolean removes a full-circumference slab
+        // between grooves instead of the groove — comparable volume, garbage
+        // shape, tessellator crash). Classifier probes can: after a turn's
+        // cut, points in the GROOVE band must be void and points in the
+        // CREST band must still be solid. A disc cut eats the crest; an
+        // imprint no-op leaves the groove solid. Both fail instantly.
+        gp_Vec ydv = gp_Vec(zd).Crossed(gp_Vec(xd));
+        auto cylPt = [&](double rad, double theta, double dz) {
+            double c = std::cos(theta), s = std::sin(theta);
+            return gp_Pnt(
+                loc.X() + zd.X() * dz + (xd.X() * c + ydv.X() * s) * rad,
+                loc.Y() + zd.Y() * dz + (xd.Y() * c + ydv.Y() * s) * rad,
+                loc.Z() + zd.Z() * dz + (xd.Z() * c + ydv.Z() * s) * rad);
+        };
+        auto isIn = [&](const TopoDS_Shape& s, const gp_Pnt& p) {
+            try {
+                BRepClass3d_SolidClassifier c(s, p, 1e-7);
+                return c.State() == TopAbs_IN;
+            } catch (...) { return false; }
+        };
+        // Score the helix span [lo, hi] of `post` against pre-cut state
+        // `pre`: along the groove helix, the groove point must have gone
+        // OUT and the crest point (half a pitch up, same angle) stayed IN.
+        // The probe angle is derived from v directly (θ = uSign·2π·(v−vLo)
+        // /P), so the probes are GRID-INDEPENDENT — they follow the helix
+        // wherever the zone boundaries sit. Only samples where BOTH points
+        // were solid in `pre` count (split-away regions and cross-holes
+        // are legitimately void); taper/runout spans at the very ends are
+        // skipped. Returns {good, considered}.
+        struct ProbeScore { int good = 0, considered = 0; };
+        auto turnProbes = [&](const TopoDS_Shape& pre, const TopoDS_Shape& post,
+                              double lo, double hi) -> ProbeScore {
+            const int K = 16;
+            double uSign = m_rightHanded ? 1.0 : -1.0;
+            double rG = m_isHole ? (m_radius + 0.5 * depth)
+                                 : (m_radius - 0.5 * depth);
+            double rC = m_isHole ? (m_radius + 0.25 * depth)
+                                 : (m_radius - 0.25 * depth);
+            ProbeScore sc;
+            for (int k = 0; k < K; ++k) {
+                double vG = lo + (hi - lo) * (k + 0.5) / K;
+                if (vG < vLo + 0.75 * m_pitch || vG > vHi - 0.75 * m_pitch)
+                    continue; // taper/runout — groove intentionally shallow
+                double vC = vG + 0.5 * m_pitch;
+                double th = uSign * 2.0 * M_PI * (vG - vLo) / m_pitch;
+                gp_Pnt pg = cylPt(rG, th, vG), pc = cylPt(rC, th, vC);
+                if (!isIn(pre, pg) || !isIn(pre, pc)) continue;
+                ++sc.considered;
+                bool okSample = !isIn(post, pg) && isIn(post, pc);
+                // WIDTH check, mid-span samples only (so the probes stay
+                // inside this cut's own territory): a full-width groove is
+                // void at ±0.30P off the centreline at this depth (design
+                // half-opening ≈0.355P there); a TAPER-NARROWED section is
+                // still solid. Centre-only probes passed those and Steve
+                // saw "flatter/narrower channel grooves" on half the rod.
+                if (okSample && k * 10 >= 3 * K && k * 10 <= 7 * K) {
+                    gp_Pnt w1 = cylPt(rC, th, vG - 0.30 * m_pitch);
+                    gp_Pnt w2 = cylPt(rC, th, vG + 0.30 * m_pitch);
+                    if (isIn(pre, w1) && isIn(post, w1)) okSample = false;
+                    if (isIn(pre, w2) && isIn(post, w2)) okSample = false;
+                }
+                if (okSample) ++sc.good;
+            }
+            return sc;
         };
 
         auto tryCut = [&](const TopoDS_Shape& tool) -> TopoDS_Shape {
@@ -296,6 +421,31 @@ TopoDS_Shape ThreadOp::buildResult(const TopoDS_Shape& body) const {
                              v, bodyVol);
                 return {};
             }
+            // Shape-aware gate: every turn must probe PERFECTLY as a real
+            // groove (groove band void, crest band solid, all sampled
+            // angles). Wrong-material cuts with plausible total volume —
+            // the kind that used to pass here, reach the tessellator, and
+            // SEGFAULT — die on this; so do partial cuts that leave groove
+            // arcs filled near a slot (Steve's "half groove filled in",
+            // which a 75% threshold waved through). Any imperfection
+            // demotes to the per-turn path, which retries turn-by-turn for
+            // a perfect cut before settling.
+            int nTurns = static_cast<int>(std::ceil((vHi - vLo) / m_pitch));
+            for (int t = 0; t < nTurns; ++t) {
+                ProbeScore sc = turnProbes(body, res, vLo + t * m_pitch,
+                                           vLo + (t + 1) * m_pitch);
+                // < 5 measurable samples = a partial end turn that's mostly
+                // runout — INCONCLUSIVE, not damning. (A 1/4 verdict on the
+                // last fractional turn demoted a perfectly good compound
+                // cut on Steve's 16mm rod.)
+                if (sc.considered >= 5 && sc.good != sc.considered) {
+                    std::fprintf(stderr, "[Thread] compound cut imperfect at "
+                                         "turn %d (%d/%d probes) — demoting "
+                                         "to per-turn\n", t, sc.good,
+                                 sc.considered);
+                    return {};
+                }
+            }
             // The cut result regularly carries tolerance nits — heal it so
             // downstream ops (fillets, further booleans, save) get a clean
             // solid.
@@ -307,12 +457,294 @@ TopoDS_Shape ThreadOp::buildResult(const TopoDS_Shape& body) const {
             return res;
         };
 
-        std::fprintf(stderr, "[Thread] cutting (span %.2f..%.2f)...\n", vLo, vHi);
-        TopoDS_Shape result = tryCut(buildCutter(vLo, vHi));
-        if (result.IsNull() && (vLo < 0.0 || vHi > m_length)) {
-            std::fprintf(stderr,
-                         "[Thread] extended cut failed — retrying exact span\n");
-            result = tryCut(buildCutter(0.0, m_length));
+        // PER-TURN SEQUENTIAL fallback: one boolean per turn, each validated
+        // by removed volume against the analytic per-turn groove volume,
+        // failed turns retried through a variant ladder of micro-jitters.
+        // This is how partial cylinders (lengthwise split halves) and
+        // interrupted cylinders (cross-holes) get threaded — the compound
+        // tool coin-flips on those, but single-turn cuts with validation
+        // land 20-21/21 turns in the harness, and a turn that fails every
+        // variant is SKIPPED (a short groove gap), never garbage.
+        auto perTurnCut = [&]() -> TopoDS_Shape {
+            int nT = static_cast<int>(std::ceil((vHi - vLo) / m_pitch));
+            if (nT < 1 || nT > 120) return {};
+            // Analytic groove volume of one turn: trapezoid cross-section
+            // swept at mid-groove radius.
+            double halfW = 0.4375 * m_pitch;
+            double area = 0.5 * (2.0 * halfW + 2.0 * halfW * 0.25) * depth;
+            double rMid = m_isHole ? (m_radius + 0.5 * depth)
+                                   : (m_radius - 0.5 * depth);
+            double analytic = area * 2.0 * M_PI * rMid;
+            if (analytic <= 1e-9) return {};
+
+            struct Variant {
+                double fuzz, clear_, wFac, dJit, ovl;
+                bool rev, taper;
+            };
+            // TWO complementary tool families (matrix-proven):
+            //   SQUARE (taper=false): square-ended band segments, `ovl`
+            //     reaching into the previous void. Perfect + natively
+            //     VALID on full and cross-holed rods; no-ops/inverts on
+            //     lengthwise halves.
+            //   TAPER (taper=true): classic [zone-0.5P, zone+0.5P] tools
+            //     with 0.5P tapers. Perfect on halves; coin-flips every
+            //     3rd turn on full rods.
+            // The engine starts square-first and flips its preference for
+            // the rest of the body the first time the taper family wins a
+            // turn (bodies are homogeneous in which family works).
+            const Variant variants[] = {
+                // square family
+                {1e-3, 0.10, 1.000, 0.000, 0.06, false, false},
+                {1e-3, 0.10, 0.995, 0.000, 0.06, false, false},
+                {1e-3, 0.10, 1.000, 0.005, 0.06, false, false},
+                {1e-3, 0.10, 1.000, 0.000, 0.11, false, false},
+                {1e-3, 0.10, 1.000, 0.000, 0.06, true,  false},
+                {2e-3, 0.15, 0.990, 0.010, 0.13, false, false},
+                // taper family
+                {1e-3, 0.10, 1.000, 0.000, 0.00, false, true},
+                {1e-3, 0.10, 0.995, 0.000, 0.00, false, true},
+                {1e-3, 0.10, 1.000, 0.005, 0.00, false, true},
+                {1e-3, 0.10, 1.000, 0.000, 0.00, true,  true},
+                {5e-4, 0.10, 0.995, 0.005, 0.00, false, true},
+            };
+            const int nV = sizeof(variants) / sizeof(variants[0]);
+            bool taperFirst = false;
+
+            TopoDS_Shape cur = body;
+            double curVol = bodyVol;
+            int failed = 0, skipped = 0;
+            // STRICTLY bottom-up: each square tool's blunt top wall (cut
+            // into material at zoneHi) is erased by the NEXT turn's
+            // overlapping bottom.
+            //
+            // CREST-ALIGNED ZONE GRID: grooves sit at v = vLo + n·P (the
+            // helix anchor), so zone boundaries go at vLo + (n±0.5)·P —
+            // mid-crest — and each square tool owns ONE whole groove. The
+            // original grid put boundaries exactly ON the grooves: every
+            // square end wall sliced through a groove, stacking half-open
+            // groove stubs at each boundary until the booleans collapsed
+            // outright (Steve's 16mm rod: turns 0-8 OK, everything after
+            // failed). nT+1 zones cover [vLo, vHi] with clipped ends.
+            // End zones: when a thread end is FREE (vLo/vHi already carry
+            // the runout extension), the end zone may reach 0.5P further
+            // into the air so its runout taper has somewhere to live.
+            // Clamping the first zone to [vLo, vLo+0.5P] made it exactly
+            // as long as its own taper — a degenerate tool that cut
+            // nothing, deleting the first half-turn of groove (Steve's
+            // "weird non-tapered end").
+            bool botFree = vLo < -1e-9;
+            bool topFree = vHi > m_length + 1e-9;
+            double gridLo = botFree ? vLo - 0.5 * m_pitch : vLo;
+            double gridHi = topFree ? vHi + 0.5 * m_pitch : vHi;
+            // Build the zone list, then MERGE face-crossing end zones into
+            // their material-anchored neighbours. An end zone whose groove
+            // centre sits beyond the rod face is void-dominated — OCCT
+            // no-ops the cut and the face-exit flank sliver never gets
+            // removed (the blunt triangular pocket below the rim in
+            // Steve's screenshot). Merged, the sliver rides along on a
+            // tool that owns a full in-material groove.
+            std::vector<std::pair<double, double>> zones;
+            for (int i = 0; i <= nT; ++i) {
+                double zlo = std::max(gridLo, vLo + (i - 0.5) * m_pitch);
+                double zhi = std::min(gridHi, vLo + (i + 0.5) * m_pitch);
+                if (zhi - zlo < 0.05 * m_pitch) continue;
+                zones.push_back({zlo, zhi});
+            }
+            while (zones.size() > 1 &&
+                   zones[0].second <= 0.5 * m_pitch + 1e-9) {
+                zones[1].first = zones[0].first;
+                zones.erase(zones.begin());
+            }
+            while (zones.size() > 1 &&
+                   zones.back().first >= m_length - 0.5 * m_pitch - 1e-9) {
+                zones[zones.size() - 2].second = zones.back().second;
+                zones.pop_back();
+            }
+            for (size_t zi = 0; zi < zones.size(); ++zi) {
+                int i = static_cast<int>(zi);
+                double zoneLo = zones[zi].first;
+                double zoneHi = zones[zi].second;
+                bool first = (zi == 0);
+                bool last = (zi + 1 == zones.size());
+                bool ok = false;
+                bool noMaterial = false;
+                // Per-variant failure accounting — printed when a whole
+                // turn fails so a field log is diagnosable without a
+                // rebuild (finding the last regression cost Steve a CPU
+                // fan and me a blind guess).
+                int rjNull = 0, rjGrew = 0, rjBig = 0, rjProbe = 0;
+                int lastGood = -1, lastDen = -1;
+                // Best imperfect candidate across the ladder: a variant
+                // that cleared ≥75% of probes but left an arc of the groove
+                // filled (Steve's slotted rod: "one of the half grooves got
+                // filled in"). Prefer ANY perfect variant; adopt the best
+                // imperfect one only after the whole ladder has had a shot.
+                TopoDS_Shape bestRes;
+                double bestVol = 0.0;
+                int bestScore = -1, bestDen = 1, bestVar = -1;
+                for (int pass = 0; pass < 2 && !ok; ++pass) {
+                    // pass 0 = preferred family, pass 1 = the other
+                    bool wantTaper = (pass == 0) ? taperFirst : !taperFirst;
+                for (int v = 0; v < nV && !ok; ++v) {
+                    const Variant& va = variants[v];
+                    if (va.taper != wantTaper) continue;
+                    double toolLo, toolHi, tlLo, tlHi;
+                    if (va.taper) {
+                        toolLo = zoneLo - 0.5 * m_pitch;
+                        toolHi = zoneHi + 0.5 * m_pitch;
+                        tlLo = tlHi = 0.5 * m_pitch;
+                    } else {
+                        // Square ends, bottom overlapping the previous
+                        // void. Real thread ends keep runout tapers —
+                        // shortened when the zone is clamped (non-free
+                        // end) so the tool never degenerates to nothing.
+                        toolLo = first ? zoneLo : zoneLo - va.ovl * m_pitch;
+                        toolHi = zoneHi;
+                        double span = toolHi - toolLo;
+                        tlLo = first ? std::min(0.5 * m_pitch, 0.6 * span)
+                                     : 0.0;
+                        tlHi = last ? std::min(0.5 * m_pitch,
+                                               0.6 * span - tlLo * 0.5)
+                                    : 0.0;
+                        if (tlHi < 0.0) tlHi = 0.0;
+                    }
+                    int nSeg = std::max(1, static_cast<int>(std::lround(
+                                               (toolHi - toolLo) / m_pitch)));
+                    TopoDS_Shape tool = buildCutterEx(
+                        toolLo, toolHi, vLo, va.clear_, va.wFac, va.dJit,
+                        nSeg, tlLo, tlHi);
+                    if (tool.IsNull()) continue;
+                    if (va.rev) tool.Reverse();
+                    TopoDS_Shape res = cutOn(cur, tool, va.fuzz);
+                    if (res.IsNull()) { ++rjNull; continue; }
+                    double after = shapeVol(res);
+                    if (after <= 0.0) { ++rjNull; continue; }
+                    double removed = curVol - after;
+                    // Inverted / wrong-material cuts remove far more than
+                    // one groove turn ever could (band hi proven at 2.5×:
+                    // a turn after a skipped neighbour legitimately
+                    // catches up its missed groove too)...
+                    if (removed > 2.5 * analytic) { ++rjBig; continue; }
+                    // ...and a GROWN body is an inverted classification.
+                    if (removed < -1e-6) { ++rjGrew; continue; }
+                    // FACE-EXIT zones legitimately remove a tiny sliver —
+                    // the runout flank wedge where the helix crosses the
+                    // rod's end face (NOT necessarily the grid's first/
+                    // last zone). The normal 2% floor swallowed it ("no
+                    // material") and left the groove ending in a blunt
+                    // triangular pocket below the rim (Steve's screenshot).
+                    bool faceExit = zoneLo < 0.75 * m_pitch ||
+                                    zoneHi > m_length - 0.75 * m_pitch;
+                    double matFloor = faceExit ? 0.001 * analytic
+                                               : 0.02 * analytic;
+                    if (removed < matFloor) {
+                        // A clean boolean that removed (almost) nothing.
+                        // Either this turn's groove isn't in this body
+                        // (split-away region) — or the cut no-op'd the way
+                        // awkward bodies do and a LATER VARIANT will land
+                        // it. Remember the benign outcome but keep trying;
+                        // do NOT adopt `res` (imprint edges pollute).
+                        noMaterial = true;
+                        continue;
+                    }
+                    // Volume is in band — but at single-turn scale a
+                    // wrong-material disc cut removes a volume comparable
+                    // to a real groove (Steve's stacked-disc rod). Shape
+                    // probes arbitrate.
+                    ProbeScore sc = turnProbes(cur, res, zoneLo, zoneHi);
+                    if (sc.considered == 0) {
+                        // No probeable material yet volume moved: distrust.
+                        noMaterial = true;
+                        continue;
+                    }
+                    // < 5 measurable samples = partial end turn, mostly
+                    // runout: probes are INCONCLUSIVE — trust the volume
+                    // band that already passed.
+                    if (sc.good == sc.considered || sc.considered < 5) {
+                        cur = res;
+                        curVol = after;
+                        ok = true;
+                        // Adapt: if the non-preferred family won, prefer it
+                        // for the rest of this body.
+                        if (va.taper != taperFirst) taperFirst = va.taper;
+                    } else if (sc.good * 4 >= sc.considered * 3 &&
+                               sc.good * bestDen > bestScore * sc.considered) {
+                        bestRes = res;
+                        bestVol = after;
+                        bestScore = sc.good;
+                        bestDen = sc.considered;
+                        bestVar = v;
+                    } else {
+                        ++rjProbe;
+                        lastGood = sc.good;
+                        lastDen = sc.considered;
+                    }
+                }
+                }
+                if (!ok && !bestRes.IsNull()) {
+                    std::fprintf(stderr, "[Thread] turn %d: best variant %d "
+                                         "imperfect (%d/%d probes) — "
+                                         "adopting\n",
+                                 i, bestVar, bestScore, bestDen);
+                    cur = bestRes;
+                    curVol = bestVol;
+                    ok = true;
+                }
+                if (!ok) {
+                    if (noMaterial) ++skipped;
+                    else {
+                        ++failed;
+                        std::fprintf(stderr, "[Thread] turn %d failed: "
+                                             "null=%d grew=%d big=%d "
+                                             "probe=%d (last %d/%d)\n",
+                                     i, rjNull, rjGrew, rjBig, rjProbe,
+                                     lastGood, lastDen);
+                    }
+                }
+                // Bail as soon as the failure budget is blown — each failed
+                // turn burns the FULL variant ladder (9 booleans), and a
+                // body that fails this often isn't going to be saved by the
+                // remaining turns. This runs synchronously during reflow
+                // replays; keep the doomed case bounded.
+                if (failed > std::max(2, nT / 5)) {
+                    std::fprintf(stderr, "[Thread] per-turn: aborting at "
+                                         "turn %d (%d failures)\n", i, failed);
+                    return {};
+                }
+            }
+            std::fprintf(stderr, "[Thread] per-turn: %d turns, %d skipped "
+                                 "(no material), %d failed\n",
+                         nT, skipped, failed);
+            // The whole pass must have removed SOMETHING — a body that no
+            // groove intersects is a no-op, and no-ops suspend (same rule
+            // as the compound path's volume guard).
+            double minRemoval = std::max(1e-2, bodyVol * 1e-4);
+            if (curVol > bodyVol - minRemoval) return {};
+            if (!BRepCheck_Analyzer(cur).IsValid()) {
+                ShapeFix_Shape fixer(cur);
+                fixer.Perform();
+                cur = fixer.Shape();
+            }
+            return cur;
+        };
+
+        TopoDS_Shape result;
+        if (fullCylinder) {
+            std::fprintf(stderr, "[Thread] cutting (span %.2f..%.2f)...\n",
+                         vLo, vHi);
+            result = tryCut(buildCutter(vLo, vHi));
+            // NO exact-span compound retry here. When the extended compound
+            // cut inverts, the exact-span retry historically "succeeded"
+            // with plausible-volume WRONG-MATERIAL removals (the poker-chip
+            // bodies) that pass the coarse whole-body volume guard and then
+            // SEGFAULT the tessellator. The per-turn fallback below retries
+            // with per-turn validation instead — garbage can't pass it.
+        }
+        if (result.IsNull()) {
+            std::fprintf(stderr, "[Thread] %s — per-turn sequential cut\n",
+                         fullCylinder ? "compound cut failed"
+                                      : "partial/interrupted cylinder");
+            result = perTurnCut();
         }
         if (result.IsNull()) {
             std::fprintf(stderr, "[Thread] boolean cut FAILED\n");

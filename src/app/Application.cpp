@@ -21,6 +21,7 @@
 #include "viewport/Gizmo.h"
 #include "viewport/SelectionHighlight.h"
 #include "viewport/BoxSelect.h"
+#include "viewport/SectionView.h"
 #include "viewport/EdgeRenderer.h"
 #include "viewport/BackgroundRenderer.h"
 #include "core/Document.h"
@@ -169,6 +170,8 @@ Application::Application(bool safeMode) : m_safeMode(safeMode) {
     m_gizmo = std::make_unique<Gizmo>();
     m_selectionHighlight = std::make_unique<SelectionHighlight>();
     m_boxSelect = std::make_unique<BoxSelect>();
+    m_sectionView = std::make_unique<SectionView>();
+    m_sectionView->setDocument(m_document.get());
     m_statusBar = std::make_unique<StatusBar>();
     m_themeManager = std::make_unique<ThemeManager>();
     m_propertiesPanel = std::make_unique<PropertiesPanel>();
@@ -446,6 +449,9 @@ void Application::initRenderers() {
     if (!m_edgeRenderer->initialize()) {
         std::fprintf(stderr, "Failed to initialize edge renderer\n");
     }
+    if (!m_sectionView->initialize()) {
+        std::fprintf(stderr, "Failed to initialize section view\n");
+    }
     // Plugin-provided render passes (e.g. ConstructionPlanePlugin's plane
     // renderer). Each pass declares its own initialize() callback — run them
     // on the GL thread now, before the first frame, so the plugin can compile
@@ -596,6 +602,9 @@ void Application::renderMenuBar() {
         }
         if (ImGui::BeginMenu("View")) {
             if (ImGui::MenuItem("Reset Camera", "Home")) m_viewport->getCamera().reset();
+            if (ImGui::MenuItem("Section View", nullptr, &m_sectionEnabled)) {
+                m_sectionDirty = true;
+            }
             ImGui::Separator();
             if (m_themeManager->renderSelector()) {
                 m_themeManager->apply();
@@ -3170,6 +3179,7 @@ void Application::run() {
             renderShellPanel();
             renderPatternPanel();
             renderThreadPanel();
+            renderSectionPanel();
             renderLoftPanel();
             renderConstructionPlanePanel();
             renderConstructionAxisPanel();

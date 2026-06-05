@@ -44,7 +44,10 @@
 #include <Geom_SurfaceOfRevolution.hxx>
 #include <GeomAbs_CurveType.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
 #include <TopExp_Explorer.hxx>
+#include <BRep_Builder.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <gp_Cylinder.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Ax3.hxx>
@@ -1183,6 +1186,24 @@ void Application::beginPushPull() {
     std::snprintf(m_pushPullInputBuf, sizeof(m_pushPullInputBuf), "%.1f", m_pushPullDistance);
     m_pushPullInputFocus = true;
 
+    // Dense bodies (a threaded rod has hundreds of helical faces) cannot
+    // afford a real boolean per drag frame — and since push/pull now
+    // triggers the thread-last reflow, each preview frame would re-thread
+    // the whole rod (Steve: drag "a no go, non-responsive ~10s"). Those
+    // bodies get a GHOST preview (tinted tool volume) and run the real
+    // boolean once, on commit.
+    m_pushPullHeavyPreview = false;
+    for (const auto& t : m_pushPullTargets) {
+        if (t.sourceBodyId < 0) continue;
+        try {
+            int nf = 0;
+            for (TopExp_Explorer fx(m_document->getBody(t.sourceBodyId),
+                                    TopAbs_FACE);
+                 fx.More() && nf <= 250; fx.Next()) ++nf;
+            if (nf > 250) { m_pushPullHeavyPreview = true; break; }
+        } catch (...) {}
+    }
+
     updatePushPull();
 }
 
@@ -1204,6 +1225,40 @@ void Application::updatePushPull() {
                       "%.1f", m_pushPullDistance);
     }
 
+    // GHOST PREVIEW for dense bodies: render the tool volume tinted instead
+    // of running the boolean (and the thread reflow behind it) per frame.
+    if (m_pushPullHeavyPreview) {
+        constexpr int kGhostId = -7777; // renderer-only slot, no Document body
+        bool any = false;
+        TopoDS_Compound comp;
+        BRep_Builder bb;
+        bb.MakeCompound(comp);
+        if (std::abs(m_pushPullDistance) > 1e-6) {
+            gp_Vec pv(m_pushPullNormal.x, m_pushPullNormal.y,
+                      m_pushPullNormal.z);
+            pv *= static_cast<double>(m_pushPullDistance);
+            for (const auto& t : m_pushPullTargets) {
+                if (t.profile.IsNull()) continue;
+                try {
+                    BRepPrimAPI_MakePrism mk(t.profile, pv);
+                    mk.Build();
+                    if (mk.IsDone()) { bb.Add(comp, mk.Shape()); any = true; }
+                } catch (...) {}
+            }
+        }
+        if (any) {
+            int slot = m_shapeRenderer->setBodyMesh(kGhostId, comp);
+            if (slot >= 0) {
+                m_shapeRenderer->setSubtractPreview(slot,
+                                                    m_pushPullDistance < 0.0f);
+                m_shapeRenderer->setColor(slot, glm::vec3(0.55f, 0.75f, 1.0f));
+            }
+        } else {
+            m_shapeRenderer->removeBody(kGhostId);
+        }
+        return;
+    }
+
     // Only undo OUR previous preview — not any other pushpull that may already be
     // committed at the top of the history.
     if (m_pushPullPreviewPushed && m_history->canUndo()) {
@@ -1211,6 +1266,30 @@ void Application::updatePushPull() {
         m_pushPullPreviewPushed = false;
     }
 
+    if (m_history->pushOperation(makePushPullOpFromState(), *m_document)) {
+        m_pushPullPreviewPushed = true;
+    }
+    // Mark only the bodies the push/pull actually touched as dirty. On a
+    // 100+ body project this turns each preview frame from "re-tessellate
+    // every visible body" into "re-tessellate 1-2 bodies", which is the
+    // difference between unusable and smooth.
+    for (const auto& t : m_pushPullTargets) {
+        if (t.sourceBodyId >= 0) markBodyDirty(t.sourceBodyId);
+    }
+    // Free-floating push/pull creates new bodies — mark them too so they
+    // appear / refresh. Restrict to VISIBLE bodies: invisible ones never get
+    // a renderer slot (full-rebuild skips them), so without the visibility
+    // check they'd be marked dirty every preview frame forever — pure waste.
+    for (int id : m_document->getAllBodyIds()) {
+        if (!m_document->isBodyVisible(id)) continue;
+        if (m_shapeRenderer->findSlotByBody(id) < 0) markBodyDirty(id);
+    }
+}
+
+// Build a PushPullOp from the current interactive state. Shared by the
+// light path (op pushed per preview frame) and the heavy/ghost path (op
+// pushed once, on commit).
+std::unique_ptr<PushPullOp> Application::makePushPullOpFromState() const {
     auto op = std::make_unique<PushPullOp>();
     std::vector<PushPullOp::Target> targets;
     for (const auto& t : m_pushPullTargets) {
@@ -1231,28 +1310,24 @@ void Application::updatePushPull() {
             op->setSketchSource(static_cast<int>(i), t.sketchId, t.regionIndex);
         }
     }
-    if (m_history->pushOperation(std::move(op), *m_document)) {
-        m_pushPullPreviewPushed = true;
-    }
-    // Mark only the bodies the push/pull actually touched as dirty. On a
-    // 100+ body project this turns each preview frame from "re-tessellate
-    // every visible body" into "re-tessellate 1-2 bodies", which is the
-    // difference between unusable and smooth.
-    for (const auto& t : m_pushPullTargets) {
-        if (t.sourceBodyId >= 0) markBodyDirty(t.sourceBodyId);
-    }
-    // Free-floating push/pull creates new bodies — mark them too so they
-    // appear / refresh. Restrict to VISIBLE bodies: invisible ones never get
-    // a renderer slot (full-rebuild skips them), so without the visibility
-    // check they'd be marked dirty every preview frame forever — pure waste.
-    for (int id : m_document->getAllBodyIds()) {
-        if (!m_document->isBodyVisible(id)) continue;
-        if (m_shapeRenderer->findSlotByBody(id) < 0) markBodyDirty(id);
-    }
+    return op;
 }
 
 void Application::commitPushPull() {
-    // The last preview push IS the final state — just clean up
+    if (m_pushPullHeavyPreview) {
+        // Ghost path: drop the preview mesh and run the real boolean ONCE.
+        // This is where the thread reflow runs for dense bodies — a single
+        // synchronous recompute instead of one per drag frame.
+        m_shapeRenderer->removeBody(-7777);
+        if (std::abs(m_pushPullDistance) > 1e-6) {
+            if (!m_history->pushOperation(makePushPullOpFromState(),
+                                          *m_document)) {
+                std::fprintf(stderr, "Push/Pull failed to apply\n");
+            }
+        }
+        m_pushPullHeavyPreview = false;
+    }
+    // Light path: the last preview push IS the final state — just clean up
     m_pushPullActive = false;
     m_pushPullPreviewPushed = false;
     m_pushPullTargets.clear();
@@ -1263,6 +1338,10 @@ void Application::commitPushPull() {
 
 void Application::cancelPushPull() {
     if (!m_pushPullActive) return;
+    if (m_pushPullHeavyPreview) {
+        m_shapeRenderer->removeBody(-7777); // ghost only — nothing was pushed
+        m_pushPullHeavyPreview = false;
+    }
     if (m_pushPullPreviewPushed && m_history->canUndo()) {
         m_history->undo(*m_document);
         m_pushPullPreviewPushed = false;
