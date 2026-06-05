@@ -110,28 +110,31 @@ TopoDS_Shape ThreadOp::buildResult(const TopoDS_Shape& body) const {
         // four variants, four different wrong answers), these tools cut
         // consistently, and the ellipse tips taper to nothing, giving
         // natural thread runout at both ends.
-        // Closed UV band wire on a cylindrical surface: helix seam, half-turn
-        // taper up, an offset line PARALLEL to the helix (constant groove all
-        // the way — a stretched half-ellipse made the groove deep mid-rod and
-        // shallow at the ends, Steve's "slinky"), half-turn taper down. All
-        // edges are straight 2D lines on the surface (clean helical curves in
-        // 3D), and the long runs are CHUNKED per turn — the tame-patch
-        // segmentation that makes the boolean cut reliably (a single
-        // 30-turn-long lofted spline removes nothing or worse; proven via the
-        // headless volume harness on prism + primitive bodies, both hands).
+        // Closed UV band wire on a cylindrical surface, SYMMETRIC about the
+        // helix line: tip → taper to the lower offset line (−off) → chunked
+        // run parallel to the helix → taper to the far tip → taper up to the
+        // upper line (+off) → chunked run back → taper to the tip. Both
+        // flanks of the lofted groove slant equally (a seam ON the helix
+        // lofts into a flat radial wall — Steve's "flat top, tapered
+        // bottom"). All edges are straight 2D lines on the surface; long
+        // runs are CHUNKED per turn — the tame-patch segmentation that makes
+        // the boolean cut reliably (a single 30-turn lofted spline removes
+        // nothing or worse; proven via the headless volume harness).
         auto bandWire = [&](const Handle(Geom_CylindricalSurface)& surf,
                             double uSign, double lo, double hi, double off,
                             int nSeg) -> TopoDS_Wire {
             auto onHelix = [&](double v) {
                 return gp_Pnt2d(uSign * 2.0 * M_PI * (v - lo) / m_pitch, v);
             };
-            auto offHelix = [&](double v) {
+            auto offHelix = [&](double v, double dv) {
                 gp_Pnt2d p = onHelix(v);
-                return gp_Pnt2d(p.X(), p.Y() + off);
+                return gp_Pnt2d(p.X(), p.Y() + dv);
             };
             double tl = 0.5 * m_pitch; // taper length at each end
-            gp_Pnt2d A = onHelix(lo), B = offHelix(lo + tl),
-                     C = offHelix(hi - tl), D = onHelix(hi);
+            gp_Pnt2d A  = onHelix(lo);
+            gp_Pnt2d L1 = offHelix(lo + tl, -off), L2 = offHelix(hi - tl, -off);
+            gp_Pnt2d D  = onHelix(hi);
+            gp_Pnt2d U2 = offHelix(hi - tl, off),  U1 = offHelix(lo + tl, off);
             BRepBuilderAPI_MakeWire mw;
             auto addChunked = [&](gp_Pnt2d p, gp_Pnt2d q, int n) {
                 for (int i = 0; i < n; ++i) {
@@ -146,10 +149,12 @@ TopoDS_Shape ThreadOp::buildResult(const TopoDS_Shape& body) const {
                     mw.Add(e);
                 }
             };
-            addChunked(A, B, 1);
-            addChunked(B, C, nSeg);
-            addChunked(C, D, 1);
-            addChunked(D, A, nSeg + 2); // seam back along the helix
+            addChunked(A, L1, 1);
+            addChunked(L1, L2, nSeg);
+            addChunked(L2, D, 1);
+            addChunked(D, U2, 1);
+            addChunked(U2, U1, nSeg);
+            addChunked(U1, A, 1);
             return mw.Wire();
         };
 
@@ -169,7 +174,7 @@ TopoDS_Shape ThreadOp::buildResult(const TopoDS_Shape& body) const {
                 // (chirality is invariant under axis flip).
                 double t = (hi - lo) / m_pitch;
                 double uSign = m_rightHanded ? 1.0 : -1.0;
-                double halfW = std::min(0.57735 * depth, 0.45 * m_pitch);
+                double halfW = std::min(0.57735 * depth, 0.45 * m_pitch) * 0.5;
                 int nSeg = std::max(4, static_cast<int>(std::ceil(t)));
 
                 TopoDS_Wire w1 = bandWire(sOut, uSign, lo, hi, halfW, nSeg);

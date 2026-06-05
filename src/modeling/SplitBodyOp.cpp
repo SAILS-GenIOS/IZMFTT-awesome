@@ -1,4 +1,5 @@
 #include "SplitBodyOp.h"
+#include <cstdio>
 #include <BRepAlgoAPI_Splitter.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <TopExp_Explorer.hxx>
@@ -32,7 +33,14 @@ bool SplitBodyOp::execute(Document& doc) {
         BRepBuilderAPI_MakeFace faceMaker(m_splitPlane, -1000.0, 1000.0, -1000.0, 1000.0);
         faceMaker.Build();
         if (!faceMaker.IsDone()) {
+            std::fprintf(stderr, "[Split] face maker FAILED\n");
             return false;
+        }
+        {
+            gp_Pnt o = m_splitPlane.Location();
+            gp_Dir n = m_splitPlane.Axis().Direction();
+            std::fprintf(stderr, "[Split] plane o=(%.2f,%.2f,%.2f) n=(%.2f,%.2f,%.2f)\n",
+                         o.X(), o.Y(), o.Z(), n.X(), n.Y(), n.Z());
         }
         TopoDS_Shape splittingFace = faceMaker.Shape();
 
@@ -48,6 +56,7 @@ bool SplitBodyOp::execute(Document& doc) {
         splitter.SetTools(tools);
         splitter.Build();
         if (!splitter.IsDone()) {
+            std::fprintf(stderr, "[Split] splitter FAILED\n");
             return false;
         }
 
@@ -57,6 +66,8 @@ bool SplitBodyOp::execute(Document& doc) {
             solids.push_back(exp.Current());
         }
 
+        std::fprintf(stderr, "[Split] splitter produced %d solid(s)\n",
+                     static_cast<int>(solids.size()));
         if (solids.size() < 2) {
             // Split did not produce two bodies (plane may not intersect)
             return false;
