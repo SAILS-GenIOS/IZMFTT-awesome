@@ -206,9 +206,12 @@ Application::Application(bool safeMode) : m_safeMode(safeMode) {
     m_propertiesPanel->setDirtyCallback([this]() { markDirty(); });
 
     initImGui();
+    renderSplashFrame("Loading settings & last project");
     loadAppSettings(); // restore persisted preferences before the theme is applied
+    renderSplashFrame("Preparing renderers");
     m_themeManager->apply();
     initRenderers();
+    renderSplashFrame("Almost there");
     setupCommands();
 
     // Wire EventBus into core services
@@ -506,6 +509,60 @@ void Application::beginFrame() {
 void Application::endFrame() {
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+
+void Application::renderSplashFrame(const char* status) {
+    // One self-contained frame shown while startup blocks (auto-opening a
+    // big project takes ~10 s on slower machines — this used to be a blank
+    // window). Polls events so the WM doesn't flag us unresponsive.
+    if (!m_window) return;
+    m_window->pollEvents();
+    int fbw = 0, fbh = 0;
+    glfwGetFramebufferSize(m_window->handle(), &fbw, &fbh);
+    glViewport(0, 0, fbw, fbh);
+    glClearColor(0.075f, 0.082f, 0.11f, 1.0f); // matches the app background
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    beginFrame();
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+    ImGui::Begin("##splash", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                 ImGuiWindowFlags_NoSavedSettings);
+
+    const char* title = "M A T E R I A L I Z R";
+    char ver[48];
+    std::snprintf(ver, sizeof(ver), "version %s", MATERIALIZR_VERSION);
+
+    ImGui::SetWindowFontScale(2.2f);
+    ImVec2 ts = ImGui::CalcTextSize(title);
+    ImGui::SetCursorPos(ImVec2((vp->WorkSize.x - ts.x) * 0.5f,
+                               vp->WorkSize.y * 0.40f));
+    ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "%s", title);
+    ImGui::SetWindowFontScale(1.0f);
+
+    ImVec2 vs = ImGui::CalcTextSize(ver);
+    ImGui::SetCursorPos(ImVec2((vp->WorkSize.x - vs.x) * 0.5f,
+                               vp->WorkSize.y * 0.40f + ts.y * 2.2f + 8.0f));
+    ImGui::TextDisabled("%s", ver);
+
+    // Status line with a marching-dots heartbeat.
+    int dots = static_cast<int>(ImGui::GetTime() * 3.0) % 4;
+    char line[128];
+    std::snprintf(line, sizeof(line), "%s%.*s", status, dots, "...");
+    ImVec2 ls = ImGui::CalcTextSize(line);
+    ImGui::SetCursorPos(ImVec2((vp->WorkSize.x - ls.x) * 0.5f,
+                               vp->WorkSize.y * 0.40f + ts.y * 2.2f + 40.0f));
+    ImGui::Text("%s", line);
+
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    endFrame();
+    m_window->swapBuffers();
 }
 
 void Application::renderDockspace() {

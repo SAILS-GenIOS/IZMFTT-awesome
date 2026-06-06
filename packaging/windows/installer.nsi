@@ -46,7 +46,7 @@ Section "Install"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" \
     "UninstallString" "$INSTDIR\Uninstall.exe"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}" \
-    "DisplayIcon" "$INSTDIR\materializr.exe"
+    "DisplayIcon" "$INSTDIR\materializr.exe,0"
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 SectionEnd

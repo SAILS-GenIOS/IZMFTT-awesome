@@ -82,6 +82,7 @@ private:
     void setupCommands();
     void beginFrame();
     void endFrame();
+    void renderSplashFrame(const char* status);
     void renderDockspace();
     void renderViewport();
     void renderMenuBar();

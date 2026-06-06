@@ -2,6 +2,7 @@
 
 #include "gl_common.h"   // GLEW (Windows) must be included before GLFW
 #include <GLFW/glfw3.h>
+#include "app/IconData.h"
 #include <stdexcept>
 #include <iostream>
 
@@ -37,6 +38,22 @@ Window::Window(int width, int height, const std::string& title)
     if (!m_window) {
         glfwTerminate();
         throw std::runtime_error("Failed to create GLFW window");
+    }
+
+    // Window / taskbar icon from embedded pixels — this is what makes the
+    // Windows taskbar (and X11 docks) show the logo instead of the generic
+    // exe icon. Wayland ignores runtime icons (it uses the .desktop entry,
+    // which the AppImage already provides). The .rc-embedded .ico covers
+    // Explorer on Windows.
+    {
+        GLFWimage icons[2];
+        icons[0].width  = materializr_icon::kSize48;
+        icons[0].height = materializr_icon::kSize48;
+        icons[0].pixels = const_cast<unsigned char*>(materializr_icon::kPixels48);
+        icons[1].width  = materializr_icon::kSize32;
+        icons[1].height = materializr_icon::kSize32;
+        icons[1].pixels = const_cast<unsigned char*>(materializr_icon::kPixels32);
+        glfwSetWindowIcon(m_window, 2, icons);
     }
 
     glfwMakeContextCurrent(m_window);
