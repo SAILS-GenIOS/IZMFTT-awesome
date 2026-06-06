@@ -953,7 +953,8 @@ void Application::beginInteractiveScaleFace() {
         Handle(Geom_Plane) gpl = Handle(Geom_Plane)::DownCast(
             BRep_Tool::Surface(m_scaleFaceFace));
         if (!gpl.IsNull()) {
-            const gp_Ax3& fax = gpl->Pln().Position();
+            const gp_Pln fpln = gpl->Pln(); // Pln() is a temporary — see
+            const gp_Ax3& fax = fpln.Position(); // ScaleFaceOp.cpp note
             gp_Dir ud = fax.XDirection(), vd2 = fax.YDirection();
             m_scaleFaceAxisU = glm::vec3((float)ud.X(), (float)ud.Y(),
                                          (float)ud.Z());

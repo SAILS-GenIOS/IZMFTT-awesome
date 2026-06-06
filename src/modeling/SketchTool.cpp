@@ -750,30 +750,46 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
         // unique point. Solved by parametric line / axis intersect.
         bool snapped = false;
         glm::vec2 result = pos;
+        // POSITIONAL cap on every directional inference: the fires-checks
+        // are ANGULAR, so on long lines their capture distance grows with
+        // length (3° at 100 mm = 5+ mm of cursor theft — "8mm away and it
+        // still wants to stick"). An inference may only move the cursor a
+        // couple of millimetres from where the user actually is.
+        const float posCap = std::max(1.5f, m_gridStep * 1.5f);
         auto applyDirLock = [&](glm::vec2 dir, InferenceGuide::Kind dirKind,
                                 glm::vec2 projFallback, int dirRefId = -1) -> bool {
             if (axisVFires && std::abs(dir.x) > 1e-3f) {
                 float t = (axisVPos.x - m_firstClick.x) / dir.x;
-                result = m_firstClick + dir * t;
-                m_activeInferences.push_back(
-                    {dirKind, m_firstClick, result, dirRefId});
-                m_activeInferences.push_back(
-                    {InferenceGuide::AxisVFromPoint, axisVPos, result, axisVRefId});
-                return true;
+                glm::vec2 cand = m_firstClick + dir * t;
+                if (glm::length(cand - pos) < posCap) {
+                    result = cand;
+                    m_activeInferences.push_back(
+                        {dirKind, m_firstClick, result, dirRefId});
+                    m_activeInferences.push_back(
+                        {InferenceGuide::AxisVFromPoint, axisVPos, result, axisVRefId});
+                    return true;
+                }
             }
             if (axisHFires && std::abs(dir.y) > 1e-3f) {
                 float t = (axisHPos.y - m_firstClick.y) / dir.y;
-                result = m_firstClick + dir * t;
-                m_activeInferences.push_back(
-                    {dirKind, m_firstClick, result, dirRefId});
-                m_activeInferences.push_back(
-                    {InferenceGuide::AxisHFromPoint, axisHPos, result, axisHRefId});
+                glm::vec2 cand = m_firstClick + dir * t;
+                if (glm::length(cand - pos) < posCap) {
+                    result = cand;
+                    m_activeInferences.push_back(
+                        {dirKind, m_firstClick, result, dirRefId});
+                    m_activeInferences.push_back(
+                        {InferenceGuide::AxisHFromPoint, axisHPos, result, axisHRefId});
+                    return true;
+                }
+            }
+            // No axis intersection — snap onto the locked direction if it's
+            // actually near the cursor.
+            if (glm::length(projFallback - pos) < posCap) {
+                result = projFallback;
+                m_activeInferences.push_back({dirKind, m_firstClick, result, dirRefId});
                 return true;
             }
-            // No axis intersection — just snap onto the locked direction.
-            result = projFallback;
-            m_activeInferences.push_back({dirKind, m_firstClick, result, dirRefId});
-            return true;
+            return false;
         };
         if (perpFires) {
             snapped = applyDirLock(perpDir, InferenceGuide::PerpToPrev, perpProj);
@@ -817,9 +833,15 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
                 if (angDelta < angTol) {
                     glm::vec2 dir(std::cos(snappedA), std::sin(snappedA));
                     glm::vec2 snappedPos = m_firstClick + dir * len;
-                    m_activeInferences.push_back(
-                        {InferenceGuide::AngleSnap, m_firstClick, snappedPos, -1});
-                    return snappedPos;
+                    // Same positional cap as the directional locks: 3°
+                    // of a 100 mm line is 5 mm of cursor theft otherwise.
+                    if (glm::length(snappedPos - pos) <
+                        std::max(1.5f, m_gridStep * 1.5f)) {
+                        m_activeInferences.push_back(
+                            {InferenceGuide::AngleSnap, m_firstClick,
+                             snappedPos, -1});
+                        return snappedPos;
+                    }
                 }
             }
         }

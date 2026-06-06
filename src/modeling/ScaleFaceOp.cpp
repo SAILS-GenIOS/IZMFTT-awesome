@@ -87,7 +87,11 @@ bool ScaleFaceOp::execute(Document& doc) {
         // X / Y directions (deterministic per face, so reload-safe):
         // M = su*(u (x) u) + sv*(v (x) v) + (n (x) n), translation keeps
         // the centroid fixed. gp_Trsf can't do this; gp_GTrsf can.
-        const gp_Ax3& fax = pl->Pln().Position();
+        // COPY the plane — Pln() returns a temporary, and a reference
+        // into it dangles after this statement (the axes came out as
+        // uninitialized garbage: zero scale matrix, NaN directions).
+        const gp_Pln fpln = pl->Pln();
+        const gp_Ax3& fax = fpln.Position();
         gp_Dir ud = fax.XDirection();
         gp_Dir vd = fax.YDirection();
         gp_Dir nd = fax.Direction();

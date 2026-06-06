@@ -1316,11 +1316,13 @@ void Application::renderViewport() {
                         float len = std::sqrt(d.x * d.x + d.y * d.y);
                         if (len < 1.0f) continue;
                         d.x /= len; d.y /= len;
-                        // Extend the guide past the cursor so it reads as a
-                        // true axis, not just a finite segment.
+                        // Extend the guide past the ANCHOR end only so it
+                        // still reads as an axis — extending past the cursor
+                        // end buried the endpoint marker under dashes ("I
+                        // cannot see where the vertex actually is").
                         const float extend = 60.0f;
                         ImVec2 a0(sa.x - d.x * extend, sa.y - d.y * extend);
-                        float total = len + 2.0f * extend;
+                        float total = len + extend;
                         const float dashOn = 11.0f, dashOff = 7.0f;
                         for (float t = 0.0f; t < total; t += dashOn + dashOff) {
                             float t1 = std::min(t + dashOn, total);
