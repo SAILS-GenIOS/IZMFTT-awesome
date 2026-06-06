@@ -10,7 +10,7 @@
 // Taper (draft) selected faces of a body: tilt each face by an angle about
 // a NEUTRAL PLANE (which stays fixed) along a PULL DIRECTION — OCCT's
 // BRepOffsetAPI_DraftAngle, the molding-draft operation. This is the
-// Shapr3D-style "scale a face": a cylinder wall tapers into a cone, a
+// direct-modeling "tilt a face": a cylinder wall tapers into a cone, a
 // box's sides into a pyramid frustum — without needing Parasolid-class
 // free-face moves.
 class TaperOp : public Operation {
