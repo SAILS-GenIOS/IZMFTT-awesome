@@ -695,7 +695,8 @@ private:
     TopoDS_Face m_scaleFaceFace;
     float m_scaleFacePct = 30.0f;
     float m_scaleFaceLen = 10.0f;
-    int   m_scaleFaceMode = 0; // 0=Extend, 1=Pinch
+    float m_scaleFaceLenMax = 100.0f; // body depth behind the face
+    int   m_scaleFaceMode = 1; // 0=Extend, 1=Pinch (default: whole body follows)
     bool  m_scaleFacePreviewOk = false;
     TopoDS_Shape m_scaleFacePreviousShape;
 

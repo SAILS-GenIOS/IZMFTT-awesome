@@ -110,13 +110,11 @@ bool ScaleFaceOp::execute(Document& doc) {
             }
             result = fuse.Shape();
         } else {
-            // Pinch: cut the last L off, intersect the removed tip with a
-            // pinching frustum, fuse it back.
-            gp_Pnt cutPt = centroid.Translated(gp_Vec(n) * (-m_length));
-
-            // Half-space substitute: a huge box beyond the cut plane on
-            // the tip side, built as a prism of a big rectangle face on
-            // the cut plane (prism of a planar face — robust).
+            // Pinch: reshape the last L of the body toward the scaled
+            // outline. When L spans the WHOLE body ("scale the top face
+            // and the sides follow from the base" — the default), the cut
+            // degenerates and a single Common against the frustum does
+            // everything.
             Bnd_Box bb;
             BRepBndLib::Add(m_previousShape, bb);
             double bx0, by0, bz0, bx1, by1, bz1;
@@ -124,21 +122,26 @@ bool ScaleFaceOp::execute(Document& doc) {
             double diag = gp_Pnt(bx0, by0, bz0).Distance(
                 gp_Pnt(bx1, by1, bz1)) + m_length;
 
-            gp_Pln cutPln(cutPt, n);
-            TopoDS_Face bigFace = BRepBuilderAPI_MakeFace(
-                cutPln, -diag, diag, -diag, diag).Face();
-            TopoDS_Shape tipBox =
-                BRepPrimAPI_MakePrism(bigFace, gp_Vec(n) * (2.0 * diag))
-                    .Shape();
+            // Depth of the body behind the face along -n.
+            double depth = 0.0;
+            {
+                gp_Pnt corners[8] = {
+                    gp_Pnt(bx0, by0, bz0), gp_Pnt(bx1, by0, bz0),
+                    gp_Pnt(bx0, by1, bz0), gp_Pnt(bx1, by1, bz0),
+                    gp_Pnt(bx0, by0, bz1), gp_Pnt(bx1, by0, bz1),
+                    gp_Pnt(bx0, by1, bz1), gp_Pnt(bx1, by1, bz1)};
+                for (const auto& c : corners) {
+                    double d = gp_Vec(c, centroid).Dot(gp_Vec(n));
+                    depth = std::max(depth, d);
+                }
+            }
+            bool fullDepth = m_length >= depth - 1e-4;
 
-            BRepAlgoAPI_Cut mainCut(m_previousShape, tipBox);
-            mainCut.SetFuzzyValue(1.0e-4);
-            mainCut.Build();
-            if (!mainCut.IsDone()) return false;
-            TopoDS_Shape mainPiece = mainCut.Shape();
+            gp_Pnt cutPt = centroid.Translated(gp_Vec(n) * (-m_length));
 
-            // Pinching frustum: full-size outline AT the cut plane →
-            // scaled outline at the original cap plane.
+            // Pinching frustum: full-size outline AT the cut plane (or
+            // just past the body's far side for full-depth) → scaled
+            // outline at the original cap plane.
             gp_Trsf back;
             back.SetTranslation(gp_Vec(n) * (-m_length));
             TopoDS_Wire wBase = movedWire(capWire, back);
@@ -153,22 +156,44 @@ bool ScaleFaceOp::execute(Document& doc) {
                 return false;
             }
 
-            BRepAlgoAPI_Common tipCommon(m_previousShape, loft.Shape());
-            tipCommon.SetFuzzyValue(1.0e-4);
-            tipCommon.Build();
-            if (!tipCommon.IsDone()) return false;
-            // Keep only the part of the pinched tip beyond the cut plane —
-            // the frustum also overlaps inboard material.
-            BRepAlgoAPI_Common tipPiece(tipCommon.Shape(), tipBox);
-            tipPiece.SetFuzzyValue(1.0e-4);
-            tipPiece.Build();
-            if (!tipPiece.IsDone()) return false;
+            if (fullDepth) {
+                // The frustum spans the entire body: one Common does it.
+                BRepAlgoAPI_Common common(m_previousShape, loft.Shape());
+                common.SetFuzzyValue(1.0e-4);
+                common.Build();
+                if (!common.IsDone()) return false;
+                result = common.Shape();
+            } else {
+                gp_Pln cutPln(cutPt, n);
+                TopoDS_Face bigFace = BRepBuilderAPI_MakeFace(
+                    cutPln, -diag, diag, -diag, diag).Face();
+                TopoDS_Shape tipBox =
+                    BRepPrimAPI_MakePrism(bigFace, gp_Vec(n) * (2.0 * diag))
+                        .Shape();
 
-            BRepAlgoAPI_Fuse fuse(mainPiece, tipPiece.Shape());
-            fuse.SetFuzzyValue(1.0e-4);
-            fuse.Build();
-            if (!fuse.IsDone()) return false;
-            result = fuse.Shape();
+                BRepAlgoAPI_Cut mainCut(m_previousShape, tipBox);
+                mainCut.SetFuzzyValue(1.0e-4);
+                mainCut.Build();
+                if (!mainCut.IsDone()) return false;
+                TopoDS_Shape mainPiece = mainCut.Shape();
+
+                BRepAlgoAPI_Common tipCommon(m_previousShape, loft.Shape());
+                tipCommon.SetFuzzyValue(1.0e-4);
+                tipCommon.Build();
+                if (!tipCommon.IsDone()) return false;
+                // Keep only the part beyond the cut plane — the frustum
+                // also overlaps inboard material.
+                BRepAlgoAPI_Common tipPiece(tipCommon.Shape(), tipBox);
+                tipPiece.SetFuzzyValue(1.0e-4);
+                tipPiece.Build();
+                if (!tipPiece.IsDone()) return false;
+
+                BRepAlgoAPI_Fuse fuse(mainPiece, tipPiece.Shape());
+                fuse.SetFuzzyValue(1.0e-4);
+                fuse.Build();
+                if (!fuse.IsDone()) return false;
+                result = fuse.Shape();
+            }
         }
 
         if (result.IsNull()) return false;

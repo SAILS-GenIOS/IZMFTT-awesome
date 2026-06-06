@@ -825,8 +825,9 @@ void Application::renderScaleFacePanel() {
 
     ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "Scale Face");
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240.0f);
-    ImGui::TextDisabled("Pinch (or flare) the body toward a scaled copy of "
-                        "this end face — wing tip to winglet.");
+    ImGui::TextDisabled("Scale this face; the body re-slopes to follow. "
+                        "Full length = sides follow from the base; shorter "
+                        "= blend only near the face.");
     ImGui::PopTextWrapPos();
     ImGui::Separator();
 
@@ -845,8 +846,8 @@ void Application::renderScaleFacePanel() {
     bool changed = false;
     if (ImGui::SliderFloat("Scale", &m_scaleFacePct, 5.0f, 200.0f, "%.0f %%"))
         changed = true;
-    if (ImGui::SliderFloat("Length", &m_scaleFaceLen, 0.5f, 100.0f,
-                           "%.1f mm"))
+    if (ImGui::SliderFloat("Length", &m_scaleFaceLen, 0.5f,
+                           std::max(m_scaleFaceLenMax, 1.0f), "%.1f mm"))
         changed = true;
     ImGui::Text("Mode");
     ImGui::SameLine();

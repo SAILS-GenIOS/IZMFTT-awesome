@@ -911,19 +911,40 @@ void Application::beginInteractiveScaleFace() {
         m_scaleFacePreviousShape = m_document->getBody(m_scaleFaceBodyId);
     } catch (...) { return; }
     m_scaleFacePct = 30.0f;
-    m_scaleFaceMode = 0;
-    // Default blend length: ~15% of the body's bbox diagonal - visible at
-    // any scale without dwarfing small parts.
+    m_scaleFaceMode = 1; // Pinch: "scale this face, the body follows"
+    // Default blend length = the FULL depth of the body behind the face,
+    // so scaling the top of a box re-slopes the sides from the BASE
+    // (Steve's expected semantics). Dial the slider down for a partial
+    // chamfer-like blend instead.
     m_scaleFaceLen = 10.0f;
+    m_scaleFaceLenMax = 100.0f;
     try {
+        BRepGProp_Face gpf(m_scaleFaceFace);
+        double u1, u2, v1, v2;
+        gpf.Bounds(u1, u2, v1, v2);
+        gp_Pnt onFace;
+        gp_Vec nv;
+        gpf.Normal(0.5 * (u1 + u2), 0.5 * (v1 + v2), onFace, nv);
         Bnd_Box bb;
         BRepBndLib::Add(m_scaleFacePreviousShape, bb);
-        if (!bb.IsVoid()) {
+        if (nv.Magnitude() > 1e-9 && !bb.IsVoid()) {
+            gp_Dir n(nv);
             double x0, y0, z0, x1, y1, z1;
             bb.Get(x0, y0, z0, x1, y1, z1);
-            float diag = static_cast<float>(
-                gp_Pnt(x0, y0, z0).Distance(gp_Pnt(x1, y1, z1)));
-            m_scaleFaceLen = std::max(1.0f, diag * 0.15f);
+            gp_Pnt corners[8] = {
+                gp_Pnt(x0, y0, z0), gp_Pnt(x1, y0, z0),
+                gp_Pnt(x0, y1, z0), gp_Pnt(x1, y1, z0),
+                gp_Pnt(x0, y0, z1), gp_Pnt(x1, y0, z1),
+                gp_Pnt(x0, y1, z1), gp_Pnt(x1, y1, z1)};
+            double depth = 0.0;
+            for (const auto& c : corners) {
+                double d = gp_Vec(c, onFace).Dot(gp_Vec(n));
+                depth = std::max(depth, d);
+            }
+            if (depth > 1e-3) {
+                m_scaleFaceLenMax = static_cast<float>(depth);
+                m_scaleFaceLen = m_scaleFaceLenMax; // whole body follows
+            }
         }
     } catch (...) {}
     m_scaleFaceActive = true;
