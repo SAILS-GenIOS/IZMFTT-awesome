@@ -3,6 +3,26 @@
 All notable changes to Materializr are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [0.8.3] — 2026-06-06
+
+### Added
+
+- **Taper Face.** Select one or more faces of a body → **Taper** (Face
+  Operations) → tilt them about the body's base with a live-preview angle
+  slider (−45° to +45°). A cylinder wall becomes a cone; a box's sides
+  become a pyramid frustum. Pull axis is automatic (cylinders and cones
+  draft along their own axis; flat faces pick a sensible upright) with
+  manual X/Y/Z override and a flip-base option for which end stays fixed.
+  The panel reports live whether the preview is working, with guidance when
+  a face/axis combination can't be drafted. Fully parametric: undoable,
+  saved, re-editable after reload.
+
+### Fixed
+
+- **STL exports now stand upright in slicers** — the Y-up scene rotates to
+  the Z-up convention on export (a proper rotation, not a mirroring axis
+  swap), matching what STEP export already did.
+
 ## [0.8.2] — 2026-06-05
 
 The dogfood release: ten fixes straight from real from-scratch modeling
