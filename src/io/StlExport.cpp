@@ -2,7 +2,14 @@
 #include "../core/Document.h"
 
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <StlAPI_Writer.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Ax1.hxx>
+#include <cmath>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <TopoDS.hxx>
@@ -61,14 +68,24 @@ StlExportResult StlExport::exportFile(const std::string& filePath, const Documen
     return exportShape(filePath, compound, options);
 }
 
-StlExportResult StlExport::exportShape(const std::string& filePath, const TopoDS_Shape& shape,
+StlExportResult StlExport::exportShape(const std::string& filePath, const TopoDS_Shape& inShape,
                                         const StlExportOptions& options) {
     StlExportResult result;
 
-    if (shape.IsNull()) {
+    if (inShape.IsNull()) {
         result.errorMessage = "Cannot export a null shape.";
         return result;
     }
+
+    // Y-up scene → Z-up file, same proper rotation StepIO::exportBodies
+    // applies (a bare Y/Z swap would MIRROR the part — inside-out STLs).
+    // Slicers and other CAD expect Z-up; without this, exported parts lie
+    // on their side on the print bed.
+    gp_Trsf yUpToZUp;
+    yUpToZUp.SetRotation(gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(1.0, 0.0, 0.0)),
+                         M_PI * 0.5);
+    TopoDS_Shape shape = BRepBuilderAPI_Transform(inShape, yUpToZUp,
+                                                  Standard_True).Shape();
 
     // Tessellate the shape
     BRepMesh_IncrementalMesh mesh(shape, options.linearDeflection, Standard_False,
