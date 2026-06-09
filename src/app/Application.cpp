@@ -527,6 +527,11 @@ void Application::showThreadsLastToast() {
     m_toastExpiry = ImGui::GetTime() + 5.0;
 }
 
+void Application::showToast(const std::string& text, double seconds) {
+    m_toastText = text;
+    m_toastExpiry = ImGui::GetTime() + seconds;
+}
+
 void Application::renderTransientToast() {
     if (m_toastText.empty() || ImGui::GetTime() > m_toastExpiry) return;
     ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -606,6 +611,7 @@ void Application::cancelAllInteractivePreviews() {
     // not the original). (Steve: "switching tools, the action that was
     // never committed gets a weird half-cancel I can't undo".)
     if (m_edgeOpActive) cancelInteractiveEdgeOp();
+    if (m_moveFaceActive) cancelMoveFace();
 }
 
 void Application::beginIop(materializr::InteractiveOpController& ctl) {
@@ -1218,6 +1224,10 @@ void Application::handleToolAction(int action) {
         }
         case ToolAction::PushPull: {
             beginPushPull();
+            break;
+        }
+        case ToolAction::MoveFace: {
+            beginMoveFace();
             break;
         }
         case ToolAction::LookAtSketch: {
@@ -1869,6 +1879,8 @@ void Application::handleShortcuts() {
             cancelResizeCylindrical();
         } else if (m_edgeOpActive) {
             cancelInteractiveEdgeOp();
+        } else if (m_moveFaceActive) {
+            cancelMoveFace();
         } else if (m_extruding) {
             cancelInteractiveExtrude();
         } else if (m_inSketchMode) {
@@ -1902,6 +1914,9 @@ void Application::handleShortcuts() {
         m_pushPullDistance = static_cast<float>(std::atof(m_pushPullInputBuf));
         updatePushPull();
         commitPushPull();
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Enter) && m_moveFaceActive) {
+        commitMoveFace();
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Home)) {
         m_viewport->getCamera().reset();

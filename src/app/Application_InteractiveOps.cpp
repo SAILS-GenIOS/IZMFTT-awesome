@@ -18,6 +18,7 @@
 #include "modeling/SketchTool.h"
 #include "modeling/ExtrudeOp.h"
 #include "modeling/PushPullOp.h"
+#include "modeling/MoveFaceOp.h"
 #include "modeling/FilletOp.h"
 #include "modeling/ChamferOp.h"
 #include "modeling/ShellOp.h"
@@ -1479,6 +1480,180 @@ void Application::cancelPushPull() {
     m_pushPullPreviewApplied = false;
     m_pushPullActive = false;
     m_pushPullTargets.clear();
+    m_meshesDirty = true;
+}
+
+// ─── Move Face (in-plane slide → whole-body shear) ──────────────────────────
+
+void Application::beginMoveFace() {
+    cancelAllInteractivePreviews();
+    m_moveFaceActive = false;
+    m_moveFaceBodyId = -1;
+    m_moveFaceFace.Nullify();
+    m_moveFaceVec = glm::vec3(0.0f);
+    m_moveFaceBase = glm::vec3(0.0f);
+    m_moveFaceDragging = false;
+
+    // First selected face + its owning body.
+    for (const auto& e : m_selection->getSelection()) {
+        if (e.type == SelectionType::Face && !e.shape.IsNull()) {
+            m_moveFaceBodyId = e.bodyId;
+            m_moveFaceFace = TopoDS::Face(e.shape);
+            break;
+        }
+    }
+    if (m_moveFaceBodyId < 0 || m_moveFaceFace.IsNull()) return;
+
+    // Move Face only makes sense on a FLAT face (the shear pins one plane and
+    // slides another). A curved face (cylinder side, fillet, sphere) has no
+    // single plane to slide, so refuse with guidance instead of shearing junk.
+    {
+        Handle(Geom_Surface) surf = BRep_Tool::Surface(m_moveFaceFace);
+        if (surf.IsNull() || !surf->IsKind(STANDARD_TYPE(Geom_Plane))) {
+            std::fprintf(stderr, "[MoveFace] declined: select a FLAT face\n");
+            showToast("Move Face needs a flat face - pick a planar face.");
+            return;
+        }
+    }
+
+    try { m_moveFacePreviousShape = m_document->getBody(m_moveFaceBodyId); }
+    catch (...) { return; }
+
+    // Face plane (orientation-corrected outward normal + a point on it).
+    try {
+        BRepGProp_Face prop(m_moveFaceFace);
+        double u1, u2, v1, v2;
+        prop.Bounds(u1, u2, v1, v2);
+        gp_Pnt c; gp_Vec n;
+        prop.Normal((u1 + u2) * 0.5, (v1 + v2) * 0.5, c, n);
+        if (n.Magnitude() < 1e-9) return;
+        n.Normalize();
+        m_moveFaceP0 = glm::vec3(c.X(), c.Y(), c.Z());
+        m_moveFaceN  = glm::vec3(n.X(), n.Y(), n.Z());
+    } catch (...) { return; }
+
+    // Two in-plane arrow axes: project the world axis least aligned with N into
+    // the face plane → A; B = N × A. A box top gets clean world-aligned arrows.
+    {
+        glm::vec3 N = m_moveFaceN;
+        glm::vec3 ref = (std::abs(N.x) < 0.9f) ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+        glm::vec3 A = ref - glm::dot(ref, N) * N;
+        if (glm::length(A) < 1e-5f) {
+            ref = glm::vec3(0, 0, 1);
+            A = ref - glm::dot(ref, N) * N;
+        }
+        m_moveFaceAxisA = glm::normalize(A);
+        m_moveFaceAxisB = glm::normalize(glm::cross(N, m_moveFaceAxisA));
+    }
+    m_moveFaceGrab = -1;
+
+    // Sketches sitting ON this face slide along with it. Coincident = plane
+    // parallel to the face AND lying on it (same offset). Snapshot their planes
+    // so the live preview / cancel can restore them.
+    m_moveFaceSketchIds.clear();
+    m_moveFaceSketchPlanes0.clear();
+    {
+        gp_Vec fN(m_moveFaceN.x, m_moveFaceN.y, m_moveFaceN.z);
+        gp_Pnt fP(m_moveFaceP0.x, m_moveFaceP0.y, m_moveFaceP0.z);
+        for (int sid : m_document->getAllSketchIds()) {
+            auto sk = m_document->getSketch(sid);
+            if (!sk) continue;
+            const gp_Pln& sp = sk->getPlane();
+            gp_Vec sN(sp.Axis().Direction());
+            if (std::abs(sN.Dot(fN)) < 0.999) continue; // not parallel
+            gp_Vec d(sp.Location().X() - fP.X(), sp.Location().Y() - fP.Y(),
+                     sp.Location().Z() - fP.Z());
+            if (std::abs(d.Dot(fN)) > 0.05) continue;   // not on the face plane
+            m_moveFaceSketchIds.push_back(sid);
+            m_moveFaceSketchPlanes0.push_back(sp);
+        }
+    }
+
+    m_moveFaceActive = true;
+}
+
+// Restore the on-face sketches to their snapshot planes, then slide them by
+// `v` (so the live preview never compounds). v = (0,0,0) just restores.
+void Application::moveFaceSlideSketches(const glm::vec3& v) {
+    gp_Trsf t;
+    t.SetTranslation(gp_Vec(v.x, v.y, v.z));
+    for (size_t i = 0; i < m_moveFaceSketchIds.size(); ++i) {
+        if (auto sk = m_document->getSketch(m_moveFaceSketchIds[i])) {
+            gp_Pln p = m_moveFaceSketchPlanes0[i];
+            if (v.x != 0.0f || v.y != 0.0f || v.z != 0.0f) p.Transform(t);
+            sk->setPlane(p);
+        }
+    }
+}
+
+void Application::updateMoveFace() {
+    if (!m_moveFaceActive || m_moveFaceBodyId < 0) return;
+    // Always preview from the original snapshot so the shear isn't compounded.
+    m_document->updateBody(m_moveFaceBodyId, m_moveFacePreviousShape);
+    m_meshesDirty = true;
+    if (glm::length(m_moveFaceVec) < 1e-4f) { moveFaceSlideSketches(glm::vec3(0.0f)); return; }
+    try {
+        auto op = std::make_unique<MoveFaceOp>();
+        op->setBody(m_moveFaceBodyId);
+        op->setFace(m_moveFaceFace);
+        op->setMoveVector(gp_Vec(m_moveFaceVec.x, m_moveFaceVec.y, m_moveFaceVec.z));
+        // No sketch ids on the preview op — the sketches are slid separately
+        // below so they restore-then-translate each frame instead of compounding.
+        if (!op->execute(*m_document))
+            m_document->updateBody(m_moveFaceBodyId, m_moveFacePreviousShape);
+        moveFaceSlideSketches(m_moveFaceVec);
+        m_meshesDirty = true;
+    } catch (...) {
+        m_document->updateBody(m_moveFaceBodyId, m_moveFacePreviousShape);
+    }
+}
+
+void Application::commitMoveFace() {
+    if (!m_moveFaceActive) { return; }
+    // Restore the original body + sketch planes before the real op runs (it
+    // snapshots the body from the doc and re-applies the slide atomically).
+    if (m_moveFaceBodyId >= 0 && !m_moveFacePreviousShape.IsNull())
+        m_document->updateBody(m_moveFaceBodyId, m_moveFacePreviousShape);
+    moveFaceSlideSketches(glm::vec3(0.0f)); // restore sketches to snapshot
+
+    if (glm::length(m_moveFaceVec) > 1e-3f && m_moveFaceBodyId >= 0 &&
+        !m_moveFaceFace.IsNull()) {
+        auto op = std::make_unique<MoveFaceOp>();
+        op->setBody(m_moveFaceBodyId);
+        op->setFace(m_moveFaceFace);
+        op->setMoveVector(gp_Vec(m_moveFaceVec.x, m_moveFaceVec.y, m_moveFaceVec.z));
+        op->setSketchIds(m_moveFaceSketchIds); // on-face sketches ride along
+        if (m_history->pushOperation(std::move(op), *m_document))
+            std::fprintf(stdout, "Move Face committed (%.2f, %.2f, %.2f), %d sketch(es)\n",
+                         m_moveFaceVec.x, m_moveFaceVec.y, m_moveFaceVec.z,
+                         static_cast<int>(m_moveFaceSketchIds.size()));
+    }
+    m_moveFaceSketchIds.clear();
+    m_moveFaceSketchPlanes0.clear();
+    m_moveFaceActive = false;
+    m_moveFaceBodyId = -1;
+    m_moveFaceFace.Nullify();
+    m_moveFacePreviousShape.Nullify();
+    m_moveFaceVec = glm::vec3(0.0f);
+    m_moveFaceBase = glm::vec3(0.0f);
+    m_moveFaceDragging = false;
+    m_meshesDirty = true;
+}
+
+void Application::cancelMoveFace() {
+    if (!m_moveFaceActive) return;
+    if (m_moveFaceBodyId >= 0 && !m_moveFacePreviousShape.IsNull())
+        m_document->updateBody(m_moveFaceBodyId, m_moveFacePreviousShape);
+    moveFaceSlideSketches(glm::vec3(0.0f)); // restore sketches to snapshot
+    m_moveFaceSketchIds.clear();
+    m_moveFaceSketchPlanes0.clear();
+    m_moveFaceActive = false;
+    m_moveFaceBodyId = -1;
+    m_moveFaceFace.Nullify();
+    m_moveFacePreviousShape.Nullify();
+    m_moveFaceVec = glm::vec3(0.0f);
+    m_moveFaceBase = glm::vec3(0.0f);
+    m_moveFaceDragging = false;
     m_meshesDirty = true;
 }
 

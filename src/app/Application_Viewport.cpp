@@ -295,7 +295,7 @@ void Application::renderViewport() {
             m_inSketchMode || m_extruding || m_edgeOpActive ||
             m_pushPullActive || m_resizeCylActive || anyIopActive() ||
             m_patternActive || m_loftActive || m_planeOpActive ||
-            m_sketchPatternActive || m_revolveActive;
+            m_sketchPatternActive || m_revolveActive || m_moveFaceActive;
         bool gizmoShown = false;
         if (m_selection->hasSelectedBodies() && !m_selection->navigationOnly() &&
             !anyInteractiveOpActive) {
@@ -501,6 +501,17 @@ void Application::renderViewport() {
 
         if (m_gizmo->isVisible()) {
             m_gizmo->render(view, proj);
+        }
+
+        // Move Face: two yellow in-plane arrows (the move gizmo's arrow mesh,
+        // minus the out-of-plane axis). The latched arrow brightens.
+        if (m_moveFaceActive) {
+            glm::vec3 hot(1.0f, 0.92f, 0.25f);   // bright yellow
+            glm::vec3 dim(0.78f, 0.66f, 0.12f);  // dimmer yellow
+            m_gizmo->renderArrowAlong(view, proj, m_moveFaceP0, m_moveFaceAxisA,
+                                      m_moveFaceGrab == 0 ? hot : dim);
+            m_gizmo->renderArrowAlong(view, proj, m_moveFaceP0, m_moveFaceAxisB,
+                                      m_moveFaceGrab == 1 ? hot : dim);
         }
 
         // Render all stored sketches (visible only) plus the active sketch
@@ -2134,6 +2145,61 @@ void Application::renderViewport() {
                 updatePushPull();
             }
 
+            // Move Face: intersect the cursor ray with the face's plane, latch
+            // the nearer of the two in-plane arrows at drag start, then slide
+            // ONLY along that arrow's axis (the whole body shears live).
+            if (m_moveFaceActive && !camDragging &&
+                ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+                ImVec2 mp = ImGui::GetMousePos();
+                ImVec2 wp = ImGui::GetItemRectMin();
+                glm::mat4 invVP = glm::inverse(proj * view);
+                auto w2s = [&](glm::vec3 w, ImVec2& out) -> bool {
+                    glm::vec4 c = proj * view * glm::vec4(w, 1.0f);
+                    if (c.w <= 1e-6f) return false;
+                    out = ImVec2(wp.x + (c.x / c.w * 0.5f + 0.5f) * contentSize.x,
+                                 wp.y + (1.0f - (c.y / c.w * 0.5f + 0.5f)) * contentSize.y);
+                    return true;
+                };
+                float nx = ((mp.x - wp.x) / contentSize.x) * 2.0f - 1.0f;
+                float ny = 1.0f - ((mp.y - wp.y) / contentSize.y) * 2.0f;
+                glm::vec4 np = invVP * glm::vec4(nx, ny, -1.0f, 1.0f);
+                glm::vec4 fp = invVP * glm::vec4(nx, ny,  1.0f, 1.0f);
+                glm::vec3 ro(np / np.w), rd = glm::normalize(glm::vec3(fp / fp.w) - ro);
+                float denom = glm::dot(rd, m_moveFaceN);
+                if (std::abs(denom) > 1e-6f) {
+                    float t = glm::dot(m_moveFaceP0 - ro, m_moveFaceN) / denom;
+                    glm::vec3 hit = ro + rd * t;
+                    if (!m_moveFaceDragging) {
+                        // Latch the arrow whose mid-shaft is nearest the cursor.
+                        float armLen = 0.25f * glm::length(
+                            glm::vec3(cam.getTarget()) - glm::vec3(cam.getPosition()));
+                        if (armLen < 1.0f) armLen = 8.0f;
+                        auto sd = [&](glm::vec3 axis) -> float {
+                            ImVec2 s; if (!w2s(m_moveFaceP0 + axis * armLen * 0.6f, s)) return 1e18f;
+                            float dx = s.x - mp.x, dy = s.y - mp.y; return dx*dx + dy*dy;
+                        };
+                        float dA = std::min(sd(m_moveFaceAxisA), sd(-m_moveFaceAxisA));
+                        float dB = std::min(sd(m_moveFaceAxisB), sd(-m_moveFaceAxisB));
+                        m_moveFaceGrab = (dA <= dB) ? 0 : 1;
+                        m_moveFaceDragStart = hit;
+                        m_moveFaceBase = m_moveFaceVec;
+                        m_moveFaceDragging = true;
+                    }
+                    glm::vec3 axis = (m_moveFaceGrab == 0) ? m_moveFaceAxisA : m_moveFaceAxisB;
+                    float along = glm::dot(hit - m_moveFaceDragStart, axis);
+                    // Snap the slide distance to whole grid steps when the grid
+                    // is on, so a Move Face lands on the lattice like everything
+                    // else (the body shear + sketch follow inherit it).
+                    if (m_snapToGrid && m_sketchGridStep > 0.0f)
+                        along = std::round(along / m_sketchGridStep) * m_sketchGridStep;
+                    m_moveFaceVec = m_moveFaceBase + axis * along;
+                    updateMoveFace();
+                }
+            } else if (m_moveFaceActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                m_moveFaceDragging = false; // released — next drag re-latches
+                m_moveFaceGrab = -1;
+            }
+
             // Fillet/Chamfer claim: on left-down, if the cursor is within
             // ~12 px of the visible arrow line(s), set m_edgeOpDragging
             // so gizmoOwnsDrag (above) suppresses orbit on the next drag
@@ -2269,7 +2335,7 @@ void Application::renderViewport() {
             // interactive op owns the left-drag: extrude, push/pull, fillet/chamfer,
             // or the pattern axis-origin picker).
             if (!m_inSketchMode && !m_extruding && !m_pushPullActive && !m_edgeOpActive &&
-                !m_scaleFaceCtl.active() &&
+                !m_scaleFaceCtl.active() && !m_moveFaceActive &&
                 !(m_patternActive && m_patternPickingOrigin)) {
                 ImVec2 mousePos = ImGui::GetMousePos();
                 ImVec2 winPos = ImGui::GetItemRectMin();
@@ -4504,6 +4570,34 @@ void Application::renderViewport() {
             cancelInteractiveEdgeOp();
         }
 
+        ImGui::End();
+    }
+
+    // Move Face: slide-in-plane instructions + commit/cancel. The body shears
+    // live as the user drags; this panel just confirms or bails.
+    if (m_moveFaceActive) {
+        ImGui::SetCursorPos(ImVec2(10, 30));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.5f, 1.0f));
+        ImGui::Text("MOVE FACE - drag the face to slide it in its plane. "
+                    "Enter to confirm, Escape to cancel.");
+        ImGui::PopStyleColor();
+
+        ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 260,
+                                       ImGui::GetWindowPos().y + 50));
+        ImGui::SetNextWindowSize(ImVec2(240, 0));
+        ImGui::Begin("##MoveFaceInput", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_AlwaysAutoResize);
+        ImGui::Text("Slide (mm)");
+        ImGui::Separator();
+        float mag = glm::length(m_moveFaceVec);
+        ImGui::Text("(%.1f, %.1f, %.1f)  |%.1f|",
+                    m_moveFaceVec.x, m_moveFaceVec.y, m_moveFaceVec.z, mag);
+        ImGui::Spacing();
+        if (ImGui::Button("Confirm (Enter)", ImVec2(110, 0))) commitMoveFace();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel (Esc)", ImVec2(110, 0))) cancelMoveFace();
         ImGui::End();
     }
 

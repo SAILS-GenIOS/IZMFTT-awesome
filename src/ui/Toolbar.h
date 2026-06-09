@@ -15,7 +15,7 @@ enum class ToolAction {
     StartSketch, StartSketchXY, StartSketchXZ, StartSketchYZ,
     SketchOnFace, SelectSketch, Line, Circle, Rectangle, Arc, Spline, Polygon, Trim, SketchText,
     SketchSvg,
-    FinishSketch, ExitSketchDiscard, EditSketch, ExtrudeSketch, SubtractSketch, PushPull, LookAtSketch,
+    FinishSketch, ExitSketchDiscard, EditSketch, ExtrudeSketch, SubtractSketch, PushPull, MoveFace, LookAtSketch,
     SketchCopy, SketchMirror, SketchLinearPattern, SketchRadialPattern,
     // Cycle the drawing-inference level Full → Reduced → Off.
     SketchCycleInference,

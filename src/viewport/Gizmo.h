@@ -32,6 +32,14 @@ public:
 
     void render(const glm::mat4& view, const glm::mat4& projection);
 
+    // Draw ONE translate-arrow (the same cone-headed mesh the move gizmo uses)
+    // pointing along an arbitrary world direction, in a custom colour, at a
+    // given position. Used by Move Face to show two yellow in-plane arrows that
+    // look like the familiar gizmo (minus the out-of-plane axis). Independent of
+    // m_position / m_visible / m_mode.
+    void renderArrowAlong(const glm::mat4& view, const glm::mat4& projection,
+                          glm::vec3 position, glm::vec3 dir, glm::vec3 color);
+
     GizmoResult handleInput(float mouseX, float mouseY,
                             float vpWidth, float vpHeight,
                             bool mouseDown, bool mouseJustPressed,

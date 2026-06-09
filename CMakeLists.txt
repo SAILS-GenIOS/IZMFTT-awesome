@@ -166,6 +166,7 @@ add_executable(materializr
     src/core/VersionManager.cpp
     src/modeling/ExtrudeOp.cpp
     src/modeling/PushPullOp.cpp
+    src/modeling/MoveFaceOp.cpp
     src/modeling/ReplayOp.cpp
     src/modeling/OperationFactory.cpp
     src/modeling/SubShapeIndex.cpp

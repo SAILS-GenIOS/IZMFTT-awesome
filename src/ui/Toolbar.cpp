@@ -488,6 +488,10 @@ ToolAction Toolbar::renderFaceTools() {
     if (ImGui::Button("Push / Pull", ImVec2(-1, 30)))
         action = ToolAction::PushPull;
     tip("Drag the face along its normal to extrude (+) or cut (−) into the body.");
+    if (ImGui::Button("Move Face", ImVec2(-1, 30)))
+        action = ToolAction::MoveFace;
+    tip("Slide the face within its own plane (up/down, side to side); the body "
+        "shears to follow. Not push/pull — the face stays in its plane.");
     // Extrude From a face → make a new body that's the face's silhouette
     // swept along its normal. Push/Pull modifies the source body; Extrude
     // always creates a separate body. Same ToolAction the sketch toolbar

@@ -88,6 +88,7 @@ private:
     // Transient centered toast (threads-last guidance etc.) — shown for a
     // few seconds, doesn't fight the per-frame status-bar message.
     void showThreadsLastToast();
+    void showToast(const std::string& text, double seconds = 4.0);
     void renderTransientToast();
     std::string m_toastText;
     double m_toastExpiry = 0.0;
@@ -203,6 +204,30 @@ private:
     void updatePushPull();
     void commitPushPull();
     void cancelPushPull();
+    // ── Move Face (in-plane slide → whole-body shear; see MoveFaceOp) ──
+    void beginMoveFace();
+    void updateMoveFace();   // live shear preview against the snapshot
+    void commitMoveFace();
+    void cancelMoveFace();
+    void moveFaceSlideSketches(const glm::vec3& v); // restore + slide on-face sketches
+    bool m_moveFaceActive = false;
+    int  m_moveFaceBodyId = -1;
+    TopoDS_Face  m_moveFaceFace;
+    TopoDS_Shape m_moveFacePreviousShape;    // snapshot for preview / restore
+    glm::vec3 m_moveFaceP0{0.0f};            // a point on the face plane
+    glm::vec3 m_moveFaceN{0.0f, 0.0f, 1.0f}; // face plane normal (outward)
+    glm::vec3 m_moveFaceVec{0.0f};           // accumulated in-plane slide
+    glm::vec3 m_moveFaceBase{0.0f};          // slide banked before the current drag
+    glm::vec3 m_moveFaceDragStart{0.0f};     // plane hit-point at drag start
+    bool m_moveFaceDragging = false;
+    // Two in-plane arrow axes + which one a drag latched (0=A, 1=B, -1=none).
+    glm::vec3 m_moveFaceAxisA{1.0f, 0.0f, 0.0f};
+    glm::vec3 m_moveFaceAxisB{0.0f, 1.0f, 0.0f};
+    int  m_moveFaceGrab = -1;
+    // Sketches sitting ON the moved face — they slide with it. Original planes
+    // snapshotted so the live preview / cancel can restore them.
+    std::vector<int>    m_moveFaceSketchIds;
+    std::vector<gp_Pln> m_moveFaceSketchPlanes0;
     void beginInteractiveExtrude(const TopoDS_Shape& profile,
                                  ExtrudeMode mode = ExtrudeMode::NewBody,
                                  int targetBody = -1,
