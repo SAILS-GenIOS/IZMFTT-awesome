@@ -3598,6 +3598,11 @@ void Application::run() {
                     else if (pending == "AxisTwoPoints")     beginConstructionAxisMode(5);
                     else if (pending == "AxisNormalToFace")  beginConstructionAxisMode(6);
                     else if (pending == "AxisTwoPlanes")     beginConstructionAxisMode(7);
+                    else if (pending == "PrimitiveBox")      beginPrimitivePopup(0);
+                    else if (pending == "PrimitiveCylinder") beginPrimitivePopup(1);
+                    else if (pending == "PrimitiveSphere")   beginPrimitivePopup(2);
+                    else if (pending == "PrimitiveCone")     beginPrimitivePopup(3);
+                    else if (pending == "PrimitiveTorus")    beginPrimitivePopup(4);
                     // Unknown ids are silently ignored — future plugins can
                     // ship their own without modifying Application by routing
                     // through whatever new dispatcher is added here.
@@ -3695,6 +3700,7 @@ void Application::run() {
             renderLoftPanel();
             renderConstructionPlanePanel();
             renderConstructionAxisPanel();
+            renderPrimitivePopup();
             renderRevolvePopup();
             renderRotatePlaneAboutAxisPopup();
             renderSketchMovePanel();

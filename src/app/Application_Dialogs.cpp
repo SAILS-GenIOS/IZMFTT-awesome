@@ -42,6 +42,7 @@
 #include "modeling/TextSketchOp.h"
 #include "modeling/ExtrudeOp.h"
 #include "modeling/ReplayOp.h"
+#include "modeling/PrimitiveOp.h"
 #include "modeling/ThreadOp.h"
 #include <chrono>
 #include <future>
@@ -2753,6 +2754,142 @@ void Application::renderSvgToolPanel() {
     }
     ImGui::End();
     if (!open) m_sketchTool->setMode(SketchToolMode::Select);
+}
+
+// ─── Primitive popup ─────────────────────────────────────────────────────────
+void Application::renderPrimitivePopup() {
+    if (!m_primitivePopupActive) return;
+
+    const char* titles[] = {
+        "New Box", "New Cylinder", "New Sphere", "New Cone", "New Torus"};
+    const int   k = m_primitivePopupKind;
+    if (k < 0 || k > 4) { m_primitivePopupActive = false; return; }
+
+    // Same pinned top-right placement the IOp panels use, so the popup never
+    // hides the viewport's body / selection.
+    ImGui::SetNextWindowPos(
+        ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 260,
+               ImGui::GetWindowPos().y + 50),
+        ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(260, 0), ImGuiCond_Appearing);
+    ImGui::Begin(titles[k], nullptr,
+                 ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_AlwaysAutoResize);
+
+    ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "Dimensions");
+    switch (k) {
+    case 0: // Box
+        ImGui::InputDouble("Width (X)",  &m_primitivePopupExtents[0],
+                           0.1, 1.0, "%.3f");
+        ImGui::InputDouble("Depth (Y)",  &m_primitivePopupExtents[1],
+                           0.1, 1.0, "%.3f");
+        ImGui::InputDouble("Height (Z)", &m_primitivePopupExtents[2],
+                           0.1, 1.0, "%.3f");
+        break;
+    case 1: // Cylinder
+        ImGui::InputDouble("Radius", &m_primitivePopupRadius, 0.1, 1.0, "%.3f");
+        ImGui::InputDouble("Height", &m_primitivePopupHeight, 0.1, 1.0, "%.3f");
+        break;
+    case 2: // Sphere
+        ImGui::InputDouble("Radius", &m_primitivePopupRadius, 0.1, 1.0, "%.3f");
+        break;
+    case 3: // Cone
+        ImGui::InputDouble("Bottom radius", &m_primitivePopupRadius,
+                           0.1, 1.0, "%.3f");
+        ImGui::InputDouble("Top radius",    &m_primitivePopupTopRadius,
+                           0.1, 1.0, "%.3f");
+        ImGui::InputDouble("Height",        &m_primitivePopupHeight,
+                           0.1, 1.0, "%.3f");
+        break;
+    case 4: // Torus
+        ImGui::InputDouble("Major radius",  &m_primitivePopupRadius,
+                           0.1, 1.0, "%.3f");
+        ImGui::InputDouble("Minor radius",  &m_primitivePopupMinorRadius,
+                           0.1, 1.0, "%.3f");
+        ImGui::TextDisabled("Major must exceed minor — equal radii are a "
+                            "degenerate self-touching torus.");
+        break;
+    }
+
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "Origin (mm)");
+    ImGui::InputDouble("X", &m_primitivePopupOrigin[0], 0.1, 1.0, "%.3f");
+    ImGui::InputDouble("Y", &m_primitivePopupOrigin[1], 0.1, 1.0, "%.3f");
+    ImGui::InputDouble("Z", &m_primitivePopupOrigin[2], 0.1, 1.0, "%.3f");
+    ImGui::TextDisabled("Box origin = corner; the rest use it as the axis "
+                        "base / centre.");
+
+    // Geometric validity check — must mirror the bounds in PrimitiveOp::
+    // execute(). If the user typed a degenerate combination (zero/negative
+    // extent, torus minor ≥ major, etc.) we grey out Create and explain
+    // WHY so they aren't left clicking a dead button. (Steve: a major <
+    // minor torus crashed the app instead of being rejected up-front.)
+    const char* invalidReason = nullptr;
+    bool ok = true;
+    switch (k) {
+    case 0:
+        if (m_primitivePopupExtents[0] <= 0.0 ||
+            m_primitivePopupExtents[1] <= 0.0 ||
+            m_primitivePopupExtents[2] <= 0.0) {
+            ok = false;
+            invalidReason = "All three extents must be > 0.";
+        }
+        break;
+    case 1:
+        if (m_primitivePopupRadius <= 0.0 || m_primitivePopupHeight <= 0.0) {
+            ok = false;
+            invalidReason = "Radius and height must both be > 0.";
+        }
+        break;
+    case 2:
+        if (m_primitivePopupRadius <= 0.0) {
+            ok = false; invalidReason = "Radius must be > 0.";
+        }
+        break;
+    case 3:
+        if (m_primitivePopupRadius < 0.0 || m_primitivePopupTopRadius < 0.0 ||
+            m_primitivePopupHeight <= 0.0 ||
+            (m_primitivePopupRadius <= 0.0 &&
+             m_primitivePopupTopRadius <= 0.0)) {
+            ok = false;
+            invalidReason = "Height must be > 0 and at least one radius "
+                            "must be positive (the other may be 0 for a tip).";
+        }
+        break;
+    case 4:
+        if (m_primitivePopupRadius <= 0.0 || m_primitivePopupMinorRadius <= 0.0) {
+            ok = false;
+            invalidReason = "Major and minor radii must both be > 0.";
+        } else if (m_primitivePopupRadius <= m_primitivePopupMinorRadius) {
+            ok = false;
+            invalidReason = "Major radius must exceed minor "
+                            "(equal = horn torus with zero-diameter hole; "
+                            "smaller = self-intersecting spindle torus).";
+        }
+        break;
+    }
+    if (!ok && invalidReason) {
+        ImGui::Spacing();
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240.0f);
+        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f),
+                           "%s", invalidReason);
+        ImGui::PopTextWrapPos();
+    }
+
+    ImGui::Spacing();
+    if (!ok) ImGui::BeginDisabled();
+    if (ImGui::Button("Create (Enter)", ImVec2(110, 0)) ||
+        (ok && ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
+        commitPrimitivePopup();
+    }
+    if (!ok) ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel (Esc)", ImVec2(110, 0)) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        cancelPrimitivePopup();
+    }
+    ImGui::End();
 }
 
 } // namespace materializr

@@ -15,6 +15,7 @@
 #include "ProjectSketchOp.h"
 #include "ResizeCylindricalOp.h"
 #include "ThreadOp.h"
+#include "PrimitiveOp.h"
 
 namespace OperationFactory {
 
@@ -46,6 +47,9 @@ std::unique_ptr<Operation> create(const std::string& typeId) {
     if (typeId == "project_sketch") return std::make_unique<ProjectSketchOp>();
     if (typeId == "resize_cylindrical") return std::make_unique<ResizeCylindricalOp>();
     if (typeId == "thread")  return std::make_unique<ThreadOp>(); // pure derived geometry
+    // Parametric primitives: kind + extents/radii live in the blob; the body
+    // id is replayed via rehydrateFromReload's `created` list.
+    if (typeId == "primitive") return std::make_unique<materializr::PrimitiveOp>();
 
     return nullptr;
 }

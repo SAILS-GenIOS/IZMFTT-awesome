@@ -32,6 +32,7 @@ void forceLink_Sketch();
 void forceLink_GizmoDrag();
 void forceLink_Loft();
 void forceLink_SvgImport();
+void forceLink_Primitives();
 
 void linkAll() {
     // Phase 1
@@ -63,6 +64,7 @@ void linkAll() {
     forceLink_GizmoDrag();
     forceLink_Loft();
     forceLink_SvgImport();
+    forceLink_Primitives();
 }
 
 }} // namespace materializr::force_link

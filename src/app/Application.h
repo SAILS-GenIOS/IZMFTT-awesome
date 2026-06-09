@@ -910,6 +910,27 @@ private:
     void cancelConstructionAxis();
     void renderConstructionAxisPanel();
 
+    // Primitive creation popup. Plugin fires requestInteractiveOp("Primitive*")
+    // and Application opens a small panel with the parameters appropriate for
+    // the chosen kind (extents for Box, radius/height for Cylinder/Cone/etc.
+    // /Origin for all of them). Confirm pushes a PrimitiveOp onto history;
+    // Cancel just closes the popup. No live preview yet — the geometry's
+    // cheap to recompute on commit and a stale preview body would have to be
+    // undone on every keystroke. (Steve: "primitives popup parameters; live-
+    // preview / fancier UI after 1.0".)
+    bool   m_primitivePopupActive = false;
+    int    m_primitivePopupKind   = 0; // 0=Box,1=Cyl,2=Sphere,3=Cone,4=Torus
+    double m_primitivePopupExtents[3]  = {10.0, 10.0, 10.0}; // box X/Y/Z
+    double m_primitivePopupRadius      = 5.0;                 // cyl/sphere/cone bottom/torus major
+    double m_primitivePopupHeight      = 10.0;                // cyl/cone
+    double m_primitivePopupTopRadius   = 0.0;                 // cone tip
+    double m_primitivePopupMinorRadius = 2.0;                 // torus tube
+    double m_primitivePopupOrigin[3]   = {0.0, 0.0, 0.0};     // world origin
+    void beginPrimitivePopup(int kindIdx);
+    void commitPrimitivePopup();
+    void cancelPrimitivePopup();
+    void renderPrimitivePopup();
+
     // Revolve popup. Opens when the user clicks Revolve in the body Tools
     // panel; takes a sketch profile + an axis (canonical world axis or a
     // Construction Axis from the document) + angle + mode. Apply pushes a

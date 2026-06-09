@@ -150,6 +150,12 @@ private:
     // creation modes the current selection supports. Shared across the face /
     // plane / edge / axis context renderers; renders nothing when no mode
     // applies.
+    // OCCT primitives (Box / Cylinder / Sphere / Cone / Torus) — a single
+    // "Primitives..." button that opens a popup with one menu item per kind.
+    // Each item fires a requestInteractiveOp the PrimitivesPlugin set up
+    // and Application opens the per-kind parameter popup. Keeps the empty-
+    // canvas toolbar from sprouting five sibling buttons.
+    void renderPrimitivesMenu();
     void renderAddPlaneMenu();
     // Single "Add Axis…" button + dropdown listing the construction-axis
     // creation modes the current selection supports (cylinder centreline,

@@ -23,6 +23,7 @@
 #include "modeling/ShellOp.h"
 #include "modeling/TaperOp.h"
 #include "modeling/ScaleFaceOp.h"
+#include "modeling/PrimitiveOp.h"
 #include "app/UserAxes.h"
 #include "modeling/ResizeCylindricalOp.h"
 #include "modeling/ThreadOp.h"
@@ -2069,6 +2070,81 @@ void Application::cancelConstructionPlane() {
     }
     m_planeOpActive = false;
     m_meshesDirty = true;
+}
+
+void Application::beginPrimitivePopup(int kindIdx) {
+    cancelAllInteractivePreviews();
+    m_primitivePopupActive = true;
+    m_primitivePopupKind   = kindIdx;
+    // Per-kind defaults so opening a fresh popup always starts at a sensible
+    // size (kindIdx switches via the toolbar buttons; we re-seed the kind-
+    // specific fields without touching the others, which keeps any custom
+    // origin / extents the user last typed when they reopen the same kind).
+    m_primitivePopupOrigin[0] = 0.0;
+    m_primitivePopupOrigin[1] = 0.0;
+    m_primitivePopupOrigin[2] = 0.0;
+    switch (kindIdx) {
+    case 0: // Box
+        m_primitivePopupExtents[0] = 10.0;
+        m_primitivePopupExtents[1] = 10.0;
+        m_primitivePopupExtents[2] = 10.0;
+        break;
+    case 1: // Cylinder
+        m_primitivePopupRadius = 5.0;
+        m_primitivePopupHeight = 10.0;
+        break;
+    case 2: // Sphere
+        m_primitivePopupRadius = 5.0;
+        break;
+    case 3: // Cone
+        m_primitivePopupRadius      = 5.0;
+        m_primitivePopupTopRadius   = 0.0;
+        m_primitivePopupHeight      = 10.0;
+        break;
+    case 4: // Torus
+        m_primitivePopupRadius      = 5.0;
+        m_primitivePopupMinorRadius = 2.0;
+        break;
+    }
+}
+
+void Application::commitPrimitivePopup() {
+    using K = materializr::PrimitiveOp::Kind;
+    auto op = std::make_unique<materializr::PrimitiveOp>();
+    K kind = K::Box;
+    switch (m_primitivePopupKind) {
+        case 0: kind = K::Box;      break;
+        case 1: kind = K::Cylinder; break;
+        case 2: kind = K::Sphere;   break;
+        case 3: kind = K::Cone;     break;
+        case 4: kind = K::Torus;    break;
+    }
+    op->setKind(kind);
+    op->setOrigin(m_primitivePopupOrigin[0],
+                  m_primitivePopupOrigin[1],
+                  m_primitivePopupOrigin[2]);
+    op->setBoxExtents(m_primitivePopupExtents[0],
+                      m_primitivePopupExtents[1],
+                      m_primitivePopupExtents[2]);
+    op->setRadius(m_primitivePopupRadius);
+    op->setHeight(m_primitivePopupHeight);
+    op->setTopRadius(m_primitivePopupTopRadius);
+    op->setMinorRadius(m_primitivePopupMinorRadius);
+    if (m_history->pushOperation(std::move(op), *m_document)) {
+        auto ids = m_document->getAllBodyIds();
+        if (!ids.empty()) {
+            SelectionEntry e;
+            e.type = SelectionType::Body;
+            e.bodyId = ids.back();
+            m_selection->select(e);
+        }
+        m_meshesDirty = true;
+    }
+    m_primitivePopupActive = false;
+}
+
+void Application::cancelPrimitivePopup() {
+    m_primitivePopupActive = false;
 }
 
 bool Application::computeDerivedPlaneNP(int kindIdx, gp_Dir& outNormal,

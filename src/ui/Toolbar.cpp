@@ -112,6 +112,28 @@ void Toolbar::renderPluginButtons(int contextMask) {
     }
 }
 
+void Toolbar::renderPrimitivesMenu() {
+    if (!m_pluginCtx) return;
+    if (ImGui::Button("Primitives...", ImVec2(-1, 30)))
+        ImGui::OpenPopup("PrimitivesMenu");
+    tip("Create a stock OCCT primitive (box / cylinder / sphere / cone / "
+        "torus). Picking one opens its parameter popup — defaults land a "
+        "10 mm / R5 mm shape at the world origin.");
+    if (ImGui::BeginPopup("PrimitivesMenu")) {
+        if (ImGui::MenuItem("Box"))
+            m_pluginCtx->requestInteractiveOp("PrimitiveBox");
+        if (ImGui::MenuItem("Cylinder"))
+            m_pluginCtx->requestInteractiveOp("PrimitiveCylinder");
+        if (ImGui::MenuItem("Sphere"))
+            m_pluginCtx->requestInteractiveOp("PrimitiveSphere");
+        if (ImGui::MenuItem("Cone"))
+            m_pluginCtx->requestInteractiveOp("PrimitiveCone");
+        if (ImGui::MenuItem("Torus"))
+            m_pluginCtx->requestInteractiveOp("PrimitiveTorus");
+        ImGui::EndPopup();
+    }
+}
+
 void Toolbar::renderAddPlaneMenu() {
     if (!m_selection || !m_pluginCtx) return;
 
@@ -384,6 +406,14 @@ ToolAction Toolbar::renderNoSelectionTools() {
     tip("Start a new sketch on the world XZ (front) plane.");
     if (ImGui::Button("Sketch on YZ", ImVec2(-1, 30))) action = ToolAction::StartSketchYZ;
     tip("Start a new sketch on the world YZ (side) plane.");
+
+    // OCCT primitives (Box / Cylinder / Sphere / Cone / Torus) under a
+    // single fold-out button so the empty-canvas toolbar stays compact.
+    // Each menu item fires a requestInteractiveOp the PrimitivesPlugin
+    // wired up; Application opens the per-kind parameter popup.
+    // (Steve: "Primitives button, pop-out side menu, then continue as
+    //  normal — keeps the Create section uncluttered".)
+    renderPrimitivesMenu();
 
     // Axis from a vertex selection (two vertices → through-points axis). This
     // is the fallback context vertices land in; renders nothing otherwise.

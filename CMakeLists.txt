@@ -156,6 +156,7 @@ add_executable(materializr
     src/plugins/GizmoDragPlugin.cpp
     src/plugins/LoftPlugin.cpp
     src/plugins/SvgImportPlugin.cpp
+    src/plugins/PrimitivesPlugin.cpp
     src/core/Document.cpp
     src/core/History.cpp
     src/core/SelectionManager.cpp
@@ -192,6 +193,7 @@ add_executable(materializr
     src/modeling/AlignOp.cpp
     src/modeling/CopyOp.cpp
     src/modeling/DeleteOp.cpp
+    src/modeling/PrimitiveOp.cpp
     src/modeling/TextSketchOp.cpp
     src/modeling/SvgImport.cpp
     src/modeling/Sketch.cpp
