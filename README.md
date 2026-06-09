@@ -22,6 +22,21 @@ real B-rep solids, not meshes — with a Dear ImGui interface. Sketch on any
 face or construction plane, pull it into a solid, keep editing any step of
 the history later (even after closing the project).
 
+## What it is (and isn't)
+
+Materializr **isn't trying to replace** SolidWorks, Fusion 360, FreeCAD, or any
+other CAD program. It aims for the **middle ground between dead-simple and
+fully-featured** — enough genuine parametric solid modeling to make real parts,
+without a steep learning curve, a subscription, or an account. If you've ever
+found beginner tools too limiting and pro tools too heavy, that gap is what
+this is for.
+
+It's also **young software built quickly, so expect rough edges — there are
+bugs we haven't found yet.** The good news: operations validate their results
+and *refuse* rather than silently produce garbage, so a failed action leaves
+your model untouched instead of corrupting it. Still: **save often**, and if
+something behaves oddly, a bug report is the most useful thing you can send.
+
 ## What it does
 
 **Sketch** — lines, circles, arcs, splines, polygons, rectangles with
@@ -95,6 +110,8 @@ this would exist without them.
   used for every panel and overlay (MIT).
 - [GLFW](https://www.glfw.org/) — window, input, and OpenGL context
   creation (zlib).
+- [GLEW](https://glew.sourceforge.net/) — OpenGL extension loading on
+  Windows (modified BSD / MIT).
 
 **File I/O & exchange**
 
