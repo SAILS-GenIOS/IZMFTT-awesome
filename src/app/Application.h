@@ -604,6 +604,13 @@ private:
     bool  m_edgeOpHasFaceDirs = false;
     bool  m_edgeOpCanTwoDist = false; // selection supports a consistent A/B chamfer
     int   m_edgeOpGrab = -1; // -1 none, 0 = arrow A, 1 = arrow B (during a drag)
+    // Set on the left-click frame iff the cursor was near the edge-op arrow
+    // line; cleared on release. Joins gizmoOwnsDrag so trackpad-mode left-
+    // orbit can't steal the drag — and conversely, dragging from empty
+    // space orbits the camera instead of yanking the value, matching the
+    // Scale Face pattern. (Steve: chamfer / fillet arrows didn't grab the
+    // cursor in trackpad mode.)
+    bool  m_edgeOpDragging = false;
     // History index of the op being re-edited. -1 means "creating new" — the
     // commit path then pushes a fresh FilletOp / ChamferOp. >=0 means "editing
     // existing" — commit updates the op's parameter and calls editStep().
@@ -625,7 +632,12 @@ private:
     // pre-state for live preview, and reuses the same drag handle + popup UI
     // as creation. Triggered by clicking a face the op produced.
     void beginInteractiveEdgeOpEdit(int historyIndex);
-    void updateInteractiveEdgeOp();
+    // Re-runs the live preview at m_edgeOpValue / m_edgeOpValue2. Returns
+    // true iff a non-zero preview was successfully applied; false on a
+    // zero/edit-mode-skip or a kernel failure (the snapshot is restored in
+    // that case). Begin uses the return value to probe a starting radius
+    // for new fillets so a fresh op shows a visible preview right away.
+    bool updateInteractiveEdgeOp();
     void commitInteractiveEdgeOp();
     void cancelInteractiveEdgeOp();
 

@@ -208,6 +208,11 @@ void TaperController::panelBody(const IopContext&, bool& changed) {
     if (previewOk()) {
         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f),
                            "Previewing %.1f deg", m_angle);
+    } else if (std::abs(m_angle) < 0.1f) {
+        // buildOp() short-circuits at ~0° so no preview is computed —
+        // but the face is fine. Don't flash the "can't taper" warning
+        // when the user is just sitting on the slider's zero stop.
+        ImGui::TextDisabled("Move the angle slider to preview.");
     } else {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240.0f);
         ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f),

@@ -995,13 +995,47 @@ void Application::renderViewport() {
                 }
             } else if (m_edgeOpActive && m_edgeOpHasHandle &&
                        m_edgeOpTwoDist && m_edgeOpHasFaceDirs) {
-                // Two-distance chamfer: one arrow per adjacent face, each
-                // labelled at its tip (A = amber = distance 1, B = blue =
-                // distance 2). The grabbed arrow is drawn thicker.
+                // Two-distance chamfer: one single-head arrow per adjacent
+                // face. Drawn AT the edge with a tip pointing outward — the
+                // arrow line is also the click-and-drag target (the input
+                // handler hit-tests this same line), so what you see is
+                // what you click. Replaces an older double-headed
+                // dimension-line visual whose offset and double arrows
+                // made the click target unfindable. (Steve: arrows should
+                // point AWAY from the corner, not be double-ended.)
+                auto edgeArrow = [&](glm::vec3 fromW, glm::vec3 toW,
+                                     ImU32 col, bool grabbed) {
+                    ImVec2 a, b;
+                    if (!toImg(fromW, a) || !toImg(toW, b)) return;
+                    ImVec2 d(b.x - a.x, b.y - a.y);
+                    float len = std::sqrt(d.x * d.x + d.y * d.y);
+                    if (len < 4.0f) return;
+                    d.x /= len; d.y /= len;
+                    ImVec2 perp(-d.y, d.x);
+                    const ImU32 outline = IM_COL32(20, 20, 28, 230);
+                    const float thick = grabbed ? 4.0f : 3.0f;
+                    const float ah    = grabbed ? 15.0f : 13.0f;
+                    dl->AddLine(a, b, outline, thick + 2.0f);
+                    dl->AddLine(a, b, col, thick);
+                    ImVec2 base(b.x - d.x * ah, b.y - d.y * ah);
+                    ImVec2 w1(base.x + perp.x * ah * 0.5f,
+                              base.y + perp.y * ah * 0.5f);
+                    ImVec2 w2(base.x - perp.x * ah * 0.5f,
+                              base.y - perp.y * ah * 0.5f);
+                    // Slightly oversized halo behind the head.
+                    ImVec2 hb(base.x - d.x * 1.6f, base.y - d.y * 1.6f);
+                    ImVec2 hw1(hb.x + perp.x * (ah * 0.5f + 1.6f),
+                               hb.y + perp.y * (ah * 0.5f + 1.6f));
+                    ImVec2 hw2(hb.x - perp.x * (ah * 0.5f + 1.6f),
+                               hb.y - perp.y * (ah * 0.5f + 1.6f));
+                    ImVec2 ht(b.x + d.x * 1.6f, b.y + d.y * 1.6f);
+                    dl->AddTriangleFilled(ht, hw1, hw2, outline);
+                    dl->AddTriangleFilled(b, w1, w2, col);
+                };
                 auto twoArrow = [&](glm::vec3 dir, float val, const char* tag,
                                     ImU32 col, bool grabbed) {
-                    glm::vec3 tipW = m_edgeOpMid + dir * std::max(val, 0.0f);
-                    drawDim(m_edgeOpMid, tipW, nullptr, DimStyle::Bold);
+                    glm::vec3 tipW = m_edgeOpMid + dir * std::max(val, 0.6f);
+                    edgeArrow(m_edgeOpMid, tipW, col, grabbed);
                     ImVec2 sp;
                     if (!toImg(tipW, sp)) return;
                     char b[40];
@@ -1021,13 +1055,41 @@ void Application::renderViewport() {
                 twoArrow(m_edgeOpFaceDirB, m_edgeOpValue2, "B",
                          IM_COL32(120, 210, 255, 255), m_edgeOpGrab == 1);
             } else if (m_edgeOpActive && m_edgeOpHasHandle) {
-                // Arrow straight out of the edge (outward, perpendicular).
-                // Label is rendered separately at the cursor below — matches
-                // the arc-angle preview's "pinned 14 px right of the mouse"
-                // UX so the user's eye doesn't have to track a label that's
-                // floating off near the edge midpoint while they drag.
-                drawDim(m_edgeOpMid, m_edgeOpMid + m_edgeOpOutDir * m_edgeOpValue,
-                        nullptr, DimStyle::Bold);
+                // Single-head arrow straight out of the edge (outward,
+                // perpendicular). Minimum 1 mm visible even at value=0 so
+                // the user can see + click the handle BEFORE any value is
+                // set. Matches the hit-test in the input section: clicking
+                // anywhere along this line claims the drag.
+                glm::vec3 tipW = m_edgeOpMid + m_edgeOpOutDir *
+                                   std::max(m_edgeOpValue, 1.0f);
+                ImVec2 a, b;
+                if (toImg(m_edgeOpMid, a) && toImg(tipW, b)) {
+                    ImVec2 d(b.x - a.x, b.y - a.y);
+                    float len = std::sqrt(d.x * d.x + d.y * d.y);
+                    if (len > 4.0f) {
+                        d.x /= len; d.y /= len;
+                        ImVec2 perp(-d.y, d.x);
+                        const ImU32 outline = IM_COL32(20, 20, 28, 230);
+                        const ImU32 col     = IM_COL32(255, 200, 60, 255);
+                        const float thick = 3.0f;
+                        const float ah    = 13.0f;
+                        dl->AddLine(a, b, outline, thick + 2.0f);
+                        dl->AddLine(a, b, col, thick);
+                        ImVec2 base(b.x - d.x * ah, b.y - d.y * ah);
+                        ImVec2 w1(base.x + perp.x * ah * 0.5f,
+                                  base.y + perp.y * ah * 0.5f);
+                        ImVec2 w2(base.x - perp.x * ah * 0.5f,
+                                  base.y - perp.y * ah * 0.5f);
+                        ImVec2 hb(base.x - d.x * 1.6f, base.y - d.y * 1.6f);
+                        ImVec2 hw1(hb.x + perp.x * (ah * 0.5f + 1.6f),
+                                   hb.y + perp.y * (ah * 0.5f + 1.6f));
+                        ImVec2 hw2(hb.x - perp.x * (ah * 0.5f + 1.6f),
+                                   hb.y - perp.y * (ah * 0.5f + 1.6f));
+                        ImVec2 ht(b.x + d.x * 1.6f, b.y + d.y * 1.6f);
+                        dl->AddTriangleFilled(ht, hw1, hw2, outline);
+                        dl->AddTriangleFilled(b, w1, w2, col);
+                    }
+                }
                 std::snprintf(dbuf, sizeof(dbuf), "%.1f mm", m_edgeOpValue);
                 ImVec2 mp = ImGui::GetMousePos();
                 ImVec2 ts = ImGui::CalcTextSize(dbuf);
@@ -1853,10 +1915,13 @@ void Application::renderViewport() {
             // claims an axis (sets dragAxis on the down-frame). Without
             // this, trackpad mode — left-orbit, left-pan — would steal the
             // subsequent drag-threshold frame and run orbit instead of the
-            // axis drag, so the gizmo "felt unclickable". (Steve: every
-            // other interactive op already handles this correctly.)
+            // axis drag, so the gizmo "felt unclickable". Same story for
+            // the fillet / chamfer arrow handles via m_edgeOpDragging,
+            // which the edge-op click hit-test sets on the down-frame
+            // when the cursor is near the visible arrow line.
             bool gizmoOwnsDrag = m_gizmoDragging ||
-                                 m_scaleFaceCtl.dragAxis() >= 0;
+                                 m_scaleFaceCtl.dragAxis() >= 0 ||
+                                 m_edgeOpDragging;
             if (!gizmoOwnsDrag && ImGui::IsMouseDragging(m_orbitButton)) {
                 ImVec2 delta = io.MouseDelta;
                 if (io.KeyShift) cam.pan(delta.x, delta.y);
@@ -2066,10 +2131,66 @@ void Application::renderViewport() {
                 updatePushPull();
             }
 
+            // Fillet/Chamfer claim: on left-down, if the cursor is within
+            // ~12 px of the visible arrow line(s), set m_edgeOpDragging
+            // so gizmoOwnsDrag (above) suppresses orbit on the next drag
+            // frame. Without the click claim, trackpad-mode left-orbit
+            // grabbed the drag-threshold frame and the arrows felt dead.
+            // Minimum visible arrow length (1 mm single / 0.6 mm per
+            // chamfer-arrow) makes the hit area reachable even at value=0.
+            if (m_edgeOpActive && m_edgeOpHasHandle &&
+                ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                ImVec2 mp = ImGui::GetMousePos();
+                auto toScreen = [&](const glm::vec3& w, ImVec2& out) -> bool {
+                    glm::vec4 clip = proj * view * glm::vec4(w, 1.0f);
+                    if (clip.w <= 1e-6f) return false;
+                    glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                    ImVec2 wp = ImGui::GetItemRectMin();
+                    out = ImVec2(wp.x + (ndc.x * 0.5f + 0.5f) * contentSize.x,
+                                 wp.y + (0.5f - ndc.y * 0.5f) * contentSize.y);
+                    return true;
+                };
+                auto distToSeg = [&](ImVec2 a, ImVec2 b) {
+                    float dx = b.x - a.x, dy = b.y - a.y;
+                    float len2 = dx * dx + dy * dy;
+                    float qx, qy;
+                    if (len2 < 1e-6f) {
+                        qx = mp.x - a.x; qy = mp.y - a.y;
+                    } else {
+                        float t = ((mp.x - a.x) * dx +
+                                   (mp.y - a.y) * dy) / len2;
+                        t = std::max(0.0f, std::min(1.0f, t));
+                        qx = mp.x - (a.x + t * dx);
+                        qy = mp.y - (a.y + t * dy);
+                    }
+                    return std::sqrt(qx * qx + qy * qy);
+                };
+                ImVec2 cs;
+                bool gotC = toScreen(m_edgeOpMid, cs);
+                const float pick = 12.0f;
+                if (gotC && m_edgeOpTwoDist && m_edgeOpHasFaceDirs) {
+                    glm::vec3 tipA = m_edgeOpMid + m_edgeOpFaceDirA *
+                                         std::max(m_edgeOpValue,  0.6f);
+                    glm::vec3 tipB = m_edgeOpMid + m_edgeOpFaceDirB *
+                                         std::max(m_edgeOpValue2, 0.6f);
+                    ImVec2 sa, sb;
+                    if ((toScreen(tipA, sa) && distToSeg(cs, sa) < pick) ||
+                        (toScreen(tipB, sb) && distToSeg(cs, sb) < pick))
+                        m_edgeOpDragging = true;
+                } else if (gotC) {
+                    glm::vec3 tip = m_edgeOpMid + m_edgeOpOutDir *
+                                      std::max(m_edgeOpValue, 1.0f);
+                    ImVec2 s;
+                    if (toScreen(tip, s) && distToSeg(cs, s) < pick)
+                        m_edgeOpDragging = true;
+                }
+            }
+
             // Fillet/Chamfer drag handle: left-drag sets the radius/distance to the
             // perpendicular distance from the edge to the cursor (on a plane through
-            // the edge midpoint facing the camera).
-            if (m_edgeOpActive && m_edgeOpHasHandle && !camDragging &&
+            // the edge midpoint facing the camera). Gated on m_edgeOpDragging so a
+            // click outside the arrow line orbits the camera instead.
+            if (m_edgeOpActive && m_edgeOpHasHandle && m_edgeOpDragging &&
                 ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
                 ImVec2 mp = ImGui::GetMousePos();
                 ImVec2 wp = ImGui::GetItemRectMin();
@@ -2134,9 +2255,11 @@ void Application::renderViewport() {
                     updateInteractiveEdgeOp();
                     }
                 }
-            } else if (m_edgeOpActive && m_edgeOpGrab >= 0 &&
+            } else if (m_edgeOpActive &&
+                       (m_edgeOpDragging || m_edgeOpGrab >= 0) &&
                        !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                m_edgeOpGrab = -1; // released — next drag re-picks an arrow
+                m_edgeOpGrab = -1;       // re-pick the chamfer arrow on next claim
+                m_edgeOpDragging = false; // re-claim required for the next drag
             }
 
             // Gizmo input + Face hover highlighting + picking (suppressed while an

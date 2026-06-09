@@ -144,6 +144,13 @@ void Application::beginInteractiveEdgeOp(EdgeOpType type) {
     }
     if (bodyId < 0 || edges.empty()) return;
 
+    // Drop any other in-progress preview (incl. a previous fillet/chamfer)
+    // BEFORE snapshotting — otherwise the new op captures the previewed
+    // body as its pre-state and Cancel restores the preview, not the
+    // original. Matches what beginIop already does for InteractiveOp
+    // controllers.
+    cancelAllInteractivePreviews();
+
     m_edgeOpType = type;
     m_edgeOpActive = true;
     m_edgeOpBodyId = bodyId;
@@ -287,8 +294,8 @@ void setEdgeOpParam(const Operation* opRaw, bool isFillet, float v, float v2 = -
 }
 } // namespace
 
-void Application::updateInteractiveEdgeOp() {
-    if (!m_edgeOpActive || m_edgeOpBodyId < 0) return;
+bool Application::updateInteractiveEdgeOp() {
+    if (!m_edgeOpActive || m_edgeOpBodyId < 0) return false;
 
     if (m_edgeOpEditingIndex >= 0) {
         // EDIT mode: preview through the real history replay so downstream
@@ -296,21 +303,21 @@ void Application::updateInteractiveEdgeOp() {
         // drag instead of flickering out. Geometrically impossible values
         // are rejected inside editStep (the op snaps back to its last good
         // parameters), so the preview can never strand the model.
-        if (m_edgeOpValue < 0.01f) return; // don't preview "remove" mid-drag
+        if (m_edgeOpValue < 0.01f) return false; // don't preview "remove" mid-drag
         setEdgeOpParam(m_history->getStep(m_edgeOpEditingIndex),
                        m_edgeOpType == EdgeOpType::Fillet,
                        m_edgeOpValue,
                        m_edgeOpTwoDist ? m_edgeOpValue2 : -1.0f);
         m_history->editStep(m_edgeOpEditingIndex, *m_document);
         m_meshesDirty = true;
-        return;
+        return true;
     }
 
     // CREATE mode: transient op against the snapshotted pre-state.
     // Restore original first, so dragging back to ~0 shows no fillet/chamfer.
     m_document->updateBody(m_edgeOpBodyId, m_edgeOpPreviousShape);
     m_meshesDirty = true;
-    if (m_edgeOpValue < 0.01f) return;
+    if (m_edgeOpValue < 0.01f) return false;
 
     try {
         if (m_edgeOpType == EdgeOpType::Fillet) {
@@ -322,10 +329,10 @@ void Application::updateInteractiveEdgeOp() {
             op->setRadius(static_cast<double>(m_edgeOpValue));
             if (op->execute(*m_document)) {
                 m_meshesDirty = true;
-            } else {
-                // Failed — restore original
-                m_document->updateBody(m_edgeOpBodyId, m_edgeOpPreviousShape);
+                return true;
             }
+            // Failed — restore original
+            m_document->updateBody(m_edgeOpBodyId, m_edgeOpPreviousShape);
         } else {
             auto op = std::make_unique<ChamferOp>();
             op->setBody(m_edgeOpBodyId);
@@ -336,13 +343,14 @@ void Application::updateInteractiveEdgeOp() {
             if (m_edgeOpTwoDist) op->setDistance2(static_cast<double>(m_edgeOpValue2));
             if (op->execute(*m_document)) {
                 m_meshesDirty = true;
-            } else {
-                m_document->updateBody(m_edgeOpBodyId, m_edgeOpPreviousShape);
+                return true;
             }
+            m_document->updateBody(m_edgeOpBodyId, m_edgeOpPreviousShape);
         }
     } catch (...) {
         m_document->updateBody(m_edgeOpBodyId, m_edgeOpPreviousShape);
     }
+    return false;
 }
 
 void Application::commitInteractiveEdgeOp() {
@@ -411,6 +419,7 @@ void Application::commitInteractiveEdgeOp() {
     }
 
     m_edgeOpActive = false;
+    m_edgeOpDragging = false;
     m_edgeOpEditingIndex = -1;
     m_edgeOpEdges.clear();
     m_edgeOpPreviousShape.Nullify();
@@ -433,6 +442,7 @@ void Application::cancelInteractiveEdgeOp() {
         m_document->updateBody(m_edgeOpBodyId, m_edgeOpPreviousShape);
     }
     m_edgeOpActive = false;
+    m_edgeOpDragging = false;
     m_edgeOpEditingIndex = -1;
     m_edgeOpEdges.clear();
     m_edgeOpPreviousShape.Nullify();

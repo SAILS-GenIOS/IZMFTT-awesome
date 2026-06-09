@@ -600,6 +600,12 @@ void Application::cancelAllInteractivePreviews() {
     if (m_patternActive) cancelPattern();
     if (m_resizeCylActive) cancelResizeCylindrical();
     if (m_threadActive) cancelThread();
+    // Fillet / chamfer preview — was missing from this list, so switching
+    // tools mid-fillet left the previewed body stuck (the new op then
+    // snapshotted it as its "pre-state" and Cancel restored the preview,
+    // not the original). (Steve: "switching tools, the action that was
+    // never committed gets a weird half-cancel I can't undo".)
+    if (m_edgeOpActive) cancelInteractiveEdgeOp();
 }
 
 void Application::beginIop(materializr::InteractiveOpController& ctl) {
