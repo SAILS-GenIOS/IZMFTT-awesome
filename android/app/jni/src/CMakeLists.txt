@@ -41,8 +41,9 @@ target_link_libraries(imgui_lib PUBLIC SDL2)
 file(GLOB_RECURSE MZ_SOURCES CONFIGURE_DEPENDS "${MZ_SRC}/*.cpp")
 list(FILTER MZ_SOURCES EXCLUDE REGEX "/main\\.cpp$")            # desktop CLI entry
 list(FILTER MZ_SOURCES EXCLUDE REGEX "/UpdateChecker\\.cpp$")   # libcurl (desktop-only)
-list(FILTER MZ_SOURCES EXCLUDE REGEX "/FileDialogs\\.cpp$")     # portable-file-dialogs (desktop)
-# android_main.cpp (SDL_main) and android_shims.cpp (SAF/update stubs) replace them.
+# FileDialogs.cpp IS built on Android: it compiles the in-app ImGui browser
+# (pfd is #ifdef'd out). android_main.cpp (SDL_main) + android_shims.cpp
+# (update-check stub) replace the remaining desktop-only entry points.
 
 add_library(main SHARED ${MZ_SOURCES})
 

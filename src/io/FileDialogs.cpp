@@ -2,7 +2,13 @@
 #include <imgui.h>
 #include <memory>
 #include <filesystem>
+#if defined(__ANDROID__)
+// Android has no native file-picker helper (zenity/kdialog/WinAPI), so pfd is
+// excluded; openFile/saveFile drive the in-app ImGui browser instead.
+#include <SDL.h>   // SDL_AndroidGetExternalStoragePath
+#else
 #include "portable-file-dialogs.h"
+#endif
 
 #include <cstdio>
 #include <cstring>
@@ -173,6 +179,7 @@ namespace {
 // portable-file-dialogs takes filter strings in the form
 //   { "label", "pattern1 pattern2 ...", "label2", "pattern3 ...", ... }
 // flattened into a single vector. Translate FileFilter into that shape.
+#if !defined(__ANDROID__)
 std::vector<std::string> pfdFilters(const std::vector<FileFilter>& filters) {
     std::vector<std::string> v;
     v.reserve(filters.size() * 2);
@@ -182,6 +189,7 @@ std::vector<std::string> pfdFilters(const std::vector<FileFilter>& filters) {
     }
     return v;
 }
+#endif
 
 // Async pfd dialog state. FileDialogs::render() polls .ready(0) every
 // frame — without that the main thread blocks inside .result() until the
@@ -189,6 +197,7 @@ std::vector<std::string> pfdFilters(const std::vector<FileFilter>& filters) {
 // our window. Polling keeps the frame loop running so the OS keeps
 // seeing input / draw activity. (Steve: "while the file explorer is
 // open I get a 'materializr is not responding' popup".)
+#if !defined(__ANDROID__)
 struct AsyncDlgState {
     std::unique_ptr<pfd::open_file> openH;
     std::unique_ptr<pfd::save_file> saveH;
@@ -201,6 +210,7 @@ struct AsyncDlgState {
     }
 };
 static AsyncDlgState s_async;
+#endif
 // Last directory the picker landed in. Application syncs to/from
 // AppSettings::lastFileDir at load + save time so it survives a relaunch.
 static std::string s_lastDir;
@@ -210,9 +220,42 @@ static std::string s_lastDir;
 void FileDialogs::setLastDir(const std::string& dir) { s_lastDir = dir; }
 const std::string& FileDialogs::getLastDir() { return s_lastDir; }
 
+#if defined(__ANDROID__)
+// Open the in-app ImGui browser (s_state). No native picker on Android, so this
+// is the file UI. Rooted at the last-used dir, falling back to the app's
+// writable external-storage path (/sdcard/Android/data/<pkg>/files).
+static void launchInAppBrowser(const std::string& title, bool isSave,
+                               const std::string& defaultName,
+                               const std::vector<FileFilter>& filters,
+                               std::function<void(const std::string&)> cb) {
+    std::string start = s_lastDir;
+    if (start.empty() || !dlgIsDir(start)) {
+        const char* ext = SDL_AndroidGetExternalStoragePath();
+        start = (ext && dlgIsDir(ext)) ? ext : "/";
+    }
+    s_state.open = true;
+    s_state.isSave = isSave;
+    s_state.title = title.empty() ? (isSave ? "Save File" : "Open File") : title;
+    s_state.currentDir = start;
+    std::strncpy(s_state.pathBuf, start.c_str(), sizeof(s_state.pathBuf) - 1);
+    s_state.pathBuf[sizeof(s_state.pathBuf) - 1] = '\0';
+    std::strncpy(s_state.nameBuf, defaultName.c_str(), sizeof(s_state.nameBuf) - 1);
+    s_state.nameBuf[sizeof(s_state.nameBuf) - 1] = '\0';
+    s_state.filters = filters;
+    s_state.selectedFilter = 0;
+    s_state.selectedEntry = -1;
+    s_state.callback = std::move(cb);
+    s_state.refresh();
+}
+#endif
+
 void FileDialogs::openFile(const std::string& title,
                             const std::vector<FileFilter>& filters,
                             std::function<void(const std::string&)> callback) {
+#if defined(__ANDROID__)
+    if (s_state.open) return; // one picker at a time
+    launchInAppBrowser(title, /*isSave=*/false, "", filters, std::move(callback));
+#else
     if (s_async.active()) return; // one picker at a time
     // Seed pfd with the directory the user last picked in so they don't
     // have to re-navigate from ~ every time. zenity / kdialog interpret
@@ -228,12 +271,17 @@ void FileDialogs::openFile(const std::string& title,
     s_async.openH = std::make_unique<pfd::open_file>(
         title, seed, pfdFilters(filters));
     s_async.callback = std::move(callback);
+#endif
 }
 
 void FileDialogs::saveFile(const std::string& title,
                             const std::string& defaultName,
                             const std::vector<FileFilter>& filters,
                             std::function<void(const std::string&)> callback) {
+#if defined(__ANDROID__)
+    if (s_state.open) return;
+    launchInAppBrowser(title, /*isSave=*/true, defaultName, filters, std::move(callback));
+#else
     if (s_async.active()) return;
     // pfd's save_file wants a path-ish default — concat the last-used dir
     // with the supplied filename so the picker opens IN that folder with
@@ -248,13 +296,19 @@ void FileDialogs::saveFile(const std::string& title,
         title, seed, pfdFilters(filters),
         pfd::opt::force_overwrite);
     s_async.callback = std::move(callback);
+#endif
 }
 
 bool FileDialogs::isOpen() {
+#if defined(__ANDROID__)
+    return s_state.open;
+#else
     return s_async.active() || s_state.open;
+#endif
 }
 
 void FileDialogs::render() {
+#if !defined(__ANDROID__)
     // Native (pfd) path: poll the spawned helper subprocess each frame.
     // ready(0) is a non-blocking check; when it returns true we fetch the
     // path and fire the callback exactly once, then clear the state.
@@ -290,8 +344,10 @@ void FileDialogs::render() {
         }
         return; // legacy in-app dialog stays dormant while pfd owns the picker
     }
+#endif // !__ANDROID__
 
-    // Legacy in-app dialog — currently unreachable from openFile/saveFile
+    // In-app ImGui dialog. On desktop this is the legacy fall-back; on Android
+    // (no native picker) it is the file UI, driven by openFile/saveFile above.
     // above; kept around as a fall-back wire-point if a no-helper Linux
     // box ever needs it.
     if (!s_state.open) return;
