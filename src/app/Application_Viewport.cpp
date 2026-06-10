@@ -1966,6 +1966,21 @@ void Application::renderViewport() {
                 cam.pan(io.MouseDelta.x, io.MouseDelta.y);
             }
 
+#if defined(__ANDROID__)
+            // Two-finger touch gestures (recognised in Window::pollEvents):
+            // centroid movement pans, pinch zooms. Applied here so they share the
+            // viewport-hovered gate and gizmo-ownership suppression above.
+            if (m_window) {
+                float tdx, tdy, tdz;
+                if (!gizmoOwnsDrag && m_window->consumeTouchPan(tdx, tdy)) {
+                    cam.pan(tdx, tdy);
+                }
+                if (m_window->consumeTouchZoom(tdz)) {
+                    cam.zoom(tdz * 0.02f);   // pinch pixels -> zoom units
+                }
+            }
+#endif
+
             // Pause interactive operations while a camera button is also being
             // dragged — otherwise the changing view matrix re-projects the same
             // mouse motion onto a moving target each frame and the value jolts.

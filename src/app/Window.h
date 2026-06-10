@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
+#include <vector>
 
 struct SDL_Window;
 
@@ -40,12 +42,30 @@ public:
     int width() const { return m_width; }
     int height() const { return m_height; }
 
+    // Touch-gesture output (Android). pollEvents() recognises two-finger
+    // gestures; the viewport camera consumes the accumulated deltas each frame.
+    // Returns true and writes the pending delta (then clears it) if any.
+    bool consumeTouchPan(float& dx, float& dy);   // centroid movement, pixels
+    bool consumeTouchZoom(float& dz);             // pinch delta, wheel-equivalent
+
 private:
     SDL_Window* m_window = nullptr;
     void* m_glContext = nullptr;
     bool m_shouldClose = false;
     int m_width;
     int m_height;
+
+    // Active touch points and the running two-finger gesture state.
+    struct Finger { std::int64_t id; float x, y; };
+    std::vector<Finger> m_fingers;
+    bool  m_leftDown = false;            // is the synthetic left button held?
+    bool  m_twoFinger = false;           // a two-finger gesture is active
+    bool  m_suppressLeft = false;        // ignore a leftover finger after 2-finger
+    float m_lastPinchDist = 0.0f;
+    float m_lastCentroidX = 0.0f, m_lastCentroidY = 0.0f;
+    float m_panAccX = 0.0f, m_panAccY = 0.0f, m_zoomAcc = 0.0f;
+
+    void handleFingerEvent(unsigned type, std::int64_t id, float nx, float ny);
 };
 
 } // namespace materializr

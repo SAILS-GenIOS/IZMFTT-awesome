@@ -966,6 +966,13 @@ void Application::applyAppSettings(const AppSettings& s) {
     m_themeManager->setTheme(s.theme == 1 ? Theme::Light : Theme::Dark);
     m_orbitButton = s.orbitButton;
     m_panButton = s.panButton;
+#if defined(__ANDROID__)
+    // Touch has no middle/right button, so force trackpad mode: a one-finger
+    // drag orbits (left button), tap selects. Pan and zoom come from two-finger
+    // gestures (see the camera-nav block). Overrides any persisted binding.
+    m_orbitButton = 0;
+    m_panButton = 0;
+#endif
     m_settingsOrbitButton = s.orbitButton;
     m_settingsPanButton = s.panButton;
     m_viewport->getCamera().setLevelOrbit(s.levelOrbit);

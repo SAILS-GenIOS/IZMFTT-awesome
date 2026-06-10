@@ -6,6 +6,9 @@
 #include <stdexcept>
 #include <iostream>
 #include <string>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 
 namespace materializr {
 
@@ -91,17 +94,11 @@ void Window::pollEvents() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
 #if defined(__ANDROID__)
-        // Touch -> ImGui mouse, handled directly (SDL's own synthesis is off).
-        // Single-finger touch drives the left mouse button: position first, then
-        // press on down / release on up, so taps and drags both behave correctly.
+        // Touch gestures, handled directly (SDL's own touch->mouse synthesis is
+        // off). One finger drives the left mouse (tap = select, drag = orbit in
+        // trackpad mode); two fingers pan/pinch-zoom the camera.
         if (e.type == SDL_FINGERDOWN || e.type == SDL_FINGERMOTION || e.type == SDL_FINGERUP) {
-            ImGuiIO& tio = ImGui::GetIO();
-            float x = e.tfinger.x * tio.DisplaySize.x;
-            float y = e.tfinger.y * tio.DisplaySize.y;
-            tio.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
-            tio.AddMousePosEvent(x, y);
-            if (e.type == SDL_FINGERDOWN)    tio.AddMouseButtonEvent(0, true);
-            else if (e.type == SDL_FINGERUP) tio.AddMouseButtonEvent(0, false);
+            handleFingerEvent(e.type, (std::int64_t)e.tfinger.fingerId, e.tfinger.x, e.tfinger.y);
             continue;   // don't also route finger events through the backend
         }
 #endif
@@ -122,6 +119,85 @@ void Window::pollEvents() {
         }
     }
     SDL_GetWindowSize(m_window, &m_width, &m_height);
+}
+
+#if defined(__ANDROID__)
+void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float ny) {
+    ImGuiIO& io = ImGui::GetIO();
+    const float x = nx * io.DisplaySize.x;   // normalised [0,1] -> pixels
+    const float y = ny * io.DisplaySize.y;
+
+    auto it = std::find_if(m_fingers.begin(), m_fingers.end(),
+                           [&](const Finger& f) { return f.id == id; });
+    if (type == SDL_FINGERDOWN) {
+        if (it == m_fingers.end()) m_fingers.push_back({id, x, y});
+        else { it->x = x; it->y = y; }
+    } else if (type == SDL_FINGERMOTION) {
+        if (it == m_fingers.end()) return;
+        it->x = x; it->y = y;
+    } else { // SDL_FINGERUP
+        if (it != m_fingers.end()) m_fingers.erase(it);
+    }
+
+    const int count = static_cast<int>(m_fingers.size());
+
+    if (count >= 2) {
+        const float cx = (m_fingers[0].x + m_fingers[1].x) * 0.5f;
+        const float cy = (m_fingers[0].y + m_fingers[1].y) * 0.5f;
+        const float sx = m_fingers[0].x - m_fingers[1].x;
+        const float sy = m_fingers[0].y - m_fingers[1].y;
+        const float dist = std::sqrt(sx * sx + sy * sy);
+        if (!m_twoFinger) {
+            // Two-finger gesture begins: cancel any in-progress orbit, set refs.
+            if (m_leftDown) { io.AddMouseButtonEvent(0, false); m_leftDown = false; }
+            m_twoFinger = true;
+            m_suppressLeft = true;
+            m_lastCentroidX = cx; m_lastCentroidY = cy;
+            m_lastPinchDist = dist;
+        } else {
+            m_panAccX += cx - m_lastCentroidX;
+            m_panAccY += cy - m_lastCentroidY;
+            m_zoomAcc += dist - m_lastPinchDist;
+            m_lastCentroidX = cx; m_lastCentroidY = cy;
+            m_lastPinchDist = dist;
+        }
+        return;
+    }
+
+    if (count == 1) {
+        // A finger left over from a two-finger gesture is ignored (no jump-orbit)
+        // until the user fully lifts off.
+        if (m_suppressLeft) { m_twoFinger = false; return; }
+        io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+        io.AddMousePosEvent(m_fingers[0].x, m_fingers[0].y);
+        if (type == SDL_FINGERDOWN && !m_leftDown) {
+            io.AddMouseButtonEvent(0, true);
+            m_leftDown = true;
+        }
+        return;
+    }
+
+    // count == 0: everything lifted — release and reset.
+    if (m_leftDown) { io.AddMouseButtonEvent(0, false); m_leftDown = false; }
+    m_twoFinger = false;
+    m_suppressLeft = false;
+}
+#else
+void Window::handleFingerEvent(unsigned, std::int64_t, float, float) {}
+#endif
+
+bool Window::consumeTouchPan(float& dx, float& dy) {
+    if (m_panAccX == 0.0f && m_panAccY == 0.0f) return false;
+    dx = m_panAccX; dy = m_panAccY;
+    m_panAccX = m_panAccY = 0.0f;
+    return true;
+}
+
+bool Window::consumeTouchZoom(float& dz) {
+    if (m_zoomAcc == 0.0f) return false;
+    dz = m_zoomAcc;
+    m_zoomAcc = 0.0f;
+    return true;
 }
 
 void Window::framebufferSize(int& w, int& h) const {
