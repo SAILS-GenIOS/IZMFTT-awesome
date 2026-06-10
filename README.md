@@ -3,6 +3,11 @@
 **Open-source parametric 3D CAD for makers** — constraint sketches, solid
 modeling, threads, SVG & text engraving, STL/STEP export.
 
+> **📱 Android port (experimental):** this branch builds Materializr for Android
+> (arm64-v8a), reusing the entire geometry codebase via an SDL2 + OpenGL ES 3.0
+> backend and cross-compiled OpenCASCADE. See [`android/README.md`](android/README.md)
+> to build and sideload. The desktop builds below are unaffected.
+
 ![Materializr modeling a coffee mug with filleted rim, handle, and embossed logo wrapped around the cylindrical face](docs/hero-mug.png)
 
 ## Download
