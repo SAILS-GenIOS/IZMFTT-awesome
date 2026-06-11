@@ -1,3 +1,4 @@
+#include "ui_scale.h"
 #include "../plugin/PluginMacro.h"
 #include "../plugin/PluginContext.h"
 #include "../plugin/InteractiveTool.h"
@@ -99,7 +100,7 @@ public:
         if (m_sketchTool->hasPreview()) {
             ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 200,
                                             ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - 60));
-            ImGui::SetNextWindowSize(ImVec2(180, 0));
+            ImGui::SetNextWindowSize(uiSz(180, 0));
             ImGui::Begin("##SketchDim", nullptr,
                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);

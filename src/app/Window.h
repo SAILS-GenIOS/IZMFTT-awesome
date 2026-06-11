@@ -37,6 +37,11 @@ public:
     // from the display DPI so fonts and widgets are finger-sized on a tablet.
     float uiScale() const;
 
+    // Raise/lower the Android soft keyboard to match ImGui's WantTextInput. The
+    // SDL2 backend no longer calls SDL_StartTextInput itself, which is what shows
+    // the keyboard on Android — so we drive it each frame. No-op on desktop.
+    void updateTextInput(bool wantTextInput);
+
     SDL_Window* handle() const { return m_window; }
     void* glContext() const { return m_glContext; }   // SDL_GLContext (opaque)
     int width() const { return m_width; }
@@ -76,6 +81,7 @@ private:
     float m_downX = 0.0f, m_downY = 0.0f; // where it went down
     bool  m_movedBeyondHold = false;      // moved too far -> it's a drag, not a hold
     bool  m_holdSelect = false;           // hold threshold passed; select-drag mode
+    bool  m_textInputActive = false;      // soft keyboard currently raised
 
     void handleFingerEvent(unsigned type, std::int64_t id, float nx, float ny);
     void updateHoldSelect();              // per-frame hold check (Android)

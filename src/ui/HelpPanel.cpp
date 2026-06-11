@@ -1,3 +1,4 @@
+#include "ui_scale.h"
 #include "HelpPanel.h"
 #include <imgui.h>
 
@@ -19,7 +20,7 @@ void section(const char* title, const char* body) {
 void HelpPanel::render() {
     if (!m_visible) return;
 
-    ImGui::SetNextWindowSize(ImVec2(560, 540), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(uiSz(560, 540), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("User Guide", &m_visible)) { ImGui::End(); return; }
 
     ImGui::TextWrapped(

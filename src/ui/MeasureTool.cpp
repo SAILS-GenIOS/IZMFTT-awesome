@@ -1,3 +1,4 @@
+#include "ui_scale.h"
 #include "MeasureTool.h"
 #include "../core/Document.h"
 #include "../core/SelectionManager.h"
@@ -141,7 +142,7 @@ void MeasureTool::renderPanel() {
     if (m_mode == MeasureMode::Inactive) return;
 
     bool open = true;
-    ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(uiSz(320, 0), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Measure", &open)) { ImGui::End(); return; }
 
     // Mode selector — three buttons at the top, current mode highlighted.

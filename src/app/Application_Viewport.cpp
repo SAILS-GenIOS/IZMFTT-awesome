@@ -1,3 +1,4 @@
+#include "ui_scale.h"
 #include "gl_common.h"
 
 #include <cstdlib>
@@ -4595,7 +4596,7 @@ void Application::renderViewport() {
         // Floating distance input panel
         ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 260,
                                         ImGui::GetWindowPos().y + 50));
-        ImGui::SetNextWindowSize(ImVec2(240, 0));
+        ImGui::SetNextWindowSize(uiSz(240, 0));
         ImGui::Begin("##ExtrudeInput", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
@@ -4655,7 +4656,7 @@ void Application::renderViewport() {
 
         ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 260,
                                         ImGui::GetWindowPos().y + 50));
-        ImGui::SetNextWindowSize(ImVec2(240, 0));
+        ImGui::SetNextWindowSize(uiSz(240, 0));
         ImGui::Begin("##PushPullInput", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
@@ -4748,7 +4749,7 @@ void Application::renderViewport() {
 
         ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 260,
                                         ImGui::GetWindowPos().y + 50));
-        ImGui::SetNextWindowSize(ImVec2(240, 0));
+        ImGui::SetNextWindowSize(uiSz(240, 0));
         ImGui::Begin("##EdgeOpInput", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
@@ -4851,7 +4852,7 @@ void Application::renderViewport() {
 
         ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 260,
                                        ImGui::GetWindowPos().y + 50));
-        ImGui::SetNextWindowSize(ImVec2(240, 0));
+        ImGui::SetNextWindowSize(uiSz(240, 0));
         ImGui::Begin("##MoveFaceInput", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
@@ -4978,7 +4979,7 @@ void Application::renderViewport() {
         if (dimLabel) {
             ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 230,
                                             ImGui::GetWindowPos().y + 50));
-            ImGui::SetNextWindowSize(ImVec2(220, 0));
+            ImGui::SetNextWindowSize(uiSz(220, 0));
             ImGui::Begin("##SketchDimInput", nullptr,
                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |

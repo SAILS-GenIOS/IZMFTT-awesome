@@ -1,3 +1,4 @@
+#include "ui_scale.h"
 #include "FileDialogs.h"
 #include <imgui.h>
 #include <memory>
@@ -369,7 +370,7 @@ void FileDialogs::render() {
     // box ever needs it.
     if (!s_state.open) return;
 
-    ImGui::SetNextWindowSize(ImVec2(600, 450), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(600, 450), ImGuiCond_Appearing);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
 

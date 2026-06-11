@@ -1,3 +1,4 @@
+#include "ui_scale.h"
 #include "ShortcutsPanel.h"
 #include <imgui.h>
 
@@ -16,7 +17,7 @@ bool ShortcutsPanel::isVisible() const {
 void ShortcutsPanel::render() {
     if (!m_visible) return;
 
-    ImGui::SetNextWindowSize(ImVec2(420, 500), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(uiSz(420, 500), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Keyboard Shortcuts", &m_visible)) {
         ImGui::End();
         return;

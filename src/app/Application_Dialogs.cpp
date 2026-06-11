@@ -1,3 +1,4 @@
+#include "ui_scale.h"
 #include "gl_common.h"
 
 #include <cstdlib>
@@ -105,7 +106,7 @@ namespace materializr {
 
 void Application::renderSettings() {
     if (!m_showSettings) return;
-    ImGui::SetNextWindowSize(ImVec2(420, 420), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(420, 420), ImGuiCond_Appearing);
     if (ImGui::Begin("Settings", &m_showSettings)) {
         bool changed = false; // any change persists the settings file
 
@@ -475,7 +476,7 @@ void Application::renderUpdatePopup() {
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(400, 220), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(400, 220), ImGuiCond_Appearing);
 
     if (ImGui::BeginPopupModal("Check for Updates", &m_showUpdatePopup,
                                ImGuiWindowFlags_NoResize)) {
@@ -560,7 +561,7 @@ void Application::renderMultiTransformPanel() {
     char title[64];
     std::snprintf(title, sizeof(title), "Rotate %d Bodies###MultiTransform", n);
 
-    ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(uiSz(360, 0), ImGuiCond_FirstUseEver);
     // The window-titlebar X also closes the panel — same state as the Close
     // button below, so either way auto-reopen logic above takes effect.
     if (!ImGui::Begin(title, &m_multiTransformPanelOpen)) { ImGui::End(); return; }
@@ -697,7 +698,7 @@ void Application::renderResizeCylindricalPanel() {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 280,
                                     ImGui::GetWindowPos().y + 50),
                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(260, 0), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(260, 0), ImGuiCond_Appearing);
     ImGui::Begin("Edit Diameter", nullptr,
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoSavedSettings |
@@ -822,7 +823,7 @@ void Application::renderScalePanel() {
 
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 250,
                                     ImGui::GetWindowPos().y + 50));
-    ImGui::SetNextWindowSize(ImVec2(230, 0));
+    ImGui::SetNextWindowSize(uiSz(230, 0));
     ImGui::Begin("##ScalePanel", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
@@ -1024,7 +1025,7 @@ void Application::renderSketchPatternPopup() {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 280,
                                     ImGui::GetWindowPos().y + 50),
                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(280, 0), ImGuiCond_Appearing);
     const char* title = (m_sketchPatternKind == PatternKind::Linear)
                             ? "Sketch Linear Pattern"
                             : "Sketch Radial Pattern";
@@ -1131,7 +1132,7 @@ void Application::renderPatternPanel() {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 280,
                                     ImGui::GetWindowPos().y + 50),
                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(280, 0), ImGuiCond_Appearing);
     const char* title = (m_patternKind == PatternKind::Linear)
                             ? "Linear Pattern"
                             : "Radial Pattern";
@@ -1331,7 +1332,7 @@ void Application::renderThreadPanel() {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 280,
                                     ImGui::GetWindowPos().y + 50),
                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(280, 0), ImGuiCond_Appearing);
     ImGui::Begin("Thread", nullptr,
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoSavedSettings |
@@ -1412,7 +1413,7 @@ void Application::renderLoftPanel() {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 280,
                                     ImGui::GetWindowPos().y + 50),
                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(280, 0), ImGuiCond_Appearing);
     ImGui::Begin("Loft", nullptr,
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoSavedSettings |
@@ -1485,7 +1486,7 @@ void Application::renderSketchMovePanel() {
     m_sketchMoveConditionsMet = conditionsMet;
     if (!conditionsMet || !m_sketchMovePanelOpen) return;
 
-    ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(uiSz(340, 0), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Move Sketch###SketchMove", &m_sketchMovePanelOpen)) {
         ImGui::End(); return;
     }
@@ -1689,7 +1690,7 @@ void Application::renderConstructionPlanePanel() {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 280,
                                     ImGui::GetWindowPos().y + 50),
                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(280, 0), ImGuiCond_Appearing);
     ImGui::Begin("Construction Plane", nullptr,
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoSavedSettings |
@@ -1933,7 +1934,7 @@ void Application::renderRevolvePopup() {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 320,
                                     ImGui::GetWindowPos().y + 50),
                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(320, 0), ImGuiCond_Appearing);
     ImGui::Begin("Revolve", nullptr,
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoSavedSettings |
@@ -2113,7 +2114,7 @@ void Application::renderRotatePlaneAboutAxisPopup() {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 340,
                                     ImGui::GetWindowPos().y + 50),
                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(340, 0), ImGuiCond_Appearing);
     ImGui::Begin("Rotate Plane About Axis", nullptr,
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoSavedSettings |
@@ -2446,7 +2447,7 @@ void Application::renderConstructionAxisPanel() {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 280,
                                     ImGui::GetWindowPos().y + 50),
                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(280, 0), ImGuiCond_Appearing);
     ImGui::Begin("Construction Axis", nullptr,
         ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoSavedSettings |
@@ -2769,7 +2770,7 @@ void Application::renderPrimitivePopup() {
         ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 260,
                ImGui::GetWindowPos().y + 50),
         ImGuiCond_Appearing);
-    ImGui::SetNextWindowSize(ImVec2(260, 0), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(260, 0), ImGuiCond_Appearing);
     ImGui::Begin(titles[k], nullptr,
                  ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoSavedSettings |

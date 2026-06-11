@@ -220,6 +220,20 @@ bool Window::consumeTouchZoom(float& dz) {
     return true;
 }
 
+void Window::updateTextInput(bool wantTextInput) {
+#if defined(__ANDROID__)
+    if (wantTextInput && !m_textInputActive) {
+        SDL_StartTextInput();          // raises the soft keyboard
+        m_textInputActive = true;
+    } else if (!wantTextInput && m_textInputActive) {
+        SDL_StopTextInput();           // dismisses it
+        m_textInputActive = false;
+    }
+#else
+    (void)wantTextInput;
+#endif
+}
+
 void Window::framebufferSize(int& w, int& h) const {
     SDL_GL_GetDrawableSize(m_window, &w, &h);
 }

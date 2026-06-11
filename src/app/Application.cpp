@@ -12,6 +12,7 @@
 
 #include "app/Application.h"
 #include "app/Window.h"
+#include "ui_scale.h"
 #include "viewport/Viewport.h"
 #include "viewport/Grid.h"
 #include "viewport/ShapeRenderer.h"
@@ -193,7 +194,12 @@ Application::Application(bool safeMode) : m_safeMode(safeMode) {
     m_toolbar->setPluginContext(m_pluginContext.get());
     // Scale the Tools-panel button heights to match the HiDPI font (Android),
     // otherwise 30px buttons under a 2x font overlap. 1.0 on desktop.
-    if (m_window) m_toolbar->setUiScale(m_window->uiScale());
+    if (m_window) {
+        m_toolbar->setUiScale(m_window->uiScale());
+        // Global scale for fixed-size dialogs/popups (uiSz/uiW), so their
+        // hard-coded pixel widths grow with the font instead of clipping.
+        materializr::setUiScale(m_window->uiScale());
+    }
     m_history->setThreadsLastDeclineCallback([this]{ showThreadsLastToast(); });
     m_historyPanel->setHistory(m_history.get());
     m_historyPanel->setDocument(m_document.get());
@@ -644,6 +650,8 @@ void Application::beginFrame() {
 void Application::endFrame() {
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    // Raise/dismiss the Android soft keyboard to match the focused text field.
+    if (m_window) m_window->updateTextInput(ImGui::GetIO().WantTextInput);
 }
 
 void Application::renderSplashFrame(const char* status) {

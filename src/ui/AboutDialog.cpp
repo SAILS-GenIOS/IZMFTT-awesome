@@ -1,3 +1,4 @@
+#include "ui_scale.h"
 #include "AboutDialog.h"
 #include <imgui.h>
 
@@ -50,7 +51,7 @@ void AboutDialog::render() {
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(420, 400), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(uiSz(420, 400), ImGuiCond_Appearing);
 
     if (ImGui::BeginPopupModal("About Materializr", &m_visible,
                                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {

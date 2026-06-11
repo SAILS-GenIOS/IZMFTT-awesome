@@ -1,3 +1,4 @@
+#include "ui_scale.h"
 #include "SettingsPanel.h"
 #include <imgui.h>
 #include <fstream>
@@ -93,7 +94,7 @@ bool SettingsPanel::render() {
 
     bool changed = false;
 
-    ImGui::SetNextWindowSize(ImVec2(450, 500), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(uiSz(450, 500), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Settings", &m_visible)) {
         ImGui::End();
         return false;
