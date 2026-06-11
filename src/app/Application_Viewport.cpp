@@ -4667,7 +4667,9 @@ void Application::renderViewport() {
         ImGui::Separator();
 
         if (m_extrudeInputFocus) {
-            ImGui::SetKeyboardFocusHere();
+#if !defined(__ANDROID__)
+            ImGui::SetKeyboardFocusHere();  // touch: drag to set distance, or tap the field to type
+#endif
             m_extrudeInputFocus = false;
         }
 
@@ -4728,7 +4730,9 @@ void Application::renderViewport() {
         ImGui::Separator();
 
         if (m_pushPullInputFocus) {
-            ImGui::SetKeyboardFocusHere();
+#if !defined(__ANDROID__)
+            ImGui::SetKeyboardFocusHere();  // touch: drag to set distance, or tap the field to type
+#endif
             m_pushPullInputFocus = false;
         }
 
@@ -4820,7 +4824,9 @@ void Application::renderViewport() {
         ImGui::Separator();
 
         if (m_edgeOpInputFocus) {
-            ImGui::SetKeyboardFocusHere();
+#if !defined(__ANDROID__)
+            ImGui::SetKeyboardFocusHere();  // touch: drag the handle, or tap the field to type
+#endif
             m_edgeOpInputFocus = false;
         }
 
@@ -5056,9 +5062,15 @@ void Application::renderViewport() {
             ImGui::TextUnformatted(dimHint);
             ImGui::PopTextWrapPos();
 
-            // Grab keyboard focus the first frame placement begins
+            // Grab keyboard focus the first frame placement begins — desktop
+            // only. On touch this auto-raises the soft keyboard for every sketch
+            // element (with no easy dismiss), blocking tap-to-place. The field
+            // still shows; the user taps it when they actually want to type a
+            // dimension, and taps the viewport to dismiss the keyboard.
             if (!m_sketchDimWasShown) {
+#if !defined(__ANDROID__)
                 ImGui::SetKeyboardFocusHere();
+#endif
                 m_sketchDimWasShown = true;
             }
 
