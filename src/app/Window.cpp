@@ -17,6 +17,16 @@ Window::Window(int width, int height, const std::string& title)
 
     glfwSetErrorCallback(errorCallback);
 
+#if defined(GLFW_PLATFORM_X11) && defined(__linux__)
+    // Prefer X11 (XWayland) over native Wayland: GLFW 3.4's Wayland
+    // data-device handler (dataDeviceHandleEnter, wl_window.c) null-derefs and
+    // crashes the app when a file is dragged over the window. X11 avoids that
+    // path. Only forced when X11 is actually available, so it falls back to
+    // GLFW's default platform pick rather than failing to start.
+    if (glfwPlatformSupported(GLFW_PLATFORM_X11))
+        glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+#endif
+
     if (!glfwInit()) {
         throw std::runtime_error("Failed to initialize GLFW");
     }
