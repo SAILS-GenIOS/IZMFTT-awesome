@@ -489,6 +489,9 @@ private:
     // the viewport selection code runs as if Ctrl were held (taps add/toggle
     // instead of replacing). Driven by the on-screen button in the viewport.
     bool m_multiSelectToggle = false;
+    // Touch "Move" navigation lock: one-finger drag orbits, taps don't draw or
+    // select — so panning/zooming (esp. in a sketch) can't start a drawing.
+    bool m_moveModeToggle = false;
     bool m_showSettings = false;
     int m_settingsOrbitButton = 2; // staged value in the Settings dialog
     int m_settingsPanButton = 1;

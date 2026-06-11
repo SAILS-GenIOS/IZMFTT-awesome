@@ -2008,6 +2008,11 @@ void Application::renderViewport() {
                 if (m_window->consumeTouchZoom(tdz)) {
                     if (std::fabs(tdz) > 1.5f) cam.zoom(tdz * 0.006f);
                 }
+                // "Move" navigation lock: one-finger drag orbits (no draw/select).
+                float tox = 0.0f, toy = 0.0f;
+                if (m_window->consumeTouchOrbit(tox, toy)) {
+                    cam.orbit(tox, toy);
+                }
             }
 #endif
 
@@ -4534,6 +4539,30 @@ void Application::renderViewport() {
             if (cancel) recordSketchMutation([&]{ m_sketchTool->onCancel(); });
             if (chov) ImGui::SetTooltip("Discard the in-progress shape (no commit / undo needed)");
         }
+    }
+
+    // Persistent "Move" navigation lock, bottom-right. While on, a one-finger
+    // drag orbits and taps don't draw/select, so panning/zooming (especially in
+    // a sketch) can't inadvertently start a drawing.
+    {
+        ImVec2 vpMin = ImGui::GetWindowPos();
+        ImVec2 vpSize = ImGui::GetWindowSize();
+        const float pad = ImGui::GetStyle().FramePadding.x;
+        const float btnH = ImGui::GetFrameHeight() * 1.7f;
+        const char* label = m_moveModeToggle ? "Move: On" : "Move: Off";
+        float w = ImGui::CalcTextSize("Move: Off").x + pad * 5.0f;
+        ImGui::SetCursorScreenPos(ImVec2(vpMin.x + vpSize.x - w - 8.0f,
+                                         vpMin.y + vpSize.y - btnH - 8.0f));
+        if (m_moveModeToggle) {
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.85f, 0.55f, 0.15f, 0.97f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.65f, 0.25f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.75f, 0.48f, 0.12f, 1.0f));
+        }
+        bool clicked = ImGui::Button(label, ImVec2(w, btnH));
+        bool hov = ImGui::IsItemHovered();
+        if (m_moveModeToggle) ImGui::PopStyleColor(3);
+        if (clicked) m_moveModeToggle = !m_moveModeToggle;
+        if (hov) ImGui::SetTooltip("Navigation lock: one finger orbits;\ntaps don't draw or select");
     }
 #endif // __ANDROID__
 
