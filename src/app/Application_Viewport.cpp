@@ -4478,16 +4478,19 @@ void Application::renderViewport() {
         ImVec2 vpMin = ImGui::GetWindowPos();
         ImVec2 vpSize = ImGui::GetWindowSize();
         const float pad = ImGui::GetStyle().FramePadding.x;
-        const float spacing = ImGui::GetStyle().ItemSpacing.x;
+        const float spacing = ImGui::GetStyle().ItemSpacing.x * 1.5f;
+        // Big touch targets: tall + extra-wide so a near-miss hits the button
+        // rather than the viewport underneath (which would drop a stray vertex).
+        const float btnH = ImGui::GetFrameHeight() * 1.7f;
         float x = vpMin.x + 8.0f;
-        const float y = vpMin.y + vpSize.y - ImGui::GetFrameHeight() - 8.0f;
+        const float y = vpMin.y + vpSize.y - btnH - 8.0f;
 
         // Lay out one button left-to-right; returns whether it was clicked.
         auto barButton = [&](const char* label) -> bool {
             ImVec2 ts = ImGui::CalcTextSize(label);
-            float w = ts.x + pad * 2.0f;
+            float w = ts.x + pad * 5.0f;
             ImGui::SetCursorScreenPos(ImVec2(x, y));
-            bool clicked = ImGui::Button(label, ImVec2(w, 0.0f));
+            bool clicked = ImGui::Button(label, ImVec2(w, btnH));
             x += w + spacing;
             return clicked;
         };
@@ -4511,16 +4514,25 @@ void Application::renderViewport() {
             if (hov) ImGui::SetTooltip("Add taps to the current selection\n(the touch equivalent of holding Ctrl)");
         }
 
-        // Finish Shape — while a sketch placement is in progress, commit the
-        // points placed so far (touch stand-in for Enter / double-click).
+        // While a sketch placement is in progress: Finish (commit the points
+        // placed so far) and Cancel (discard the in-progress shape) — touch
+        // stand-ins for Enter / double-click and Escape, which a finger can't do.
         if (m_inSketchMode && m_sketchTool && m_sketchTool->isPlacing()) {
-            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.60f, 0.32f, 0.95f));
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.60f, 0.32f, 0.97f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.72f, 0.42f, 1.0f));
-            bool clicked = barButton("Finish Shape");
-            bool hov = ImGui::IsItemHovered();
+            bool finish = barButton("Finish Shape");
+            bool fhov = ImGui::IsItemHovered();
             ImGui::PopStyleColor(2);
-            if (clicked) recordSketchMutation([&]{ m_sketchTool->onConfirm(); });
-            if (hov) ImGui::SetTooltip("Finish the current shape, keeping the points placed");
+            if (finish) recordSketchMutation([&]{ m_sketchTool->onConfirm(); });
+            if (fhov) ImGui::SetTooltip("Finish the current shape, keeping the points placed");
+
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.68f, 0.24f, 0.24f, 0.97f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.82f, 0.34f, 0.34f, 1.0f));
+            bool cancel = barButton("Cancel Shape");
+            bool chov = ImGui::IsItemHovered();
+            ImGui::PopStyleColor(2);
+            if (cancel) recordSketchMutation([&]{ m_sketchTool->onCancel(); });
+            if (chov) ImGui::SetTooltip("Discard the in-progress shape (no commit / undo needed)");
         }
     }
 #endif // __ANDROID__
