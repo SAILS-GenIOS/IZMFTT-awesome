@@ -53,6 +53,11 @@ public:
     bool consumeTouchPan(float& dx, float& dy);   // centroid movement, pixels
     bool consumeTouchZoom(float& dz);             // pinch delta, wheel-equivalent
 
+    // True if the most recent left-button release was NOT a genuine single-finger
+    // lift but a two-finger gesture taking over (the second finger landing forces
+    // a release). Lets press-drag-release placement ignore spurious releases.
+    bool lastLeftReleaseWasGesture() const { return m_leftReleaseWasGesture; }
+
     // True once a one-finger press has been held stationary past the hold
     // threshold (and remains true until lift). The viewport uses this to start a
     // box/drag-select instead of orbiting — the touch equivalent of the desktop
@@ -82,6 +87,7 @@ private:
     bool  m_movedBeyondHold = false;      // moved too far -> it's a drag, not a hold
     bool  m_holdSelect = false;           // hold threshold passed; select-drag mode
     bool  m_textInputActive = false;      // soft keyboard currently raised
+    bool  m_leftReleaseWasGesture = false; // last left-up was a 2-finger takeover
 
     void handleFingerEvent(unsigned type, std::int64_t id, float nx, float ny);
     void updateHoldSelect();              // per-frame hold check (Android)

@@ -4358,14 +4358,22 @@ void Application::renderViewport() {
                         m_boxSelect->begin(glm::vec2(localX, localY));
                         m_sketchBoxSelectActive = true;
                         m_sketchDragBefore.reset();
-                    } else {
+                    } else if (m_sketchTool->getMode() == SketchToolMode::Select) {
                         // Select/drag mutates point positions only — no structural
                         // change — so recordSketchMutation's signature wouldn't see
                         // it. Snapshot manually for the drag-commit on mouse-up.
-                        if (m_sketchTool->getMode() == SketchToolMode::Select) {
-                            m_sketchDragBefore = std::make_shared<Sketch>(*m_activeSketch);
-                        }
+                        m_sketchDragBefore = std::make_shared<Sketch>(*m_activeSketch);
                         recordSketchMutation([&]{ m_sketchTool->onMouseDown(sketchCoord, io.KeyCtrl); });
+                    } else {
+                        // Drawing tool.
+#if defined(__ANDROID__)
+                        // Press-drag-release: defer the placement to mouse-release
+                        // so the drag can preview the radius / bulge / segment
+                        // first. The point lands at the release position.
+                        m_sketchPressActive = true;
+#else
+                        recordSketchMutation([&]{ m_sketchTool->onMouseDown(sketchCoord, io.KeyCtrl); });
+#endif
                     }
                 }
 
@@ -4434,6 +4442,19 @@ void Application::renderViewport() {
 
                 if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !m_sketchBoxSelectActive) {
                     m_sketchTool->onMouseUp(sketchCoord);
+#if defined(__ANDROID__)
+                    // Press-drag-release: place the drawing tool's point now, at
+                    // the release position (the preview followed the drag here).
+                    // Skip if the release was a two-finger gesture taking over,
+                    // not a genuine lift.
+                    if (m_sketchPressActive &&
+                        m_sketchTool->getMode() != SketchToolMode::Select &&
+                        !m_moveModeToggle &&
+                        m_window && !m_window->lastLeftReleaseWasGesture()) {
+                        recordSketchMutation([&]{ m_sketchTool->onMouseDown(sketchCoord, io.KeyCtrl); });
+                    }
+                    m_sketchPressActive = false;
+#endif
                     if (m_sketchDragBefore) {
                         // Compare point positions; commit a SketchEditOp if any moved.
                         const auto& before = m_sketchDragBefore->getPoints();

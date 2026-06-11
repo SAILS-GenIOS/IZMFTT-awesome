@@ -492,6 +492,9 @@ private:
     // Touch "Move" navigation lock: one-finger drag orbits, taps don't draw or
     // select — so panning/zooming (esp. in a sketch) can't start a drawing.
     bool m_moveModeToggle = false;
+    // Touch press-drag-release: a drawing-tool press is pending; its point is
+    // placed on release (the drag previews the radius/bulge/segment first).
+    bool m_sketchPressActive = false;
     bool m_showSettings = false;
     int m_settingsOrbitButton = 2; // staged value in the Settings dialog
     int m_settingsPanButton = 1;

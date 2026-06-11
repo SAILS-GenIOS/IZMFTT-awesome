@@ -152,7 +152,10 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
         const float dist = std::sqrt(sx * sx + sy * sy);
         if (!m_twoFinger) {
             // Two-finger gesture begins: cancel any in-progress orbit, set refs.
-            if (m_leftDown) { io.AddMouseButtonEvent(0, false); m_leftDown = false; }
+            if (m_leftDown) {
+                io.AddMouseButtonEvent(0, false); m_leftDown = false;
+                m_leftReleaseWasGesture = true; // spurious release from the 2nd finger
+            }
             m_twoFinger = true;
             m_suppressLeft = true;
             m_holdSelect = false;          // a two-finger gesture cancels hold-select
@@ -181,6 +184,7 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
         if (type == SDL_FINGERDOWN && !m_leftDown) {
             io.AddMouseButtonEvent(0, true);
             m_leftDown = true;
+            m_leftReleaseWasGesture = false; // a genuine new press
             m_downTicks = SDL_GetTicks();   // begin press-and-hold tracking
             m_downX = m_fingers[0].x; m_downY = m_fingers[0].y;
             m_movedBeyondHold = false;
