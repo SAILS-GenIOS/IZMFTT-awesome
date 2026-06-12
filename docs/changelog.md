@@ -3,6 +3,30 @@
 All notable changes to Materializr are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [0.9.9] — 2026-06-12
+
+### Added
+
+- **Android support.** Materializr now builds and runs as a touch-capable
+  Android app (arm64), with file open/save, immersive fullscreen, and the full
+  modeling kernel. OpenCASCADE / SDL2 / FreeType are cross-compiled from pinned,
+  SHA-256-verified upstream source.
+- **Touch mode — a runtime setting on every platform** (Settings ▸ General),
+  not a separate build. Defaults on for Android, off on desktop, and can be
+  flipped either way — so a tablet with a mouse/keyboard runs the full desktop
+  model, and a desktop touchscreen / convertible / Surface can switch to touch.
+  When on: larger hit targets and HiDPI scaling, long-press for right-click
+  context menus, press-drag-release sketch placement (circle/rectangle in one
+  gesture), one-finger orbit / two-finger pan / pinch zoom, draggable push-pull
+  and gizmo arrows, sub-shape multi-select (edges and faces), on-screen
+  Multi-Select / Move toggles, and a soft-keyboard toggle for text fields.
+
+### Changed
+
+- **Windowing and input now run on SDL2 on every platform** (desktop included),
+  replacing GLFW, so one backend serves Linux, Windows, and Android. No change
+  to desktop mouse/keyboard behavior.
+
 ## [0.9.8.1] — 2026-06-11
 
 ### Fixed
