@@ -1898,9 +1898,24 @@ void Application::renderViewport() {
                 m_viewportInputLatch = false;
             if (m_viewportInputLatch) viewportHovered = true;
         }
-        // Tell the input layer whether this touch is on the 3D canvas, so the
-        // long-press only arms here (not on a slider/panel — that popped the ring).
-        if (m_window) m_window->setTouchOverViewport(viewportHovered);
+        // Tell the input layer whether a long-press may arm right now. Over a
+        // slider/panel it must not (slow slider drags popped the ring); while a
+        // sketch DRAWING tool is active it must not either — a slow, precise
+        // press-drag-release (within the drag slop) would arm the hold, skip
+        // the placement, and pop a context menu instead. Same while an
+        // interactive op's arrow owns the one-finger drag. Select mode keeps
+        // it: hold-still = context menu, hold-then-drag = box select.
+        {
+            bool allowLongPress = viewportHovered;
+            if (m_inSketchMode && m_sketchTool &&
+                m_sketchTool->getMode() != SketchToolMode::Select)
+                allowLongPress = false;
+            if (m_pushPullActive || m_extruding || m_edgeOpActive ||
+                m_moveFaceActive || m_scaleFaceCtl.active() ||
+                m_resizeCylActive || anyIopActive())
+                allowLongPress = false;
+            if (m_window) m_window->setTouchOverViewport(allowLongPress);
+        }
         if (viewportHovered) {
             ImGuiIO& io = ImGui::GetIO();
             // Multi-select toggle = the touch stand-in for holding Ctrl. Force
@@ -4631,6 +4646,21 @@ void Application::renderViewport() {
                 bool hov = ImGui::IsItemHovered();
                 if (pops) ImGui::PopStyleColor(pops);
                 if (hov) ImGui::SetTooltip("Add taps to the current selection\n(the touch equivalent of holding Ctrl)");
+
+                // Delete the selected sketch elements — the touch twin of the
+                // Delete key (which a bare tablet doesn't have). Only shown in
+                // sketch Select mode with elements actually selected.
+                if (m_inSketchMode && m_sketchTool &&
+                    m_sketchTool->hasElementSelection()) {
+                    ImGui::SameLine();
+                    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.68f, 0.24f, 0.24f, 0.97f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.82f, 0.34f, 0.34f, 1.0f));
+                    bool del = wideButton("Delete");
+                    bool dhov = ImGui::IsItemHovered();
+                    ImGui::PopStyleColor(2);
+                    if (del) deleteSelectedSketchElements();
+                    if (dhov) ImGui::SetTooltip("Delete the selected sketch elements (undoable)");
+                }
             }
             if (placing) {
                 // "Finish Shape" only applies to chaining tools (Line, Spline,
@@ -4671,10 +4701,16 @@ void Application::renderViewport() {
         // Bottom-right: persistent Move (navigation lock). While on, a one-finger
         // drag orbits and taps don't draw/select, so pan/zoom can't inadvertently
         // start a drawing. UI buttons stay clickable (input still reaches ImGui).
-        // Only shown while editing a sketch — outside one there's no drawing to
-        // start by accident (taps just select, a drag already orbits), so the
-        // lock is redundant; force it off there so it can't linger invisibly.
-        if (m_inSketchMode) {
+        // Shown while a one-finger drag is reserved for a tool — sketch editing,
+        // or an interactive op whose arrow/handle owns the drag (push/pull,
+        // extrude, edge ops, move/scale face) — since that's exactly when orbit
+        // needs an escape hatch. Hidden (and forced off) elsewhere: a plain drag
+        // already orbits there, so the lock is redundant.
+        const bool navLockRelevant = m_inSketchMode ||
+            m_pushPullActive || m_extruding || m_edgeOpActive ||
+            m_moveFaceActive || m_scaleFaceCtl.active() ||
+            m_resizeCylActive || anyIopActive();
+        if (navLockRelevant) {
             ImGui::SetNextWindowPos(ImVec2(vpMin.x + vpSize.x - 6.0f, vpMin.y + vpSize.y - 6.0f),
                                     ImGuiCond_Always, ImVec2(1.0f, 1.0f));
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 12.0f));
@@ -4870,7 +4906,9 @@ void Application::renderViewport() {
     if (m_extruding) {
         ImGui::SetCursorPos(ImVec2(10, 30));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
-        ImGui::Text("EXTRUDE - Drag in viewport or type distance. Enter to confirm, Escape to cancel.");
+        ImGui::Text(materializr::touchMode()
+                    ? "EXTRUDE - Drag in viewport or type distance, then Confirm / Cancel."
+                    : "EXTRUDE - Drag in viewport or type distance. Enter to confirm, Escape to cancel.");
         ImGui::PopStyleColor();
 
         // Floating distance input panel
@@ -4932,7 +4970,9 @@ void Application::renderViewport() {
     if (m_pushPullActive) {
         ImGui::SetCursorPos(ImVec2(10, 30));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.85f, 1.0f, 1.0f));
-        ImGui::Text("PUSH/PULL - Positive = extrude, Negative = cut. Enter to confirm, Escape to cancel.");
+        ImGui::Text(materializr::touchMode()
+                    ? "PUSH/PULL - Positive = extrude, Negative = cut. Drag the arrow, then Confirm / Cancel."
+                    : "PUSH/PULL - Positive = extrude, Negative = cut. Enter to confirm, Escape to cancel.");
         ImGui::PopStyleColor();
 
         ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 260,
@@ -5026,7 +5066,9 @@ void Application::renderViewport() {
 
         ImGui::SetCursorPos(ImVec2(10, 30));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.5f, 1.0f));
-        ImGui::Text("%s - Type value or use slider. Enter to confirm, Escape to cancel.", opName);
+        ImGui::Text(materializr::touchMode()
+                    ? "%s - Type value or use slider, then Confirm / Cancel."
+                    : "%s - Type value or use slider. Enter to confirm, Escape to cancel.", opName);
         ImGui::PopStyleColor();
 
         ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 260,
@@ -5127,7 +5169,9 @@ void Application::renderViewport() {
         const bool isScl = m_faceXformKind == FaceXform::Scale;
         ImGui::SetCursorPos(ImVec2(10, 30));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.5f, 1.0f));
-        ImGui::Text("%s - drag a handle. Enter to confirm, Escape to cancel.",
+        ImGui::Text(materializr::touchMode()
+                        ? "%s - drag a handle, then Confirm / Cancel."
+                        : "%s - drag a handle. Enter to confirm, Escape to cancel.",
                     isRot ? "TILT FACE (about its centre)"
                           : isScl ? "SCALE FACE (about its centre)"
                                   : "MOVE FACE (slide in plane)");
@@ -5230,7 +5274,9 @@ void Application::renderViewport() {
     if (m_inSketchMode) {
         ImGui::SetCursorPos(ImVec2(10, 30));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.4f, 1.0f));
-        ImGui::Text("SKETCH MODE - Press Escape to finish");
+        ImGui::Text(materializr::touchMode()
+                    ? "SKETCH MODE - Finish Sketch applies, Exit Sketch discards"
+                    : "SKETCH MODE - Press Escape to finish");
         ImGui::PopStyleColor();
     }
 

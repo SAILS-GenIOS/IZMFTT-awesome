@@ -15,6 +15,21 @@ void PluginRegistry::add(PluginDescriptor desc) {
 }
 
 void PluginRegistry::initAll(PluginContext& ctx) {
+    // Start from a clean slate. The registry is a process-lifetime singleton,
+    // but on Android SDL can re-enter SDL_main in the SAME process (the
+    // activity is recreated — system-bar transitions, backing out and
+    // reopening, surface loss). Each plugin's init then pushes its
+    // contributions AGAIN, and the toolbar/menus/IO formats show every entry
+    // two or three times. Clearing here makes initAll idempotent; m_plugins
+    // itself is fine (static auto-registration really does run once).
+    m_activeTool.reset();
+    m_toolbar.clear();
+    m_commands.clear();
+    m_menus.clear();
+    m_ioFormats.clear();
+    m_renderPasses.clear();
+    m_properties.clear();
+
     for (auto& plugin : m_plugins) {
         if (plugin.init) {
             plugin.init(ctx);

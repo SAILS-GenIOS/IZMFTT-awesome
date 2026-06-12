@@ -939,6 +939,8 @@ void Application::renderMenuBar() {
         }
         if (ImGui::BeginMenu("View")) {
             if (ImGui::MenuItem("Reset Camera", "Home")) m_viewport->getCamera().reset();
+            // The F shortcut's menu twin — and the only way to frame on touch.
+            if (ImGui::MenuItem("Frame Selection", "F")) frameSelection();
             if (ImGui::MenuItem("Section View", nullptr, &m_sectionEnabled)) {
                 m_sectionDirty = true;
                 if (m_sectionEnabled) {
@@ -2136,36 +2138,7 @@ void Application::handleShortcuts() {
     // focus so it doesn't fire while typing constraint values.
     if (!m_inSketchMode && !ImGui::IsAnyItemActive() &&
         ImGui::IsKeyPressed(ImGuiKey_F)) {
-        Bnd_Box bb;
-        // Selection first.
-        if (m_selection) {
-            for (const auto& e : m_selection->getSelection()) {
-                if (e.bodyId < 0) continue;
-                try {
-                    const TopoDS_Shape& s = m_document->getBody(e.bodyId);
-                    if (!s.IsNull()) BRepBndLib::AddOptimal(s, bb,
-                                                            Standard_False, Standard_False);
-                } catch (...) {}
-            }
-        }
-        // Fall back to all visible bodies.
-        if (bb.IsVoid()) {
-            for (int id : m_document->getAllBodyIds()) {
-                if (!m_document->isBodyVisible(id)) continue;
-                try {
-                    const TopoDS_Shape& s = m_document->getBody(id);
-                    if (!s.IsNull()) BRepBndLib::AddOptimal(s, bb,
-                                                            Standard_False, Standard_False);
-                } catch (...) {}
-            }
-        }
-        if (!bb.IsVoid()) {
-            Standard_Real x0,y0,z0,x1,y1,z1;
-            bb.Get(x0,y0,z0,x1,y1,z1);
-            m_viewport->getCamera().zoomToFit(
-                glm::vec3((float)x0,(float)y0,(float)z0),
-                glm::vec3((float)x1,(float)y1,(float)z1));
-        }
+        frameSelection();
     }
     // Delete: while in sketch mode, restrict to sketch-element deletion so the
     // host body (which stays selected to keep its face highlighted, per the
@@ -2173,25 +2146,9 @@ void Application::handleShortcuts() {
     // Delete still removes selected bodies / sketches through history.
     if (ImGui::IsKeyPressed(ImGuiKey_Delete)) {
         if (m_inSketchMode && m_activeSketch && m_sketchTool) {
-            // Delete the SketchTool's element selection (points + lines) if
-            // any, wrapped in recordSketchMutation so Ctrl+Z brings them back.
-            const auto pts = m_sketchTool->getSelectedPoints();
-            const auto lns = m_sketchTool->getSelectedLines();
-            if (!pts.empty() || !lns.empty()) {
-                recordSketchMutation([&]{
-                    for (int lid : lns) m_activeSketch->removeElement(lid);
-                    for (int pid : pts) m_activeSketch->removeElement(pid);
-                    // Deleting a line leaves its two endpoints behind (they
-                    // weren't in the selection) — sweep up the now-unreferenced
-                    // points so no orphan vertices linger.
-                    m_activeSketch->pruneOrphanPoints();
-                });
-                m_sketchTool->clearElementSelection();
-                markDirty();
-            }
-            // Either way, don't touch the body. Body/face/sketch entries in
-            // m_selection are the sketch's host — deleting them mid-sketch
-            // is destructive and almost never what the user wanted.
+            // Delete the sketch-element selection only — the host body (which
+            // stays selected to keep its face highlighted) must not get nuked.
+            deleteSelectedSketchElements();
         } else if (m_selection->hasSelection()) {
             const auto& sel = m_selection->getSelection();
             std::vector<int> bodiesToDelete;
@@ -3372,6 +3329,58 @@ void Application::recordSketchMutation(const std::function<void()>& mutator) {
     auto after = std::make_shared<Sketch>(*m_activeSketch);
     auto op = std::make_unique<SketchEditOp>(m_activeSketch, std::move(before), std::move(after));
     m_history->pushExecuted(std::move(op));
+}
+
+void Application::deleteSelectedSketchElements() {
+    if (!m_inSketchMode || !m_activeSketch || !m_sketchTool) return;
+    // Delete the SketchTool's element selection (points + lines) if any,
+    // wrapped in recordSketchMutation so Ctrl+Z / Undo brings them back.
+    const auto pts = m_sketchTool->getSelectedPoints();
+    const auto lns = m_sketchTool->getSelectedLines();
+    if (pts.empty() && lns.empty()) return;
+    recordSketchMutation([&]{
+        for (int lid : lns) m_activeSketch->removeElement(lid);
+        for (int pid : pts) m_activeSketch->removeElement(pid);
+        // Deleting a line leaves its two endpoints behind (they weren't in
+        // the selection) — sweep up the now-unreferenced points so no orphan
+        // vertices linger.
+        m_activeSketch->pruneOrphanPoints();
+    });
+    m_sketchTool->clearElementSelection();
+    markDirty();
+}
+
+void Application::frameSelection() {
+    Bnd_Box bb;
+    // Selection first.
+    if (m_selection) {
+        for (const auto& e : m_selection->getSelection()) {
+            if (e.bodyId < 0) continue;
+            try {
+                const TopoDS_Shape& s = m_document->getBody(e.bodyId);
+                if (!s.IsNull()) BRepBndLib::AddOptimal(s, bb,
+                                                        Standard_False, Standard_False);
+            } catch (...) {}
+        }
+    }
+    // Fall back to all visible bodies.
+    if (bb.IsVoid()) {
+        for (int id : m_document->getAllBodyIds()) {
+            if (!m_document->isBodyVisible(id)) continue;
+            try {
+                const TopoDS_Shape& s = m_document->getBody(id);
+                if (!s.IsNull()) BRepBndLib::AddOptimal(s, bb,
+                                                        Standard_False, Standard_False);
+            } catch (...) {}
+        }
+    }
+    if (!bb.IsVoid()) {
+        Standard_Real x0,y0,z0,x1,y1,z1;
+        bb.Get(x0,y0,z0,x1,y1,z1);
+        m_viewport->getCamera().zoomToFit(
+            glm::vec3((float)x0,(float)y0,(float)z0),
+            glm::vec3((float)x1,(float)y1,(float)z1));
+    }
 }
 
 void Application::editSketch(int sketchId) {

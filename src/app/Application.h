@@ -145,6 +145,14 @@ private:
     // multi-body project without juggling visibility for the file-menu
     // "Export STL" (which writes every visible body to one file).
     void exportBodyAsStl(int bodyId);
+    // Zoom-fit the camera onto the selection (or all visible bodies when
+    // nothing is selected). Bound to F and View > Frame Selection — the menu
+    // item is the touch path.
+    void frameSelection();
+    // Delete the sketch tool's selected elements (points + lines), history-
+    // wrapped, and sweep orphan points. Bound to Delete and the sketch context
+    // bar's Delete button — the latter is the touch path.
+    void deleteSelectedSketchElements();
     void saveProject();         // Save dialog (Save As behavior)
     void saveProjectQuick();    // Save to current path if known, else falls through to saveProject
     void loadProject();         // File dialog → loadProjectAt

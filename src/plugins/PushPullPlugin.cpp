@@ -93,7 +93,9 @@ public:
     void renderOverlay(materializr::PluginContext& ctx) override {
         ImGui::SetCursorPos(ImVec2(10, 30));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 0.85f, 1.0f, 1.0f));
-        ImGui::Text("PUSH/PULL - Positive = extrude, Negative = cut. Enter to confirm, Escape to cancel.");
+        ImGui::Text(materializr::touchMode()
+            ? "PUSH/PULL - Positive = extrude, Negative = cut. Drag the arrow, then Confirm / Cancel."
+            : "PUSH/PULL - Positive = extrude, Negative = cut. Enter to confirm, Escape to cancel.");
         ImGui::PopStyleColor();
 
         ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 260,
