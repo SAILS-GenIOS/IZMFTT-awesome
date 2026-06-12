@@ -53,7 +53,7 @@ Builds:
     gradle:
       - yes
     # Cross-compile FreeType + OpenCASCADE 7.8.1 (arm64) from verified source and
-    # stage the .so set + OCCT resource files. ~30 min; see the de-risk note below
+    # stage the .so set + OCCT resource files. ~19 min; see the de-risk note below
     # for wall-clock and peak RAM. $$NDK$$ is the path F-Droid installs r26d to.
     prebuild:
       - JOBS=4 ANDROID_NDK="$$NDK$$" MATERIALIZR_WORK="$$BUILD$$/.materializr-deps" ../scripts/setup-deps.sh
@@ -65,8 +65,10 @@ UpdateCheckMode: Tags
 CurrentVersion: 0.9.9.1
 CurrentVersionCode: 4
 
-# --- De-risk notes (fill from the clean-container timing run) ---------------
-# OCCT cross-compile in a clean debian:bookworm + r26d at -j4:
-#   wall-clock: <TBD>   peak RAM: <TBD>
-# If peak RAM exceeds the F-Droid buildserver budget, drop JOBS or trim OCCT
+# --- De-risk notes (clean-container timing run, 2026-06-12) ------------------
+# OCCT 7.8.1 cross-compile in a clean debian:bookworm-slim + NDK r26d at -j4:
+#   wall-clock: 18m55s   peak RAM: 2.6 GB   (50 toolkits, libTKernel.so OK)
+# Builds dependency-complete from source with Debian's stock cmake (3.25.1) — no
+# host-specific tooling. Comfortably inside F-Droid's buildserver budget.
+# If peak RAM ever exceeds it, drop JOBS to 2 (roughly halves peak) or trim OCCT
 # BUILD_MODULE_* toolkits to only those the app links.
