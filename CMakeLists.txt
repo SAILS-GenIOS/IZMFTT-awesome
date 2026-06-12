@@ -9,16 +9,31 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(FetchContent)
 
-# GLFW
-FetchContent_Declare(
-    glfw
-    GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG        3.4
-)
-set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(glfw)
+# SDL2 — the windowing/input backend on every platform (the Android port
+# unified desktop + touch on SDL2; src/app/Window.cpp is SDL-based, replacing
+# the old GLFW backend). Prefer the system/vcpkg package; fall back to building
+# 2.30.9 from source — the same version android/scripts/setup-deps.sh pins —
+# which on Linux needs the X11 dev headers already required for the GL stack.
+find_package(SDL2 CONFIG QUIET)
+if(NOT SDL2_FOUND)
+    message(STATUS "System SDL2 not found - fetching and building 2.30.9 from source")
+    FetchContent_Declare(
+        sdl2
+        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+        GIT_TAG        release-2.30.9
+    )
+    set(SDL_TEST OFF CACHE BOOL "" FORCE)
+    set(SDL2_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(sdl2)
+endif()
+# Normalise the target name across find_package configs and source builds.
+if(TARGET SDL2::SDL2)
+    set(MZ_SDL2_TARGET SDL2::SDL2)
+elseif(TARGET SDL2)
+    set(MZ_SDL2_TARGET SDL2)
+else()
+    message(FATAL_ERROR "SDL2 target not found after find_package/FetchContent")
+endif()
 
 # GLM
 FetchContent_Declare(
@@ -44,14 +59,14 @@ add_library(imgui_lib STATIC
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
 target_include_directories(imgui_lib PUBLIC
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
-target_link_libraries(imgui_lib PUBLIC glfw)
+target_link_libraries(imgui_lib PUBLIC ${MZ_SDL2_TARGET})
 
 # ─── Find system packages ────────────────────────────────────────────────────
 
@@ -258,7 +273,7 @@ target_include_directories(materializr SYSTEM PRIVATE
 
 target_link_libraries(materializr PRIVATE
     imgui_lib
-    glfw
+    ${MZ_SDL2_TARGET}
     OpenGL::GL
     glm::glm
 )

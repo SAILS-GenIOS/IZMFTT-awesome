@@ -278,8 +278,8 @@ void FileDialogs::openFile(const std::string& title,
     // Seed pfd with the directory the user last picked in so they don't
     // have to re-navigate from ~ every time. zenity / kdialog interpret
     // their --filename arg as a FILE path; without a trailing slash,
-    // "/home/kevin/Documents" is read as "filename = Documents in folder
-    // /home/kevin" and the picker lands at $HOME instead of inside
+    // "/home/user/Documents" is read as "filename = Documents in folder
+    // /home/user" and the picker lands at $HOME instead of inside
     // Documents. (Steve: "the dialog returns me to my home directory,
     // not the last folder".)
     std::string seed = s_lastDir;

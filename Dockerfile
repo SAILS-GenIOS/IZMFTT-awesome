@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     libgl-dev libxrandr-dev libxinerama-dev \
     libxcursor-dev libxi-dev libxkbcommon-dev \
     libwayland-dev pkg-config \
+    libsdl2-dev \
     libcurl4-openssl-dev \
     zlib1g-dev \
     file patchelf wget fuse libfuse2 \
@@ -65,7 +66,7 @@ RUN ldd /AppDir/usr/bin/materializr | awk '/=> \//{print $3}' | sort -u \
 RUN patchelf --set-rpath '$ORIGIN/../lib' /AppDir/usr/bin/materializr || true
 
 # Create .desktop file. StartupWMClass must match the WM_CLASS / Wayland
-# app-id the running window reports (set in Window.cpp via the GLFW hints)
+# app-id the running window reports (set in Window.cpp via SDL)
 # so taskbar extensions like Dash-to-Panel can tie the window to its icon.
 RUN printf '[Desktop Entry]\nName=Materializr\nExec=materializr\nIcon=materializr\nType=Application\nCategories=Graphics;3DGraphics;Engineering;\nComment=Open-source parametric 3D CAD\nStartupWMClass=Materializr\n' \
     > /AppDir/materializr.desktop
