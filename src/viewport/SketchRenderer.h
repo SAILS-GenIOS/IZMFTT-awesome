@@ -17,6 +17,10 @@ public:
 
     bool initialize();
 
+    // Width (px) for committed sketch geometry — user setting (Sketch line
+    // width). Point markers scale with it too. See uploadAndDraw / drawLines.
+    void setLineWidth(float w) { m_lineWidth = w; }
+
     void render(const Sketch* sketch, const SketchTool* tool,
                 const glm::mat4& view, const glm::mat4& projection,
                 const SketchSolver* solver = nullptr);
@@ -70,9 +74,11 @@ private:
     unsigned int m_program = 0;
     unsigned int m_vao = 0;
     unsigned int m_vbo = 0;
+    float m_lineWidth = 2.5f; // committed-geometry width (Sketch line width setting)
     int m_locMVP = -1;
     int m_locColor = -1;
     int m_locAlpha = -1;
+    int m_locPointSize = -1;
 };
 
 } // namespace materializr

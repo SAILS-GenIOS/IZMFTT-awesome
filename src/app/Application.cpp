@@ -1063,6 +1063,7 @@ void Application::applyRenderingSettings() {
     m_shapeRenderer->setLighting(lp);
     m_viewport->setSamples(m_msaaSamples);
     if (m_selectionHighlight) m_selectionHighlight->setLineWidth(m_selectionLineWidth);
+    if (m_sketchRenderer) m_sketchRenderer->setLineWidth(m_sketchLineWidth);
 }
 
 void Application::meshQualityParams(float& deflection, float& angularDeflection) const {
@@ -1095,6 +1096,7 @@ AppSettings Application::currentSettings() const {
     s.msaaSamples = m_msaaSamples;
     s.meshQuality = m_meshQuality;
     s.selectionLineWidth = m_selectionLineWidth;
+    s.sketchLineWidth = m_sketchLineWidth;
     s.showToolbarTooltips = m_showToolbarTooltips;
     s.autoOpenLastProject = m_autoOpenLastProject;
     s.lastProjectPath = m_currentProjectPath; // empty after closeProject()
@@ -1147,6 +1149,7 @@ void Application::applyAppSettings(const AppSettings& s) {
     m_msaaSamples = s.msaaSamples;
     m_meshQuality = s.meshQuality;
     m_selectionLineWidth = s.selectionLineWidth;
+    m_sketchLineWidth = s.sketchLineWidth;
     m_showToolbarTooltips = s.showToolbarTooltips;
     m_autoOpenLastProject = s.autoOpenLastProject;
     m_checkForUpdatesOnLaunch = s.checkForUpdatesOnLaunch;
@@ -1158,6 +1161,7 @@ void Application::applyAppSettings(const AppSettings& s) {
         using IL = SketchTool::InferenceLevel;
         IL lvl = (s.inferenceLevel == 1) ? IL::Reduced
                : (s.inferenceLevel == 2) ? IL::Off
+               : (s.inferenceLevel == 3) ? IL::Max
                                          : IL::Full;
         m_sketchTool->setInferenceLevel(lvl);
         m_sketchTool->setAngleSnapDeg(s.angleSnapDeg);
@@ -1590,9 +1594,12 @@ void Application::handleToolAction(int action) {
         case ToolAction::SketchCycleInference:
             if (m_sketchTool) {
                 using IL = SketchTool::InferenceLevel;
-                IL next = m_sketchTool->getInferenceLevel() == IL::Full ? IL::Reduced
-                        : m_sketchTool->getInferenceLevel() == IL::Reduced ? IL::Off
-                                                                           : IL::Full;
+                IL cur = m_sketchTool->getInferenceLevel();
+                // Cycle strongest -> weakest, wrapping: Max -> Full -> Reduced -> Off -> Max.
+                IL next = cur == IL::Max     ? IL::Full
+                        : cur == IL::Full    ? IL::Reduced
+                        : cur == IL::Reduced ? IL::Off
+                                             : IL::Max;
                 m_sketchTool->setInferenceLevel(next);
             }
             break;
@@ -2893,6 +2900,7 @@ void Application::enterSketchMode() {
     m_sketchTool->setMode(SketchToolMode::Line);
     m_inSketchMode = true;
     m_sketchEntryHistoryStep = m_history ? m_history->currentStep() : -1;
+    if (m_history) m_history->setUndoFloor(m_sketchEntryHistoryStep);  // no undo past sketch entry
     m_toolbar->setSketchMode(true);
     alignCameraToActiveSketch();
 }
@@ -2914,6 +2922,7 @@ void Application::enterSketchOnPlane(const gp_Pln& plane) {
     m_sketchTool->setMode(SketchToolMode::Line);
     m_inSketchMode = true;
     m_sketchEntryHistoryStep = m_history ? m_history->currentStep() : -1;
+    if (m_history) m_history->setUndoFloor(m_sketchEntryHistoryStep);  // no undo past sketch entry
     m_toolbar->setSketchMode(true);
     alignCameraToActiveSketch();
 }
@@ -3103,6 +3112,7 @@ void Application::enterSketchOnFace(const TopoDS_Face& face, int sourceBodyId) {
     m_sketchTool->setMode(SketchToolMode::Line);
     m_inSketchMode = true;
     m_sketchEntryHistoryStep = m_history ? m_history->currentStep() : -1;
+    if (m_history) m_history->setUndoFloor(m_sketchEntryHistoryStep);  // no undo past sketch entry
     m_toolbar->setSketchMode(true);
     alignCameraToActiveSketch();
 }
@@ -3331,6 +3341,39 @@ void Application::recordSketchMutation(const std::function<void()>& mutator) {
     m_history->pushExecuted(std::move(op));
 }
 
+void Application::sketchChainBack() {
+    if (!m_inSketchMode || !m_sketchTool) return;
+    SketchToolMode m = m_sketchTool->getMode();
+    if (m == SketchToolMode::Line) {
+        if (m_sketchTool->lineSegmentCount() < 1) return;
+        // dropLineChainTail removes EXACTLY the tracked last segment; wrapping
+        // it makes the removal one undoable step. (Don't prune here — backing
+        // to the lone start vertex should KEEP it as the chain's live anchor.)
+        recordSketchMutation([&]{ m_sketchTool->dropLineChainTail(); });
+    } else if (m == SketchToolMode::Spline) {
+        // Spline control points live in the tool until Confirm (no per-point
+        // history step), so just pop the last one.
+        m_sketchTool->removeLastSplinePoint();
+    } else {
+        return;
+    }
+    m_meshesDirty = true;
+}
+
+void Application::sketchChainCancel() {
+    if (!m_inSketchMode || !m_sketchTool) return;
+    if (m_sketchTool->getMode() == SketchToolMode::Line) {
+        // Peel every segment of THIS chain in one undo step (each dropLineChainTail
+        // removes the current tail; it returns false once only the start is left).
+        recordSketchMutation([&]{ while (m_sketchTool->dropLineChainTail()) {} });
+    }
+    // Reset placement (drops the spline points / the lone start vertex). Any
+    // now-disconnected start vertex is swept below.
+    m_sketchTool->onCancel();
+    if (m_activeSketch) m_activeSketch->pruneOrphanPoints();
+    m_meshesDirty = true;
+}
+
 void Application::deleteSelectedSketchElements() {
     if (!m_inSketchMode || !m_activeSketch || !m_sketchTool) return;
     // Delete the SketchTool's element selection (points + lines) if any,
@@ -3405,6 +3448,7 @@ void Application::editSketch(int sketchId) {
     m_sketchTool->setMode(SketchToolMode::Select);
     m_inSketchMode = true;
     m_sketchEntryHistoryStep = m_history ? m_history->currentStep() : -1;
+    if (m_history) m_history->setUndoFloor(m_sketchEntryHistoryStep);  // no undo past sketch entry
     m_toolbar->setSketchMode(true);
     m_selection->clear();
     alignCameraToActiveSketch();
@@ -3659,6 +3703,7 @@ glm::vec2 Application::screenToSketch(float sx, float sy, float vpW, float vpH) 
 
 void Application::exitSketchMode() {
     m_inSketchMode = false;
+    if (m_history) m_history->clearUndoFloor();  // undo is unrestricted again
     m_toolbar->setSketchMode(false);
     m_sketchTool->setMode(SketchToolMode::None);
     m_sketchTool->setSketch(nullptr);

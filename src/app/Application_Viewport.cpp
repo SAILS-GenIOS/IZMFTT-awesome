@@ -4454,10 +4454,21 @@ void Application::renderViewport() {
                         // The drag tools (circle/rectangle) are a single
                         // click-drag-release gesture: drop the centre / first
                         // corner now, on press, so the drag sizes the shape and
-                        // the release commits it. (Multi-point tools keep
-                        // placing every point on release.)
+                        // the release commits it.
+                        //
+                        // Line gets the same press-drag-release feel for its
+                        // FIRST vertex: dropping the start point on press lets the
+                        // drag rubber-band the segment (with the live length read-
+                        // out) and the release commit the end — instead of the
+                        // unnatural tap-here, tap-there. Only the first vertex
+                        // pre-places (guarded by !isPlacing); once a chain is going
+                        // its start is already the previous endpoint, so each
+                        // further segment just previews from there and commits its
+                        // point on release. Tap-tap still works as a fallback, and
+                        // polyline chaining / auto-close are untouched.
                         SketchToolMode m = m_sketchTool->getMode();
-                        if ((m == SketchToolMode::Circle || m == SketchToolMode::Rectangle) &&
+                        if ((m == SketchToolMode::Circle || m == SketchToolMode::Rectangle ||
+                             m == SketchToolMode::Line) &&
                             !m_sketchTool->isPlacing()) {
                             recordSketchMutation([&]{ m_sketchTool->onMouseDown(sketchCoord, io.KeyCtrl); });
                             m_sketchDragCenterPlaced = true;
@@ -4547,15 +4558,17 @@ void Application::renderViewport() {
                         float slop = 12.0f * (m_window ? m_window->uiScale() : 1.0f);
                         bool moved = (ddx * ddx + ddy * ddy) > slop * slop;
                         if (m_sketchDragCenterPlaced) {
-                            // Circle/rectangle whose centre dropped on press:
-                            // complete it only if the finger dragged out a size.
-                            // A no-drag tap leaves it placing, so a second tap can
-                            // set the radius/corner (tap-tap still works too).
+                            // A tool whose first point dropped on press (circle/
+                            // rectangle centre, or line's start vertex): complete
+                            // it only if the finger dragged out a size/length. A
+                            // no-drag tap leaves it placing, so a second tap sets
+                            // the radius / corner / endpoint — a stationary tap
+                            // mustn't commit a zero-size shape (tap-tap still works).
                             if (moved)
                                 recordSketchMutation([&]{ m_sketchTool->onMouseDown(sketchCoord, io.KeyCtrl); });
                         } else {
-                            // Multi-point tool, or the drag tool's second tap:
-                            // place the point at the release position.
+                            // Multi-point tool (incl. continuing a line chain), or
+                            // a drag tool's second tap: place the point at release.
                             recordSketchMutation([&]{ m_sketchTool->onMouseDown(sketchCoord, io.KeyCtrl); });
                         }
                     }
@@ -4663,36 +4676,64 @@ void Application::renderViewport() {
                 }
             }
             if (placing) {
-                // "Finish Shape" only applies to chaining tools (Line, Spline,
-                // Polygon), where it commits the points placed so far. Circle /
-                // Rectangle / Arc auto-complete on their final click, so a Finish
-                // there would just discard the in-progress shape — show only
-                // Cancel for those.
                 SketchToolMode mode = m_sketchTool->getMode();
+                // Circle/Rectangle are a single press-drag-release gesture now,
+                // so their only "placing" window is mid-drag with the finger
+                // down — a button there is unreachable (it just flickered in and
+                // out). Show no bar for them; Undo backs out an unwanted
+                // circle/rect. The bar stays for the genuinely multi-step tools:
+                // line/spline chains, and arc.
+                bool atomicGesture = (mode == SketchToolMode::Circle ||
+                                      mode == SketchToolMode::Rectangle);
+                // "Finish" commits the points placed so far (chaining tools).
                 bool chainTool = (mode == SketchToolMode::Line ||
                                   mode == SketchToolMode::Spline ||
                                   mode == SketchToolMode::Polygon);
-                bool prev = selectionContext;
-                if (chainTool) {
+                if (!atomicGesture) {
+                    bool prev = selectionContext;
+                    if (chainTool) {
+                        if (prev) ImGui::SameLine();
+                        prev = true;
+                        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.60f, 0.32f, 0.97f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.72f, 0.42f, 1.0f));
+                        bool finish = wideButton("Finish");
+                        bool fhov = ImGui::IsItemHovered();
+                        ImGui::PopStyleColor(2);
+                        if (finish) recordSketchMutation([&]{ m_sketchTool->onConfirm(); });
+                        if (fhov) ImGui::SetTooltip("Finish the current shape, keeping the points placed");
+                    }
+                    // "Back" drops the last placed segment / control point and
+                    // keeps the chain going. Only when there is one to drop.
+                    bool canBack =
+                        (mode == SketchToolMode::Line && m_sketchTool->lineSegmentCount() >= 1) ||
+                        (mode == SketchToolMode::Spline && !m_sketchTool->splinePointsInProgress().empty());
+                    if (canBack) {
+                        if (prev) ImGui::SameLine();
+                        prev = true;
+                        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.78f, 0.54f, 0.18f, 0.97f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.64f, 0.26f, 1.0f));
+                        bool back = wideButton("Back");
+                        bool bhov = ImGui::IsItemHovered();
+                        ImGui::PopStyleColor(2);
+                        if (back) sketchChainBack();
+                        if (bhov) ImGui::SetTooltip("Remove the last segment and keep drawing");
+                    }
+                    // "Cancel" — for a chain, discard the WHOLE chain; for arc,
+                    // discard the in-progress shape.
                     if (prev) ImGui::SameLine();
-                    prev = true;
-                    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.60f, 0.32f, 0.97f));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.72f, 0.42f, 1.0f));
-                    bool finish = wideButton("Finish Shape");
-                    bool fhov = ImGui::IsItemHovered();
+                    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.68f, 0.24f, 0.24f, 0.97f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.82f, 0.34f, 0.34f, 1.0f));
+                    bool cancel = wideButton(chainTool ? "Cancel" : "Cancel Shape");
+                    bool chov = ImGui::IsItemHovered();
                     ImGui::PopStyleColor(2);
-                    if (finish) recordSketchMutation([&]{ m_sketchTool->onConfirm(); });
-                    if (fhov) ImGui::SetTooltip("Finish the current shape, keeping the points placed");
+                    if (cancel) {
+                        if (chainTool) sketchChainCancel();
+                        else recordSketchMutation([&]{ m_sketchTool->onCancel(); });
+                    }
+                    if (chov) ImGui::SetTooltip(chainTool
+                        ? "Discard the whole chain you're drawing"
+                        : "Discard the in-progress shape");
                 }
-
-                if (prev) ImGui::SameLine();
-                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.68f, 0.24f, 0.24f, 0.97f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.82f, 0.34f, 0.34f, 1.0f));
-                bool cancel = wideButton("Cancel Shape");
-                bool chov = ImGui::IsItemHovered();
-                ImGui::PopStyleColor(2);
-                if (cancel) recordSketchMutation([&]{ m_sketchTool->onCancel(); });
-                if (chov) ImGui::SetTooltip("Discard the in-progress shape (no commit / undo needed)");
             }
             ImGui::End();
             ImGui::PopStyleVar();

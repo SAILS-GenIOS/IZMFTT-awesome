@@ -34,6 +34,15 @@ public:
     bool undo(Document& doc);
     bool redo(Document& doc);
 
+    // Undo floor: forbid undo from crossing at or below this step index. Set
+    // while a sketch is open so NO undo path (menu, History panel, Ctrl+Z, the
+    // plugin command) can roll the document back past sketch entry into the host
+    // body — undoing the body while the live sketch renders against it crashes
+    // (SIGABRT, heap corruption). canUndo() honours it, so the Undo buttons also
+    // grey out at the floor. -1 = no floor.
+    void setUndoFloor(int step) { m_undoFloor = step; }
+    void clearUndoFloor() { m_undoFloor = -1; }
+
     // History navigation
     int stepCount() const;
     int currentStep() const; // index of last executed step
@@ -92,6 +101,7 @@ private:
     std::vector<std::unique_ptr<Operation>> m_operations;
     int m_currentIndex = -1;
     int m_breakpoint = -1;
+    int m_undoFloor = -1;   // see setUndoFloor(): floor for in-sketch undo
     // Step that failed to recompute during the last editStep/redo replay;
     // cleared by manual undo, by a successful retry, or by clear().
     int m_failedReplayAt = -1;

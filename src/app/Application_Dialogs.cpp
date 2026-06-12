@@ -209,16 +209,19 @@ void Application::renderSettings() {
                         using IL = SketchTool::InferenceLevel;
                         int cur = m_sketchTool
                             ? static_cast<int>(m_sketchTool->getInferenceLevel()) : 0;
-                        const char* labels[] = { "Full", "Reduced", "Off" };
-                        if (ImGui::Combo("Inference level", &cur, labels, 3)) {
+                        const char* labels[] = { "Full", "Reduced", "Off", "Max (touch)" };
+                        if (ImGui::Combo("Inference level", &cur, labels, 4)) {
                             if (m_sketchTool) {
                                 IL next = (cur == 1) ? IL::Reduced
                                         : (cur == 2) ? IL::Off
+                                        : (cur == 3) ? IL::Max
                                                      : IL::Full;
                                 m_sketchTool->setInferenceLevel(next);
                             }
                             changed = true;
                         }
+                        ImGui::SetItemTooltip("Max widens snap/alignment catch ranges for fingertips — "
+                                              "stronger than Full. Full and below behave the same on every device.");
                     }
 
                     ImGui::Spacing();
@@ -405,6 +408,17 @@ void Application::renderSettings() {
                     }
                     ImGui::SetItemTooltip("Thickness of the highlight drawn over selected edges and bodies. "
                                           "Increase to make selected edges easier to see.");
+
+                    ImGui::SeparatorText("Sketch");
+                    // Sketch line width — how boldly sketch geometry reads over the grid.
+                    if (ImGui::SliderFloat("Sketch line width", &m_sketchLineWidth, 1.0f, 6.0f, "%.1f px")) {
+                        if (m_sketchLineWidth < 1.0f) m_sketchLineWidth = 1.0f;
+                        if (m_sketchLineWidth > 6.0f) m_sketchLineWidth = 6.0f;
+                        applyRenderingSettings();
+                        changed = true;
+                    }
+                    ImGui::SetItemTooltip("Thickness of sketch lines, circles and arcs (and the vertex dots). "
+                                          "Increase if sketch geometry is too thin or blends into the grid.");
                     ImGui::EndTabItem();
                 }
 

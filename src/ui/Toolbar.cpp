@@ -376,17 +376,20 @@ ToolAction Toolbar::renderSketchTools() {
         ImGui::Separator();
         const char* lbl = m_inferenceLevel == 0 ? "Inferences: Full"
                         : m_inferenceLevel == 1 ? "Inferences: Reduced"
-                                                : "Inferences: Off";
+                        : m_inferenceLevel == 2 ? "Inferences: Off"
+                                                : "Inferences: Max";
         ImVec4 col = m_inferenceLevel == 0 ? ImVec4(0.20f, 0.45f, 0.65f, 1.0f)
                    : m_inferenceLevel == 1 ? ImVec4(0.60f, 0.42f, 0.15f, 1.0f)
-                                           : ImVec4(0.34f, 0.34f, 0.34f, 1.0f);
+                   : m_inferenceLevel == 2 ? ImVec4(0.34f, 0.34f, 0.34f, 1.0f)
+                                           : ImVec4(0.16f, 0.52f, 0.48f, 1.0f); // Max = teal (strongest)
         ImGui::PushStyleColor(ImGuiCol_Button, col);
         if (ImGui::Button(lbl, ImVec2(-1, bh(26)))) action = ToolAction::SketchCycleInference;
         ImGui::PopStyleColor();
-        tip("How many drawing guides to show. Full = the classic guides PLUS "
-            "hover-to-charge references (dwell on a point to align from it). "
-            "Reduced = the classic guides only, no hover-charging. "
-            "Off = grid + endpoint only. Click to cycle.");
+        tip("How many drawing guides to show, and how eagerly they snap. "
+            "Max = Full plus wider catch ranges tuned for fingertips (touch). "
+            "Full = the classic guides PLUS hover-to-charge references (dwell on "
+            "a point to align from it). Reduced = the classic guides only, no "
+            "hover-charging. Off = grid + endpoint only. Click to cycle.");
     }
 
     ImGui::Separator();

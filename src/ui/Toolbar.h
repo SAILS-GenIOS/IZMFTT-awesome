@@ -92,7 +92,7 @@ public:
         m_selArcs    = arcs;
     }
     // Live inference level shown on the sketch toolbar toggle. Int mirrors
-    // SketchTool::InferenceLevel (0=Full, 1=Reduced, 2=Off) to keep Toolbar
+    // SketchTool::InferenceLevel (0=Full, 1=Reduced, 2=Off, 3=Max) to keep Toolbar
     // free of a SketchTool.h dependency.
     void setInferenceLevel(int lvl) { m_inferenceLevel = lvl; }
     // Side count chosen from the Polygon popout; read by the app when it

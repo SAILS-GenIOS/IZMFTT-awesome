@@ -63,7 +63,10 @@ void History::pushExecuted(std::unique_ptr<Operation> op) {
 }
 
 bool History::canUndo() const {
-    return m_currentIndex >= 0;
+    // m_undoFloor (default -1) keeps this identical to `m_currentIndex >= 0`
+    // outside a sketch; inside one it stops undo at the sketch-entry step so no
+    // path can roll the host body back under the live sketch. See setUndoFloor.
+    return m_currentIndex >= 0 && m_currentIndex > m_undoFloor;
 }
 
 bool History::canRedo() const {

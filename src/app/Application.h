@@ -194,6 +194,14 @@ private:
     // changed, push a SketchEditOp so the user can Ctrl+Z drawing actions.
     void recordSketchMutation(const std::function<void()>& mutator);
 
+    // Touch sketch context-bar actions for chain tools (line/spline):
+    //   Back   — drop the most recently placed segment / control point, keep
+    //            drawing the chain.
+    //   Cancel — discard the whole chain being drawn (every segment placed
+    //            since the chain started), then end placement.
+    void sketchChainBack();
+    void sketchChainCancel();
+
     // Flag a single body as needing a mesh refresh. Call sites that already
     // know which body changed should prefer this over `m_meshesDirty = true`
     // — the next rebuildMeshes pass updates just this body via setBodyMesh,
@@ -567,6 +575,7 @@ private:
     int   m_msaaSamples = 4;        // viewport anti-aliasing: 0=off, 2, 4, 8
     int   m_meshQuality = 1;        // tessellation density: 0=Low..3=Ultra
     float m_selectionLineWidth = 3.0f; // px width of highlighted edges/body outlines
+    float m_sketchLineWidth = 2.5f;    // px width of sketch geometry over the grid
     bool  m_showToolbarTooltips = true; // hover description on each toolbar button
     // Toggle for the sketch toolbar's live Full/Reduced/Off inference cycle
     // button. Off hides the button so users who set the level once in

@@ -1,6 +1,7 @@
 #include "SketchTool.h"
 #include "SketchConstraints.h"
 #include "TextSketchOp.h"
+#include "../touch_mode.h"
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -11,7 +12,12 @@
 
 namespace materializr {
 
-SketchTool::SketchTool() = default;
+SketchTool::SketchTool() {
+    // Fresh installs on a touch device default to the Max inference tier (wider
+    // catch ranges for fingertips); everywhere else starts at Full. A saved
+    // setting overrides this on load (applyAppSettings).
+    m_inferenceLevel = touchMode() ? InferenceLevel::Max : InferenceLevel::Full;
+}
 
 void SketchTool::setSketch(Sketch* sketch) {
     m_sketch = sketch;
@@ -293,6 +299,51 @@ void SketchTool::onCancel() {
     m_activeInferences.clear();
     m_rectDimStage = 0;
     m_rectDimH = 0.0f;
+    m_lineChain.clear();
+}
+
+bool SketchTool::dropLineChainTail() {
+    // Surgically remove the chain's LAST segment by the IDs we tracked in
+    // m_lineChain — not by undoing the top history step, which isn't reliably
+    // the last segment — then re-anchor the live chain on the new tail so the
+    // next press-drag continues from there. The front (start vertex) is the
+    // floor: with only the start left there is no segment to back out.
+    // (The caller wraps this in recordSketchMutation, so it's one undo step.)
+    if (m_mode != SketchToolMode::Line || m_lineChain.size() < 2 || !m_sketch)
+        return false;
+    int tail = m_lineChain.back();
+    int prev = m_lineChain[m_lineChain.size() - 2];
+
+    // Delete the segment line joining prev <-> tail.
+    for (const auto& l : m_sketch->getLines()) {
+        if ((l.startPointId == prev && l.endPointId == tail) ||
+            (l.startPointId == tail && l.endPointId == prev)) {
+            m_sketch->removeElement(l.id);
+            break;
+        }
+    }
+    // Delete the tail vertex too, but only if nothing else references it — it
+    // may have been snapped onto pre-existing geometry we mustn't disturb.
+    bool stillUsed = false;
+    for (const auto& l : m_sketch->getLines())
+        if (l.startPointId == tail || l.endPointId == tail) { stillUsed = true; break; }
+    if (!stillUsed) m_sketch->removeElement(tail);
+
+    m_lineChain.pop_back();
+    m_lastPointId = m_lineChain.back();
+    if (const SketchPoint* p = m_sketch->getPoint(m_lastPointId)) {
+        m_firstClick = p->pos;
+        // Collapse the live preview onto the new tail. On touch there's no hover
+        // to move the cursor, so m_currentPos is left at the old release point —
+        // the rubber-band would otherwise redraw a phantom segment from the new
+        // tail back toward the just-removed endpoint (looks like Back left the
+        // endpoint behind). Zero-length preview until the user draws again.
+        m_currentPos = p->pos;
+    }
+    if (m_clickCount > 1) m_clickCount--;
+    m_hasPrevLineDir = false;   // recompute the perpendicular/parallel guide on next move
+    m_activeInferences.clear();
+    return true;
 }
 
 bool SketchTool::applyDimension(float value) {
@@ -445,7 +496,7 @@ glm::vec2 SketchTool::rectifyNearAxis(glm::vec2 target) const {
     glm::vec2 d = target - m_firstClick;
     float len = glm::length(d);
     if (len < 1e-4f) return target;
-    const float axisTol = glm::radians(4.0f);
+    const float axisTol = glm::radians(4.0f) * angleScale();
     float ang = std::atan2(d.y, d.x);
     const float PI = static_cast<float>(M_PI);
     auto nearAng = [&](float ref) {
@@ -476,9 +527,10 @@ glm::vec2 SketchTool::rectifyNearAxis(glm::vec2 target) const {
 }
 
 void SketchTool::updateHoverCharge(double tNow, glm::vec2 cursor) {
-    // Only charge while actively placing a line at Full inference level.
+    // Only charge while actively placing a line at the Full or Max tier.
     if (!m_sketch || !m_isPlacing || m_mode != SketchToolMode::Line ||
-        m_inferenceLevel != InferenceLevel::Full) {
+        (m_inferenceLevel != InferenceLevel::Full &&
+         m_inferenceLevel != InferenceLevel::Max)) {
         m_hoverCandidate = {};
         m_charged = {};
         return;
@@ -584,14 +636,17 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
     //   allowCharge      — hover-to-charge references (Full only).
     const bool allowSnaps       = (m_inferenceLevel != InferenceLevel::Off);
     const bool allowDirectional = (m_inferenceLevel != InferenceLevel::Off);
-    const bool allowCharge      = (m_inferenceLevel == InferenceLevel::Full);
+    const bool allowCharge      = (m_inferenceLevel == InferenceLevel::Full ||
+                                   m_inferenceLevel == InferenceLevel::Max);
 
     // Point snap radius scales with grid step so it remains useful at 10 mm grids
     // and isn't overaggressive at 0.1 mm grids. (Steve: closing splines onto
     // existing line/polygon endpoints was awkward — the old 0.4× / 0.15 mm
     // floor was too tight to reliably grab the corner when you're drawing
     // freehand toward it. Bumped to 0.6× / 0.25 mm.)
-    float pointSnapThreshold = std::max(0.25f, m_gridStep * 0.6f);
+    // Master snap band — endpoints, midpoints, face centres, on-line and
+    // extension guides all derive from it, so the touch widening flows to all.
+    float pointSnapThreshold = std::max(0.25f, m_gridStep * 0.6f) * snapScale();
     float curveSnapThreshold = pointSnapThreshold; // same band for circle/arc perimeters
 
     // Without a sketch only grid snap can apply.
@@ -872,7 +927,7 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
             // Within ~5° (sin5° ≈ 0.087) of perp / parallel, OR within
             // axisThresh in absolute world units — whichever is more
             // generous at this segment length.
-            float tol = std::max(axisThresh, 0.087f * len);
+            float tol = std::max(axisThresh, 0.087f * len) * angleScale();
             bool perpClose = perpOffset < tol;
             bool parClose  = parOffset  < tol;
             if (perpClose && (!parClose || perpOffset <= parOffset)) {
@@ -893,7 +948,7 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
         float len = glm::length(v);
         if (len > 0.5f) {
             float cursorAngle = std::atan2(v.y, v.x);
-            const float angTol = 3.0f * static_cast<float>(M_PI) / 180.0f;
+            const float angTol = 3.0f * static_cast<float>(M_PI) / 180.0f * angleScale();
             auto angDiff = [](float a, float b) {
                 const float TWO_PI = 2.0f * static_cast<float>(M_PI);
                 float d = std::fmod(std::abs(a - b), TWO_PI);
@@ -1170,7 +1225,7 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
             const float TWO_PI = 2.0f * static_cast<float>(M_PI);
             if (angDelta > static_cast<float>(M_PI))
                 angDelta = TWO_PI - angDelta;
-            const float angTol = 3.0f * static_cast<float>(M_PI) / 180.0f;
+            const float angTol = 3.0f * static_cast<float>(M_PI) / 180.0f * angleScale();
             if (angDelta < angTol) {
                 glm::vec2 dir(std::cos(snappedA), std::sin(snappedA));
                 glm::vec2 snappedPos = m_firstClick + dir * len;
@@ -1227,7 +1282,7 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
 int SketchTool::findCoincidentPoint(glm::vec2 pos, int excludeId) const {
     if (!m_sketch) return -1;
 
-    const float threshold = 0.3f; // same as point snap threshold
+    const float threshold = 0.3f * snapScale(); // point snap (wider on touch)
     const auto& points = m_sketch->getPoints();
     for (const auto& pt : points) {
         if (pt.id == excludeId) continue;
@@ -1262,7 +1317,7 @@ void SketchTool::handleSelectTool(glm::vec2 pos) {
     int nearLine = -1;
     int nearCircle = -1;
     int nearArc = -1;
-    const float tol = std::max(m_gridStep * 0.5f, 0.5f); // sketch units
+    const float tol = std::max(m_gridStep * 0.5f, 0.5f) * snapScale(); // sketch units (wider on touch)
     if (nearPt < 0) {
         // Line segments.
         float bestD = 0.0f;
@@ -1382,6 +1437,8 @@ void SketchTool::handleLineTool(glm::vec2 pos) {
         // Remember where the chain started — closing back onto this point
         // auto-completes the loop and ends placement (see below).
         m_chainStartPointId = m_lastPointId;
+        m_lineChain.clear();
+        m_lineChain.push_back(m_lastPointId);
     } else {
         // Second click: create line and continue chain
         int endPointId = -1;
@@ -1430,6 +1487,7 @@ void SketchTool::handleLineTool(glm::vec2 pos) {
             m_chainStartPointId = -1;
             m_hasPrevLineDir = false;
             m_activeInferences.clear();
+            m_lineChain.clear();
             return;
         }
 
@@ -1437,6 +1495,7 @@ void SketchTool::handleLineTool(glm::vec2 pos) {
         m_lastPointId = endPointId;
         m_firstClick = pos;
         m_clickCount++;
+        m_lineChain.push_back(endPointId);
     }
 }
 

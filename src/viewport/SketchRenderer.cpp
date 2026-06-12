@@ -27,8 +27,10 @@ static const char* s_vertSource = R"(
 #version 330 core
 layout(location = 0) in vec3 a_position;
 uniform mat4 u_mvp;
+uniform float u_pointSize;
 void main() {
     gl_Position = u_mvp * vec4(a_position, 1.0);
+    gl_PointSize = u_pointSize;   // GL ES honours this; desktop uses glPointSize
 }
 )";
 
@@ -76,6 +78,7 @@ bool SketchRenderer::initialize() {
     m_locMVP = glGetUniformLocation(m_program, "u_mvp");
     m_locColor = glGetUniformLocation(m_program, "u_color");
     m_locAlpha = glGetUniformLocation(m_program, "u_alpha");
+    m_locPointSize = glGetUniformLocation(m_program, "u_pointSize");
 
     glGenVertexArrays(1, &m_vao);
     glGenBuffers(1, &m_vbo);
@@ -104,10 +107,12 @@ void SketchRenderer::uploadAndDraw(const std::vector<float>& verts, GLenum mode,
     glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
 
     glLineWidth(lineWidth);
+    // For GL_POINTS the same `lineWidth` arg doubles as the marker diameter.
+    // GL ES has no glPointSize, so the vertex shader sets gl_PointSize from this
+    // uniform; desktop honours glPointSize directly.
+    if (m_locPointSize >= 0) glUniform1f(m_locPointSize, mode == GL_POINTS ? lineWidth : 1.0f);
 #if !defined(__ANDROID__)
-    // GL ES has no glPointSize; point size must come from gl_PointSize in the
-    // vertex shader (TODO for the touch-UI pass). Points render at 1px for now.
-    if (mode == GL_POINTS) glPointSize(6.0f);
+    if (mode == GL_POINTS) glPointSize(lineWidth);
 #endif
 
     glDrawArrays(mode, 0, static_cast<int>(verts.size() / 3));
@@ -208,7 +213,7 @@ void SketchRenderer::drawLines(const Sketch* sketch, const glm::mat4& vp) {
     // Deep cobalt — saturated enough to pop against the light-blue sketch face
     // tint, while keeping the "blue = sketch" convention.
     glm::vec3 color = glm::vec3(0.10f, 0.35f, 0.95f);
-    uploadAndDraw(verts, GL_LINES, color, vp, 2.0f);
+    uploadAndDraw(verts, GL_LINES, color, vp, m_lineWidth);
 }
 
 void SketchRenderer::drawCircles(const Sketch* sketch, const glm::mat4& vp) {
@@ -234,7 +239,7 @@ void SketchRenderer::drawCircles(const Sketch* sketch, const glm::mat4& vp) {
     }
 
     glm::vec3 color = glm::vec3(0.10f, 0.35f, 0.95f); // deep cobalt
-    uploadAndDraw(verts, GL_LINES, color, vp, 2.0f);
+    uploadAndDraw(verts, GL_LINES, color, vp, m_lineWidth);
 }
 
 void SketchRenderer::drawArcs(const Sketch* sketch, const glm::mat4& vp) {
@@ -269,7 +274,7 @@ void SketchRenderer::drawArcs(const Sketch* sketch, const glm::mat4& vp) {
     }
 
     glm::vec3 color = glm::vec3(0.10f, 0.35f, 0.95f); // deep cobalt
-    uploadAndDraw(verts, GL_LINES, color, vp, 2.0f);
+    uploadAndDraw(verts, GL_LINES, color, vp, m_lineWidth);
 }
 
 void SketchRenderer::drawSplines(const Sketch* sketch, const glm::mat4& vp) {
@@ -289,7 +294,7 @@ void SketchRenderer::drawSplines(const Sketch* sketch, const glm::mat4& vp) {
     }
 
     glm::vec3 color = glm::vec3(0.2f, 0.85f, 0.3f); // green to distinguish from regular lines
-    uploadAndDraw(verts, GL_LINES, color, vp, 2.0f);
+    uploadAndDraw(verts, GL_LINES, color, vp, m_lineWidth);
 }
 
 void SketchRenderer::drawPolygons(const Sketch* sketch, const glm::mat4& vp) {
@@ -328,7 +333,9 @@ void SketchRenderer::drawPoints(const Sketch* sketch, const glm::mat4& vp) {
     }
 
     glm::vec3 color = glm::vec3(1.0f, 0.8f, 0.2f); // yellow dots for points
-    uploadAndDraw(verts, GL_POINTS, color, vp, 2.0f);
+    // Marker diameter scales with the sketch line width so vertices stay
+    // visible (and don't vanish on GL ES, where 1px points are invisible).
+    uploadAndDraw(verts, GL_POINTS, color, vp, m_lineWidth * 2.6f);
 }
 
 void SketchRenderer::drawTrimHover(const Sketch* sketch, const SketchTool* tool,

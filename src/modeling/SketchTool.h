@@ -3,6 +3,7 @@
 #include "SketchSolver.h"
 #include "SvgImport.h"
 #include <glm/glm.hpp>
+#include <algorithm>
 #include <functional>
 #include <set>
 #include <string>
@@ -151,7 +152,12 @@ public:
     // hover-charged references; Reduced = lock-onto-existing-geometry snaps only
     // (endpoint / midpoint / on-line / axis-from-point), no directional ray
     // guides or dwell-charging; Off = grid + endpoint only.
-    enum class InferenceLevel { Full, Reduced, Off };
+    // Max is the touch-oriented tier: everything Full does, but with widened
+    // snap / inference catch ranges (see snapScale/angleScale) so an imprecise
+    // fingertip still grabs the intended point / endpoint / alignment. Full and
+    // below behave identically on every device — desktop is never "over-snapped".
+    // Listed last so the persisted int values for Full/Reduced/Off stay 0/1/2.
+    enum class InferenceLevel { Full, Reduced, Off, Max };
     void setInferenceLevel(InferenceLevel lvl) { m_inferenceLevel = lvl; }
     InferenceLevel getInferenceLevel() const { return m_inferenceLevel; }
 
@@ -219,7 +225,26 @@ public:
     // Is the tool actively placing something?
     bool isActive() const;
 
+    // --- Line-chain step-back support (touch context bar: Back / Cancel) ---
+    // Number of committed segments in the line chain currently being placed
+    // (0 = only the start vertex is down, nothing to back out). Line only.
+    int lineSegmentCount() const {
+        return m_mode == SketchToolMode::Line
+                   ? std::max(0, static_cast<int>(m_lineChain.size()) - 1)
+                   : 0;
+    }
+    // Remove the chain's last segment (the line + its tail vertex, by the IDs
+    // tracked in m_lineChain) and re-anchor placement on the new tail so the
+    // chain keeps going from there. Returns false if there was no segment to
+    // back out. Wrap the call in recordSketchMutation for one undo step. Line only.
+    bool dropLineChainTail();
+
 private:
+    // Catch-range multipliers — >1 only at the Max inference tier, so Full and
+    // below snap exactly as before on every device. See enum InferenceLevel.
+    float snapScale()  const { return m_inferenceLevel == InferenceLevel::Max ? 1.8f : 1.0f; } // distances
+    float angleScale() const { return m_inferenceLevel == InferenceLevel::Max ? 1.5f : 1.0f; } // angles
+
     SketchToolMode m_mode = SketchToolMode::None;
     Sketch* m_sketch = nullptr;
     SketchSolver* m_solver = nullptr;
@@ -253,6 +278,10 @@ private:
     // any segment is committed, we delete the orphan to avoid leaving a
     // stray vertex with no lines attached.
     bool m_chainStartPointCreated = false;
+    // Ordered point IDs of the line chain in progress (front = start vertex,
+    // back = current tail). Mirrors the committed segments so the touch "Back"
+    // button can drop the tail and re-anchor after the host undoes a segment.
+    std::vector<int> m_lineChain;
 
     // Snap to grid/points
     glm::vec2 snap(glm::vec2 pos) const;
