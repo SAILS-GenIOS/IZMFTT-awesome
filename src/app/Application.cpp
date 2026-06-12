@@ -1618,6 +1618,11 @@ void Application::handleToolAction(int action) {
                         : cur == IL::Reduced ? IL::Off
                                              : IL::Max;
                 m_sketchTool->setInferenceLevel(next);
+                // Persist immediately. The settings combo saves on change, but
+                // this toolbar button didn't — so a level picked here was lost on
+                // restart (Android kills the process on swipe-away, so there's no
+                // exit-save to fall back on). inferenceLevel is a saved setting.
+                saveAppSettings();
             }
             break;
         case ToolAction::SketchToggleDrawOrigin:
