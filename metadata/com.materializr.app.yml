@@ -55,10 +55,13 @@ Builds:
     # Cross-compile FreeType + OpenCASCADE 7.8.1 (arm64) from verified source and
     # stage the .so set + OCCT resource files. ~19 min; see the de-risk note below
     # for wall-clock and peak RAM. $$NDK$$ is the path F-Droid installs r26d to.
-    prebuild:
-      - JOBS=4 ANDROID_NDK="$$NDK$$" MATERIALIZR_WORK="$$BUILD$$/.materializr-deps" ../scripts/setup-deps.sh
+    # MATERIALIZR_WORK is left at its default ($HOME/Android) so the download +
+    # build trees live OUTSIDE the cloned source — keeps them clear of the source
+    # scanner; only the cross-compiled .so set is staged into app/src/main/jniLibs.
     # build.gradle leaves the release unsigned when no keystore.properties exists
     # (the F-Droid case), so F-Droid signs it with its own key — nothing to do here.
+    prebuild:
+      - JOBS=4 ANDROID_NDK="$$NDK$$" ../scripts/setup-deps.sh
 
 AutoUpdateMode: Version v%v
 UpdateCheckMode: Tags
