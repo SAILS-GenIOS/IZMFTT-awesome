@@ -22,6 +22,8 @@ Builds:
     gradle:
       - yes
     prebuild: JOBS=4 ANDROID_NDK="$$NDK$$" ../scripts/setup-deps.sh
+    scanignore:
+      - android/app/src/main/jniLibs
     ndk: r26d
 
 AutoUpdateMode: Version
