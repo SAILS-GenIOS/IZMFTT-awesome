@@ -18,7 +18,7 @@ Builds:
     subdir: android/app
     sudo:
       - apt-get update
-      - apt-get install -y build-essential cmake curl
+      - apt-get install -y make gcc libc-dev cmake
     gradle:
       - yes
     build: JOBS=4 ANDROID_NDK="$$NDK$$" ../scripts/setup-deps.sh
