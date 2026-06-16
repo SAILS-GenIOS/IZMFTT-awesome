@@ -585,6 +585,17 @@ inline void internal::executor::start_process(std::vector<std::string> const &co
         dup2(fd, STDERR_FILENO);
         close(fd);
 
+        // Materializr: when launched as an AppImage, the AppRun prepends our
+        // bundled libs to LD_LIBRARY_PATH. The spawned helper (zenity/kdialog)
+        // inherits it and tries to load OUR (older) libraries, which silently
+        // fails to start on a newer host (no window, no error). Restore the
+        // host's original LD_LIBRARY_PATH (stashed by AppRun) or clear it, so
+        // the helper loads system libraries.
+        if (const char *orig = getenv("APPIMAGE_ORIG_LD_LIBRARY_PATH"))
+            setenv("LD_LIBRARY_PATH", orig, 1);
+        else
+            unsetenv("LD_LIBRARY_PATH");
+
         std::vector<char *> args;
         std::transform(command.cbegin(), command.cend(), std::back_inserter(args),
                        [](std::string const &s) { return const_cast<char *>(s.c_str()); });

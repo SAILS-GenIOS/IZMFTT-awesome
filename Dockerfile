@@ -92,7 +92,7 @@ RUN if [ -f /src/icon.png ]; then \
     fi
 
 # Create AppRun script
-RUN printf '#!/bin/bash\nHERE="$(dirname "$(readlink -f "$0")")"\nexport LD_LIBRARY_PATH="$HERE/usr/lib:$LD_LIBRARY_PATH"\nexec "$HERE/usr/bin/materializr" "$@"\n' \
+RUN printf '#!/bin/bash\nHERE="$(dirname "$(readlink -f "$0")")"\nexport APPIMAGE_ORIG_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"\nexport LD_LIBRARY_PATH="$HERE/usr/lib:$LD_LIBRARY_PATH"\nexec "$HERE/usr/bin/materializr" "$@"\n' \
     > /AppDir/AppRun \
     && chmod +x /AppDir/AppRun
 
