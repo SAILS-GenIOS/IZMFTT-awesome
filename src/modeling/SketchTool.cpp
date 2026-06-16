@@ -145,56 +145,10 @@ void SketchTool::onMouseMove(glm::vec2 pos) {
     // The cursor jumps to that apex when the natural sweep is within ±5° of
     // a 15° multiple, giving a sticky "click into a quarter / third / etc."
     // feel without locking out finer adjustments.
-    if (m_mode == SketchToolMode::Arc && m_clickCount == 2 &&
-        m_snapToGridEnabled) {
-        glm::vec2 A = m_firstClick;
-        glm::vec2 B = m_secondClick;
-        glm::vec2 C = m_currentPos;
-        const float ax = A.x, ay = A.y;
-        const float bx = C.x, by = C.y;       // 'b' = third point in circumcircle
-        const float cx = B.x, cy = B.y;       // 'c' = arc end
-        const float D = 2.0f * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
-        if (std::abs(D) > 1e-10f) {
-            const float ux = ((ax*ax+ay*ay)*(by-cy) +
-                              (bx*bx+by*by)*(cy-ay) +
-                              (cx*cx+cy*cy)*(ay-by)) / D;
-            const float uy = ((ax*ax+ay*ay)*(cx-bx) +
-                              (bx*bx+by*by)*(ax-cx) +
-                              (cx*cx+cy*cy)*(bx-ax)) / D;
-            glm::vec2 ctr(ux, uy);
-            const float sA = std::atan2(A.y - ctr.y, A.x - ctr.x);
-            const float eA = std::atan2(B.y - ctr.y, B.x - ctr.x);
-            const float mA = std::atan2(C.y - ctr.y, C.x - ctr.x);
-            const float TWO_PI = 2.0f * static_cast<float>(M_PI);
-            auto norm = [TWO_PI](float a){ while (a < 0) a += TWO_PI;
-                                            while (a >= TWO_PI) a -= TWO_PI;
-                                            return a; };
-            const float ds = norm(eA - sA);
-            const float dm = norm(mA - sA);
-            const float sweep = (dm < ds) ? ds : (ds - TWO_PI);
-            const float deg = sweep * 180.0f / static_cast<float>(M_PI); // signed
-            const float step = 15.0f;
-            const float target = std::round(deg / step) * step;
-            if (std::abs(target) >= 0.5f && std::abs(deg - target) <= 5.0f) {
-                glm::vec2 chord = B - A;
-                float L = glm::length(chord);
-                if (L > 1e-4f) {
-                    glm::vec2 chordDir = chord / L;
-                    glm::vec2 perp(-chordDir.y, chordDir.x);
-                    glm::vec2 M = 0.5f * (A + B);
-                    // Side the cursor is on now — preserve it so the snap
-                    // doesn't flip the arc across the chord.
-                    if (glm::dot(C - M, perp) < 0.0f) perp = -perp;
-                    const float thetaAbs =
-                        std::abs(target) * static_cast<float>(M_PI) / 180.0f;
-                    // tan(θ/4) handles 0 < θ < 360 cleanly: 90° → tan(22.5°)
-                    // ≈ 0.414·(L/2); 180° → tan(45°) = L/2; 270° → tan(67.5°)
-                    // ≈ 2.414·(L/2), apex jumps far past the centre.
-                    const float d = (L * 0.5f) * std::tan(thetaAbs * 0.25f);
-                    m_currentPos = M + perp * d;
-                }
-            }
-        }
+    // Live preview: snap the swept apex to a 15°-multiple sweep (esp. 180°).
+    // Same helper the commit uses (handleArcTool), so preview == result.
+    if (m_mode == SketchToolMode::Arc && m_clickCount == 2 && m_snapToGridEnabled) {
+        m_currentPos = snapArcApex(m_firstClick, m_secondClick, m_currentPos);
     }
 
     if (m_mode == SketchToolMode::Trim) {
@@ -1561,6 +1515,53 @@ void SketchTool::handleRectangleTool(glm::vec2 pos) {
     }
 }
 
+glm::vec2 SketchTool::snapArcApex(glm::vec2 A, glm::vec2 B, glm::vec2 apex) const {
+    // Snap the swept apex so the sweep lands on the nearest 15° multiple when
+    // within ±5° of one (e.g. a clean 180° semicircle). The apex sits on AB's
+    // perpendicular bisector at signed distance d = (L/2)·tan(θ/4) from the
+    // chord midpoint. Returns the apex unchanged when not near a snap target.
+    glm::vec2 C = apex;
+    const float ax = A.x, ay = A.y;
+    const float bx = C.x, by = C.y;       // 'b' = the apex (3rd circumcircle pt)
+    const float cx = B.x, cy = B.y;       // 'c' = arc end
+    const float D = 2.0f * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if (std::abs(D) <= 1e-10f) return apex;
+    const float ux = ((ax*ax+ay*ay)*(by-cy) +
+                      (bx*bx+by*by)*(cy-ay) +
+                      (cx*cx+cy*cy)*(ay-by)) / D;
+    const float uy = ((ax*ax+ay*ay)*(cx-bx) +
+                      (bx*bx+by*by)*(ax-cx) +
+                      (cx*cx+cy*cy)*(bx-ax)) / D;
+    glm::vec2 ctr(ux, uy);
+    const float sA = std::atan2(A.y - ctr.y, A.x - ctr.x);
+    const float eA = std::atan2(B.y - ctr.y, B.x - ctr.x);
+    const float mA = std::atan2(C.y - ctr.y, C.x - ctr.x);
+    const float TWO_PI = 2.0f * static_cast<float>(M_PI);
+    auto norm = [TWO_PI](float a){ while (a < 0) a += TWO_PI;
+                                    while (a >= TWO_PI) a -= TWO_PI;
+                                    return a; };
+    const float ds = norm(eA - sA);
+    const float dm = norm(mA - sA);
+    const float sweep = (dm < ds) ? ds : (ds - TWO_PI);
+    const float deg = sweep * 180.0f / static_cast<float>(M_PI);
+    const float step = 15.0f;
+    const float target = std::round(deg / step) * step;
+    if (std::abs(target) >= 0.5f && std::abs(deg - target) <= 5.0f) {
+        glm::vec2 chord = B - A;
+        float L = glm::length(chord);
+        if (L > 1e-4f) {
+            glm::vec2 chordDir = chord / L;
+            glm::vec2 perp(-chordDir.y, chordDir.x);
+            glm::vec2 M = 0.5f * (A + B);
+            if (glm::dot(C - M, perp) < 0.0f) perp = -perp;  // keep cursor's side
+            const float thetaAbs = std::abs(target) * static_cast<float>(M_PI) / 180.0f;
+            const float d = (L * 0.5f) * std::tan(thetaAbs * 0.25f);
+            return M + perp * d;
+        }
+    }
+    return apex;
+}
+
 void SketchTool::handleArcTool(glm::vec2 pos) {
     if (!m_isPlacing) {
         // First click: set start point
@@ -1575,7 +1576,10 @@ void SketchTool::handleArcTool(glm::vec2 pos) {
         // Third click: set midpoint on arc, compute center and radius
         glm::vec2 start = m_firstClick;
         glm::vec2 end = m_secondClick;
-        glm::vec2 mid = pos;
+        // Commit the SAME snapped apex the preview showed (snap toggle on),
+        // so the placed arc's centre matches the previewed semicircle instead
+        // of drifting to the raw click position.
+        glm::vec2 mid = m_snapToGridEnabled ? snapArcApex(start, end, pos) : pos;
 
         // Compute the circumcenter of the three points (start, mid, end)
         // This gives us the arc center

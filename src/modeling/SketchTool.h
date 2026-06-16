@@ -303,6 +303,12 @@ private:
     void handleCircleTool(glm::vec2 pos);
     void handleRectangleTool(glm::vec2 pos);
     void handleArcTool(glm::vec2 pos);
+    // Snap the arc's swept apex to a 15°-multiple sweep when within ±5° of one
+    // (the 180° semicircle case especially). Used by BOTH the live preview
+    // (onMouseMove) and the commit (handleArcTool) so they can't diverge —
+    // previously only the preview snapped, so the committed arc landed at the
+    // raw cursor and its centre drifted off the intended (e.g. semicircle) one.
+    glm::vec2 snapArcApex(glm::vec2 start, glm::vec2 end, glm::vec2 apex) const;
     void handleSelectTool(glm::vec2 pos);
     void handleSplineTool(glm::vec2 pos);
     void handlePolygonTool(glm::vec2 pos);
