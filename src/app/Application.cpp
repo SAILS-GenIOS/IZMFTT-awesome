@@ -252,6 +252,12 @@ Application::Application(bool safeMode) : m_safeMode(safeMode) {
     m_propertiesPanel->setEventBus(m_eventBus.get());
     m_propertiesPanel->setRotatePlaneCallback([this](int planeId) { beginRotatePlaneAboutAxis(planeId); });
     m_propertiesPanel->setDirtyCallback([this]() { markDirty(); });
+    // If no system file-dialog helper exists, Open/Save/Export would otherwise
+    // do nothing at all — surface that instead of failing silently.
+    FileDialogs::setUnavailableNotifier([this]() {
+        showToast("No file-dialog program found \xE2\x80\x94 install 'zenity' "
+                  "(GNOME) or 'kdialog' (KDE) to Open / Save / Export.", 8.0);
+    });
 
     initImGui();
     renderSplashFrame("Loading settings & last project");

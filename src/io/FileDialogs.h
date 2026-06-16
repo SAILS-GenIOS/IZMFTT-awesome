@@ -51,6 +51,15 @@ public:
     // Is a dialog currently open?
     static bool isOpen();
 
+    // Desktop file dialogs shell out to zenity / kdialog / qarma / matedialog;
+    // if NONE is installed they silently do nothing (a fresh/minimal Linux box
+    // often lacks them). Returns whether a backend exists — always true on
+    // Android (SAF). Lets the app warn instead of failing mute.
+    static bool dialogsAvailable();
+    // Invoked in place of showing a dialog when openFile/saveFile is requested
+    // with no backend, so the app can surface guidance (e.g. a toast).
+    static void setUnavailableNotifier(std::function<void()> cb);
+
     // Last directory the picker landed in. Application syncs this with
     // AppSettings::lastFileDir at load / save time so the value survives
     // a relaunch. Updated automatically when a non-empty path comes back

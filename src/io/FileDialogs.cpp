@@ -17,6 +17,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <algorithm>
 
 #ifdef _WIN32
@@ -265,6 +266,41 @@ static std::string s_lastDir;
 
 } // namespace
 
+static std::function<void()> s_unavailableNotifier;
+void FileDialogs::setUnavailableNotifier(std::function<void()> cb) {
+    s_unavailableNotifier = std::move(cb);
+}
+
+bool FileDialogs::dialogsAvailable() {
+#if defined(__ANDROID__)
+    return true;           // SAF picker is always present
+#elif defined(_WIN32)
+    return true;           // native comdlg
+#else
+    // pfd shells out to one of these; scan PATH once for any of them.
+    static int cached = -1;
+    if (cached < 0) {
+        cached = 0;
+        const char* path = std::getenv("PATH");
+        const char* progs[] = {"zenity", "kdialog", "qarma", "matedialog"};
+        if (path) {
+            std::string p(path);
+            for (size_t start = 0; start <= p.size() && !cached; ) {
+                size_t colon = p.find(':', start);
+                std::string dir = p.substr(start,
+                    colon == std::string::npos ? std::string::npos : colon - start);
+                if (!dir.empty())
+                    for (const char* prog : progs)
+                        if (access((dir + "/" + prog).c_str(), X_OK) == 0) { cached = 1; break; }
+                if (colon == std::string::npos) break;
+                start = colon + 1;
+            }
+        }
+    }
+    return cached == 1;
+#endif
+}
+
 void FileDialogs::setLastDir(const std::string& dir) { s_lastDir = dir; }
 const std::string& FileDialogs::getLastDir() { return s_lastDir; }
 
@@ -316,6 +352,7 @@ void FileDialogs::openFile(const std::string& title,
     materializr::androidStartOpenDocument("*/*");
 #else
     if (s_async.active()) return; // one picker at a time
+    if (!dialogsAvailable()) { if (s_unavailableNotifier) s_unavailableNotifier(); return; }
     // Seed pfd with the directory the user last picked in so they don't
     // have to re-navigate from ~ every time. zenity / kdialog interpret
     // their --filename arg as a FILE path; without a trailing slash,
@@ -348,6 +385,7 @@ void FileDialogs::saveFile(const std::string& title,
         defaultName.empty() ? "untitled" : defaultName, "application/octet-stream");
 #else
     if (s_async.active()) return;
+    if (!dialogsAvailable()) { if (s_unavailableNotifier) s_unavailableNotifier(); return; }
     // pfd's save_file wants a path-ish default — concat the last-used dir
     // with the supplied filename so the picker opens IN that folder with
     // the suggested filename already in the field.
