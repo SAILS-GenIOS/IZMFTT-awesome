@@ -155,15 +155,13 @@ void Application::renderSettings() {
                     if (ImGui::Checkbox("Items",        &m_showItems))        changed = true;
                     if (ImGui::Checkbox("Properties",   &m_showProperties))   changed = true;
 
-                    if (materializr::touchMode()) {
-                        ImGui::Spacing();
-                        ImGui::SeparatorText("Touch sensitivity");
-                        ImGui::TextWrapped("Scale how far the camera moves per gesture "
-                                           "(1.00x = default).");
-                        if (ImGui::SliderFloat("Orbit", &m_touchOrbitSens, 0.25f, 3.0f, "%.2fx")) changed = true;
-                        if (ImGui::SliderFloat("Pan",   &m_touchPanSens,   0.25f, 3.0f, "%.2fx")) changed = true;
-                        if (ImGui::SliderFloat("Zoom",  &m_touchZoomSens,  0.25f, 3.0f, "%.2fx")) changed = true;
+                    ImGui::Spacing();
+                    ImGui::SeparatorText("Toolbar tooltips");
+                    if (ImGui::Checkbox("Show toolbar tooltips", &m_showToolbarTooltips)) {
+                        changed = true;
                     }
+                    ImGui::TextWrapped("Hover any toolbar button for a short description of what it does. "
+                                       "Turn off if you already know the tools and find the pop-ups distracting.");
 
                     ImGui::Spacing();
                     ImGui::SeparatorText("Autosave");
@@ -275,19 +273,11 @@ void Application::renderSettings() {
                                        "use this combo instead. On (default) "
                                        "keeps the per-session button visible.");
 
-                    ImGui::Spacing();
-                    ImGui::SeparatorText("Toolbar tooltips");
-                    if (ImGui::Checkbox("Show toolbar tooltips", &m_showToolbarTooltips)) {
-                        changed = true;
-                    }
-                    ImGui::TextWrapped("Hover any toolbar button for a short description of what it does. "
-                                       "Turn off if you already know the tools and find the pop-ups distracting.");
-
                     ImGui::EndTabItem();
                 }
 
-                // ── Camera ────────────────────────────────────────────────
-                if (ImGui::BeginTabItem("Camera")) {
+                // ── Navigation (camera + touch) ───────────────────────────
+                if (ImGui::BeginTabItem("Navigation")) {
                     ImGui::SeparatorText("Mouse");
                     ImGui::TextWrapped("Choose which mouse button orbits and which pans. "
                                        "Zoom is always the scroll wheel.");
@@ -369,6 +359,16 @@ void Application::renderSettings() {
                     // Invert the cube-drag → orbit direction.
                     if (ImGui::Checkbox("Invert ViewCube drag direction", &m_invertCubeDrag)) {
                         changed = true;
+                    }
+
+                    if (materializr::touchMode()) {
+                        ImGui::Spacing();
+                        ImGui::SeparatorText("Touch sensitivity");
+                        ImGui::TextWrapped("Scale how far the camera moves per gesture "
+                                           "(1.00x = default).");
+                        if (ImGui::SliderFloat("Orbit", &m_touchOrbitSens, 0.25f, 3.0f, "%.2fx")) changed = true;
+                        if (ImGui::SliderFloat("Pan",   &m_touchPanSens,   0.25f, 3.0f, "%.2fx")) changed = true;
+                        if (ImGui::SliderFloat("Zoom",  &m_touchZoomSens,  0.25f, 3.0f, "%.2fx")) changed = true;
                     }
                     ImGui::EndTabItem();
                 }
