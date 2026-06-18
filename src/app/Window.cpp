@@ -5,6 +5,7 @@
 #include "android_files.h" // androidShow/HideTextInput (no-ops on desktop)
 #include <SDL.h>
 #include <imgui_impl_sdl2.h>
+#include <imgui_internal.h> // g.MovingWindow — let tab-drag (re-dock) beat drag-to-scroll
 #include <stdexcept>
 #include <iostream>
 #include <string>
@@ -218,8 +219,13 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
                 curCursor == ImGuiMouseCursor_ResizeEW ||
                 curCursor == ImGuiMouseCursor_ResizeNESW ||
                 curCursor == ImGuiMouseCursor_ResizeNWSE;
+            // A tab/title drag to re-dock a panel sets g.MovingWindow (no resize
+            // cursor, so onSplitter misses it) — also a real drag, not a scroll.
+            ImGuiContext* g = ImGui::GetCurrentContext();
+            const bool movingWindow = g && g->MovingWindow != nullptr;
             bool justLatched = false;
-            if (materializr::touchMode() && !m_touchOnCanvas && !m_panelScroll && !onSplitter &&
+            if (materializr::touchMode() && !m_touchOnCanvas && !m_panelScroll &&
+                !onSplitter && !movingWindow &&
                 (dx * dx + dy * dy) > 25.0f * 25.0f && std::fabs(dy) > std::fabs(dx)) {
                 // Switch press -> scroll: release the left button so the row the
                 // finger started on isn't selected/activated by the flick.
