@@ -1951,6 +1951,22 @@ void Application::renderViewport() {
             // drag-to-scroll: a vertical drag over any panel scrolls it, but
             // over the 3D canvas the one-finger drag stays an orbit.
             if (m_window) m_window->setTouchOnCanvas(viewportHovered);
+            // Touch double-tap = desktop double-click: escalate the tapped face to
+            // its whole body. Fires on the second quick tap's RELEASE (a tap-then-
+            // long-press can't trigger it), and reuses the face the taps already
+            // selected — no re-pick. Honors the double-click-time setting.
+            if (m_window && m_window->consumeDoubleTap() && m_selection && !m_inSketchMode) {
+                int bid = -1;
+                for (const auto& e : m_selection->getSelection())
+                    if (e.type == SelectionType::Face && e.bodyId >= 0) { bid = e.bodyId; break; }
+                if (bid >= 0) {
+                    SelectionEntry b;
+                    b.type = SelectionType::Body;
+                    b.bodyId = bid;
+                    try { b.shape = m_document->getBody(bid); } catch (...) {}
+                    m_selection->select(b);
+                }
+            }
         }
         if (viewportHovered) {
             ImGuiIO& io = ImGui::GetIO();

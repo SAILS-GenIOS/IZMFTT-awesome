@@ -310,6 +310,27 @@ void Window::handleFingerEvent(unsigned type, std::int64_t id, float nx, float n
 
     // count == 0: everything lifted — release and reset.
     if (m_leftDown) { io.AddMouseButtonEvent(0, false); m_leftDown = false; }
+    // Genuine double-tap detection: this lift completes a quick tap (not a hold,
+    // not a drag, not a 2-finger leftover). Two such taps at the same spot within
+    // the double-click time → a touch "double-click" (escalates a face pick to its
+    // body, viewport-side). Honors the user's double-click-time setting.
+    {
+        const std::uint32_t nowT = SDL_GetTicks();
+        const bool quickTap = !m_holdSelect && !m_movedBeyondHold && !m_suppressLeft &&
+                              (nowT - m_downTicks) < 300u;
+        if (quickTap) {
+            const std::uint32_t dblMs =
+                static_cast<std::uint32_t>(io.MouseDoubleClickTime * 1000.0f);
+            const float ddx = m_downX - m_lastTapX, ddy = m_downY - m_lastTapY;
+            if (m_lastTapTick != 0 && (nowT - m_lastTapTick) <= dblMs &&
+                (ddx * ddx + ddy * ddy) < 40.0f * 40.0f) {
+                m_doubleTapPending = true;
+                m_lastTapTick = 0; // consumed; a 3rd tap starts a fresh pair
+            } else {
+                m_lastTapTick = nowT; m_lastTapX = m_downX; m_lastTapY = m_downY;
+            }
+        }
+    }
     // A one-finger press that armed the hold but never dragged is a long-press:
     // queue a synthetic right-click at the held point so the context menu opens,
     // and mark the left-up as a gesture so it doesn't also place a sketch point.
@@ -381,6 +402,12 @@ bool Window::consumeTouchZoom(float& dz) {
     if (m_zoomAcc == 0.0f) return false;
     dz = m_zoomAcc;
     m_zoomAcc = 0.0f;
+    return true;
+}
+
+bool Window::consumeDoubleTap() {
+    if (!m_doubleTapPending) return false;
+    m_doubleTapPending = false;
     return true;
 }
 

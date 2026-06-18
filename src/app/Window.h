@@ -52,6 +52,7 @@ public:
     // Returns true and writes the pending delta (then clears it) if any.
     bool consumeTouchPan(float& dx, float& dy);   // centroid movement, pixels
     bool consumeTouchZoom(float& dz);             // pinch delta, wheel-equivalent
+    bool consumeDoubleTap();                      // true once after two quick taps (touch "double-click")
 
     // True if the most recent left-button release was NOT a genuine single-finger
     // lift but a two-finger gesture taking over (the second finger landing forces
@@ -105,6 +106,12 @@ private:
     // One-finger press-and-hold tracking (-> box/drag-select).
     std::uint32_t m_downTicks = 0;        // SDL_GetTicks at single-finger down
     float m_downX = 0.0f, m_downY = 0.0f; // where it went down
+    // Genuine double-tap: two quick taps (each a fast down-UP, not a hold) at the
+    // same spot within the double-click time. Fires on the SECOND release, so a
+    // tap-then-long-press can't trigger it (unlike ImGui's down-based double-click).
+    std::uint32_t m_lastTapTick = 0;
+    float m_lastTapX = 0.0f, m_lastTapY = 0.0f;
+    bool  m_doubleTapPending = false;
     bool  m_movedBeyondHold = false;      // moved too far -> it's a drag, not a hold
     bool  m_holdSelect = false;           // hold threshold passed; select-drag mode
     bool  m_textInputActive = false;      // soft keyboard currently raised
