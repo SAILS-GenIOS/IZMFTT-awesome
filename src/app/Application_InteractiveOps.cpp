@@ -2321,6 +2321,18 @@ void Application::cascadeFromSketchEdit(int sketchId) {
     if (earliest < 0) {
         std::fprintf(stderr, "[Cascade] sketchId=%d: %d matched, none re-derivable\n",
                      sketchId, matched);
+        if (matched > 0) {
+            // A body IS driven by this sketch, but its profile couldn't be
+            // re-derived from the new geometry — tell the user instead of
+            // silently leaving the sketch changed and the body stale.
+            showToast("Updated the sketch, but the body built from it couldn't "
+                      "rebuild from the new shape \xE2\x80\x94 the model is unchanged.");
+        } else {
+            // The sketch changed but nothing in the model is built from it.
+            showToast("Updated the sketch. No body is built from it, so the "
+                      "model is unchanged.");
+        }
+        m_meshesDirty = true;
         return;
     }
 

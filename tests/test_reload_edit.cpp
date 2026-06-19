@@ -395,6 +395,59 @@ TEST(SketchHistory, CircleDiameterEditableFromHistory) {
     EXPECT_NEAR(c.x, 3.0, 1e-9); EXPECT_NEAR(c.y, 4.0, 1e-9) << "centre unchanged";
 }
 
+// A sketch is stored as a chain of FULL snapshots (one per sketchedit step).
+// Editing a circle's diameter at the step that introduced it must carry forward
+// into every later snapshot of the same sketch — otherwise the next step's
+// snapshot overwrites the change on replay before any extrude/pushpull reads it,
+// and the edit silently "applies" with no visible effect. (The fix for
+// "circle edit applied but the hole didn't change size".)
+TEST(SketchHistory, CircleDiameterEditPropagatesThroughLaterSnapshots) {
+    using materializr::Sketch;
+    using materializr::SketchEditOp;
+    Document doc;
+
+    auto live = std::make_shared<Sketch>();
+    doc.addSketch(live, "Sketch 1");
+
+    // step 0: add the circle (Ø20). step 1: add a line — its full snapshot
+    // still carries the circle, at the ORIGINAL radius.
+    auto before0 = std::make_shared<Sketch>();             // empty
+    auto after0  = std::make_shared<Sketch>();
+    int ctr = after0->addPoint({0, 0});
+    int cid = after0->addCircle(ctr, 10.0);                // Ø20
+
+    auto before1 = std::make_shared<Sketch>(*after0);      // carries the circle
+    auto after1  = std::make_shared<Sketch>(*after0);
+    int a = after1->addPoint({0, 0}), b = after1->addPoint({50, 0});
+    after1->addLine(a, b);
+
+    History H;
+    *live = *after0;
+    H.pushExecuted(std::make_unique<SketchEditOp>(live, before0, after0));
+    *live = *after1;
+    H.pushExecuted(std::make_unique<SketchEditOp>(live, before1, after1));
+
+    // Edit the diameter at the introducing step (Ø20 -> Ø15).
+    auto* op0 = const_cast<SketchEditOp*>(
+        dynamic_cast<const SketchEditOp*>(H.getStep(0)));
+    ASSERT_NE(op0, nullptr);
+    op0->editCircleRadius(cid, 7.5);                       // Ø15
+
+    H.propagateSketchValueEdits(0, doc);
+    ASSERT_TRUE(H.editStep(0, doc, /*transactional=*/true));
+
+    // After replaying BOTH snapshots, the live sketch must carry the new radius.
+    double r = -1;
+    for (const auto& c : live->getCircles()) if (c.id == cid) r = c.radius;
+    EXPECT_NEAR(r, 7.5, 1e-9)
+        << "later full-snapshot step clobbered the diameter edit";
+
+    // And the later snapshot itself was rewritten, so save/reload + undo keep it.
+    double rSnap = -1;
+    for (const auto& c : after1->getCircles()) if (c.id == cid) rSnap = c.radius;
+    EXPECT_NEAR(rSnap, 7.5, 1e-9) << "downstream snapshot not updated in place";
+}
+
 // DeleteOp reloads as a real op: params round-trip and rehydrate recovers the
 // deleted shape so an editStep replay can roll it back.
 TEST(ReloadEdit, DeleteRehydrates) {

@@ -301,6 +301,16 @@ std::string SketchEditOp::serializeWithDocument(const Document& doc) const {
     return os.str();
 }
 
+void SketchEditOp::applyCircleRadiusToSnapshots(int circleId, double radius) {
+    auto setIn = [&](const std::shared_ptr<Sketch>& s) {
+        if (!s) return;
+        for (const auto& c : s->getCircles())
+            if (c.id == circleId) { s->setCircleRadius(circleId, radius); return; }
+    };
+    setIn(m_before);
+    setIn(m_after);
+}
+
 void SketchEditOp::renderProperties() {
     if (!m_after) {
         ImGui::TextDisabled("No snapshot");
@@ -391,7 +401,10 @@ void SketchEditOp::renderProperties() {
             ImGui::PushID(cid + 1000000);   // keep clear of the constraint-row ids
             if (ImGui::InputDouble("Diameter (mm)", &dia, 0.0, 0.0, "%.3f",
                                    ImGuiInputTextFlags_EnterReturnsTrue)) {
-                m_after->setCircleRadius(cid, std::max(dia, 1e-6) * 0.5);
+                // Writes the after-snapshot AND records the edit so Apply can
+                // carry the new radius into later snapshots — otherwise the next
+                // step's full snapshot overwrites it before any extrude reads it.
+                editCircleRadius(cid, std::max(dia, 1e-6) * 0.5);
             }
             ImGui::PopID();
             anyDim = true;

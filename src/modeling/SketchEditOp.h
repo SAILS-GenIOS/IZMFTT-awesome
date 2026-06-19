@@ -3,6 +3,7 @@
 #include "../core/Document.h"
 #include "Sketch.h"
 #include <memory>
+#include <map>
 
 namespace materializr {
 
@@ -49,10 +50,28 @@ public:
         m_before = std::move(before); m_after = std::move(after);
     }
 
+    // Inline diameter edits made in renderProperties (circleId -> new radius).
+    // Each sketchedit step holds a FULL snapshot of the sketch, so a radius
+    // edited here is silently overwritten by the next step's snapshot on replay
+    // before any extrude/pushpull reads it. The Apply path uses this map to push
+    // the new radius into every later snapshot of the same sketch.
+    const std::map<int, double>& editedCircleRadii() const { return m_editedCircleRadii; }
+    void clearEditedCircleRadii() { m_editedCircleRadii.clear(); }
+    // Apply a diameter edit to THIS step's after-snapshot and record it for
+    // forward propagation. Single entry point used by renderProperties and tests.
+    void editCircleRadius(int circleId, double radius) {
+        if (m_after) m_after->setCircleRadius(circleId, radius);
+        m_editedCircleRadii[circleId] = radius;
+    }
+    // Sets the circle's radius in BOTH snapshots if the circle is present
+    // (no-op otherwise). Used to carry an upstream diameter edit forward.
+    void applyCircleRadiusToSnapshots(int circleId, double radius);
+
 private:
     std::shared_ptr<Sketch> m_target;
     std::shared_ptr<Sketch> m_before;
     std::shared_ptr<Sketch> m_after;
+    std::map<int, double> m_editedCircleRadii;
 };
 
 } // namespace materializr

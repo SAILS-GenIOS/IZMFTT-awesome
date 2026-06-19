@@ -79,6 +79,14 @@ public:
     // for per-frame previews (the snapshot copy isn't free).
     bool editStep(int index, Document& doc, bool transactional = false);
 
+    // After an inline sketch-dimension edit at `editedStep` (e.g. a circle's
+    // diameter typed in its history-step properties), carry the new value into
+    // every LATER sketchedit snapshot of the SAME sketch. Each sketchedit step
+    // is a full snapshot, so without this the next step's snapshot overwrites
+    // the edit on replay before a downstream extrude/pushpull ever reads it.
+    // Call BEFORE editStep. No-op when the step recorded no inline value edits.
+    void propagateSketchValueEdits(int editedStep, Document& doc);
+
     // Index of the step that most recently failed to recompute during an
     // editStep replay / redo (its result vanished from the viewport and it
     // sits above the current index). -1 = none. The UI uses this to explain

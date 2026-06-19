@@ -293,6 +293,10 @@ bool HistoryPanel::render() {
             ImGui::EndChild();
 
             if (ImGui::Button("Apply Changes", ImVec2(-1, 0)) || enterInProps) {
+                // Carry any inline circle-diameter edit forward into the later
+                // full-snapshot sketchedit steps FIRST — otherwise the next
+                // snapshot overwrites it before the extrude/pushpull reads it.
+                m_history->propagateSketchValueEdits(m_editingStep, *m_document);
                 // Transactional: a failed replay restores the model wholesale
                 // rather than leaving it half-built.
                 bool applied = m_history->editStep(m_editingStep, *m_document,

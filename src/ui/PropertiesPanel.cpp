@@ -82,6 +82,9 @@ bool PropertiesPanel::render() {
 
             if (ImGui::Button("Apply Changes", ImVec2(-1, 0)) || enterCommits) {
                 if (m_document) {
+                    // Carry any inline circle-diameter edit into later snapshots
+                    // of the same sketch before replaying (see HistoryPanel).
+                    m_history->propagateSketchValueEdits(m_editingStep, *m_document);
                     // Transactional: a failed replay restores the whole model
                     // rather than leaving it half-built.
                     m_history->editStep(m_editingStep, *m_document,

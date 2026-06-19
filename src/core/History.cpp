@@ -2,6 +2,7 @@
 #include "EventBus.h"
 #include "Events.h"
 #include "../modeling/Sketch.h"
+#include "../modeling/SketchEditOp.h"
 #include <cstdio>
 #include <map>
 #include <set>
@@ -137,6 +138,30 @@ const Operation* History::getStep(int index) const {
         return nullptr;
     }
     return m_operations[index].get();
+}
+
+void History::propagateSketchValueEdits(int editedStep, Document& doc) {
+    if (editedStep < 0 || editedStep >= static_cast<int>(m_operations.size()))
+        return;
+    auto* edited =
+        dynamic_cast<materializr::SketchEditOp*>(m_operations[editedStep].get());
+    if (!edited) return;
+    const auto& radii = edited->editedCircleRadii();
+    if (radii.empty()) return;
+    auto tgt = edited->getTarget();
+    int sid = tgt ? doc.findSketchId(tgt.get()) : -1;
+    if (sid < 0) return;
+    for (int i = editedStep + 1; i < static_cast<int>(m_operations.size()); ++i) {
+        auto* se = dynamic_cast<materializr::SketchEditOp*>(m_operations[i].get());
+        if (!se) continue;
+        auto t2 = se->getTarget();
+        if (!t2 || doc.findSketchId(t2.get()) != sid) continue;
+        for (const auto& [cid, r] : radii)
+            se->applyCircleRadiusToSnapshots(cid, r);
+    }
+    // The edit is now baked into the downstream snapshots; clear so a later,
+    // unrelated edit on this same step doesn't re-propagate a stale value.
+    edited->clearEditedCircleRadii();
 }
 
 bool History::editStep(int index, Document& doc, bool transactional) {
