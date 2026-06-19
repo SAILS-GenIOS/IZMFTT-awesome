@@ -32,6 +32,7 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/Sketch.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SketchEditOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/DuplicateSketchOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/MoveHoleOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SketchSolver.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SubShapeIndex.cpp
 )
@@ -87,3 +88,8 @@ add_test(NAME test_selection COMMAND test_selection)
 add_executable(test_reload_edit test_reload_edit.cpp)
 target_link_libraries(test_reload_edit PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_reload_edit COMMAND test_reload_edit)
+
+# test_move_hole — moving a through-hole (round/square) re-cuts cleanly
+add_executable(test_move_hole test_move_hole.cpp)
+target_link_libraries(test_move_hole PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_move_hole COMMAND test_move_hole)
