@@ -1,6 +1,7 @@
 #include "gl_common.h"
 
 #include <cstdlib>
+#include <chrono>
 #include <filesystem>
 #include <map>
 #include <set>
@@ -1260,7 +1261,12 @@ void Application::loadAppSettings() {
     // wasn't closed via File → Close Project before quit (closeProject clears
     // the path in settings).
     if (m_autoOpenLastProject && !s.lastProjectPath.empty()) {
-        loadProjectAt(s.lastProjectPath);
+        // Defer to the first main-loop iteration so the load runs in the
+        // between-frames slot where a loading bar can pump (and the window is
+        // already up) — otherwise the synchronous load froze startup with the
+        // OS flagging "not responding".
+        std::string p = s.lastProjectPath;
+        m_deferredHeavyTask = [this, p]() { loadProjectWithProgress(p); };
     }
 
     // Auto check for updates: hit the GitHub releases API and, if a newer
@@ -1269,16 +1275,18 @@ void Application::loadAppSettings() {
     // timeout, so the worst case here is a few seconds of startup delay on
     // a broken network. Suppressed by --safe-mode.
     if (m_checkForUpdatesOnLaunch && !m_safeMode) {
-        auto r = UpdateChecker::check("materializr-cad", "materializr");
-        if (r.ok && r.updateAvailable) {
-            m_updateCurrent    = r.current;
-            m_updateLatest     = r.latest;
-            m_updateAvailable  = true;
-            m_updateReleaseUrl = r.releasePageUrl;
-            m_updateMessage    = "";
-            m_updateChecked    = true; // skip the popup's own network call
-            m_showUpdatePopup  = true;
-        }
+        // Run on a worker thread — the synchronous version blocked startup for
+        // up to its 10 s network timeout ("not responding"). The main loop
+        // polls m_updateCheckFuture each frame and pops the popup when it's in.
+        m_updateCheckFuture = std::async(std::launch::async, []() {
+            auto t0 = std::chrono::steady_clock::now();
+            auto r = UpdateChecker::check("materializr-cad", "materializr");
+            auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+            std::fprintf(stderr, "[update-check] %lld ms (ok=%d)\n",
+                         static_cast<long long>(dt), r.ok ? 1 : 0);
+            return r;
+        });
     }
 }
 
@@ -2498,7 +2506,15 @@ void Application::rebuildMeshes() {
         m_shapeRenderer->clear();
         m_edgeRenderer->clear();
         auto ids = m_document->getAllBodyIds();
+        int meshN = static_cast<int>(ids.size()), meshI = 0;
         for (int id : ids) {
+            // During a load (deferred slot), pump a per-body progress frame so
+            // tessellating a heavy model keeps the window responsive.
+            if (m_pumpMeshProgress) {
+                renderProgressFrame(meshN > 0 ? float(meshI) / float(meshN) : -1.0f,
+                                    "Preparing view\xE2\x80\xA6");
+            }
+            ++meshI;
             if (id < 0) continue;        // defensive: skip bad ids
             if (!m_document->isBodyVisible(id)) continue;
             TopoDS_Shape shape;
@@ -3056,6 +3072,32 @@ bool Application::loadProjectAt(const std::string& path) {
     // Persist as the last-open project so the next launch can auto-reopen it.
     saveAppSettings();
     return true;
+}
+
+void Application::loadProjectWithProgress(const std::string& path) {
+    using clock = std::chrono::steady_clock;
+    auto ms = [](clock::duration d) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(d).count();
+    };
+    // Show something immediately so the window isn't a frozen blank.
+    renderProgressFrame(-1.0f, "Loading project\xE2\x80\xA6");
+
+    auto t0 = clock::now();
+    bool ok = loadProjectAt(path);   // ProjectIO::load (BREP read) + history rebuild
+    auto t1 = clock::now();
+    if (ok) {
+        // Tessellate up front HERE (between frames) so the per-body progress
+        // frames are safe, instead of letting the first render frame block.
+        m_pumpMeshProgress = true;
+        rebuildMeshes();
+        m_pumpMeshProgress = false;
+        m_meshesDirty = false;
+    }
+    auto t2 = clock::now();
+    std::fprintf(stderr, "[load-timing] parse+history=%lld ms  tessellate=%lld ms  total=%lld ms\n",
+                 static_cast<long long>(ms(t1 - t0)),
+                 static_cast<long long>(ms(t2 - t1)),
+                 static_cast<long long>(ms(t2 - t0)));
 }
 
 void Application::addRecentProject(const std::string& ref, const std::string& name) {
@@ -4415,6 +4457,23 @@ void Application::run() {
             auto task = std::move(m_deferredHeavyTask);
             m_deferredHeavyTask = nullptr;
             task();
+        }
+
+        // Apply the launch-time update check once its worker finishes — never
+        // block waiting for it.
+        if (m_updateCheckFuture.valid() &&
+            m_updateCheckFuture.wait_for(std::chrono::seconds(0)) ==
+                std::future_status::ready) {
+            auto r = m_updateCheckFuture.get();
+            if (r.ok && r.updateAvailable) {
+                m_updateCurrent    = r.current;
+                m_updateLatest     = r.latest;
+                m_updateAvailable  = true;
+                m_updateReleaseUrl = r.releasePageUrl;
+                m_updateMessage    = "";
+                m_updateChecked    = true;
+                m_showUpdatePopup  = true;
+            }
         }
 
         // Keep the in-progress sketch crash-recoverable.

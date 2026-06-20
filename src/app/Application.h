@@ -8,6 +8,7 @@
 #include <set>
 #include <map>
 #include <glm/glm.hpp>
+#include "ui/UpdateChecker.h"
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Wire.hxx>
@@ -115,6 +116,13 @@ private:
     // A heavy op deferred from a controller commit to run between frames, where
     // renderProgressFrame can pump its own frames without nesting ImGui frames.
     std::function<void()> m_deferredHeavyTask;
+    // True only while a load is tessellating in the deferred slot: tells
+    // rebuildMeshes to pump a per-body progress frame (safe between frames).
+    bool m_pumpMeshProgress = false;
+    // Launch-time update check, run on a worker so a slow/unreachable network
+    // can't freeze startup (it was a synchronous call with a 10 s timeout —
+    // the real cause of the "not responding" on launch). Polled each frame.
+    std::future<materializr::UpdateChecker::Result> m_updateCheckFuture;
     void renderDockspace();
     void renderViewport();
     void renderMenuBar();
@@ -161,6 +169,11 @@ private:
     // Load a project file directly by path. Used by loadProject() and by the
     // "auto-open last project on launch" path.
     bool loadProjectAt(const std::string& path);
+    // Like loadProjectAt but shows a loading bar and tessellates up front,
+    // pumping frames so the window stays responsive (no OS "not responding").
+    // Must run from the deferred-heavy-task slot (between frames), never inside
+    // a live ImGui frame. Used for the auto-open-on-launch path.
+    void loadProjectWithProgress(const std::string& path);
 
     // Open Recent: a persisted, most-recent-first list of projects. `ref` is a
     // filesystem path (desktop) or a SAF content:// URI (Android); `name` is the
