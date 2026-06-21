@@ -120,22 +120,28 @@ void main() {
     // get BRIGHTER (more prominent); on the light viewport they flip to dark, and
     // coarser tiers get DARKER, so the grid reads the same way against either
     // background instead of washing out.
-    bool lightBg   = u_lightBg > 0.5;
-    vec3 sketchCol = lightBg ? vec3(0.34, 0.36, 0.42) : vec3(0.72, 0.75, 0.82);
-    vec3 minorCol  = lightBg ? vec3(0.60, 0.62, 0.68) : vec3(0.34, 0.34, 0.38);
-    vec3 majorCol  = lightBg ? vec3(0.38, 0.40, 0.47) : vec3(0.85, 0.87, 0.95);
-    vec3 megaCol   = lightBg ? vec3(0.18, 0.20, 0.27) : vec3(1.00, 1.00, 1.00);
+    bool lightBg     = u_lightBg > 0.5;
+    vec3 sketchCol   = lightBg ? vec3(0.34, 0.36, 0.42) : vec3(0.72, 0.75, 0.82);
+    vec3 sketchMajor = lightBg ? vec3(0.12, 0.14, 0.20) : vec3(0.96, 0.97, 1.00);
+    vec3 minorCol    = lightBg ? vec3(0.60, 0.62, 0.68) : vec3(0.34, 0.34, 0.38);
+    vec3 majorCol    = lightBg ? vec3(0.38, 0.40, 0.47) : vec3(0.85, 0.87, 0.95);
+    vec3 megaCol     = lightBg ? vec3(0.18, 0.20, 0.27) : vec3(1.00, 1.00, 1.00);
 
     vec3  rgb;
     float a;
     if (u_sketchGrid > 0.5) {
-        // SKETCH GRID: a single uniform tier — every line the SAME colour and
-        // weight, so there is no "plaid"/tartan from brighter coarser lines
-        // crossing finer ones, and the whole sheet dims as ONE layer under the
-        // opacity slider. The pristine-grid coverage greys it out evenly when it
-        // gets dense instead of moiréing; the slider is the brightness control.
+        // SKETCH GRID: a uniform fine tier PLUS a heavier every-10th line so the
+        // user can gauge scale (count decades) while sketching. The every-10th
+        // tier is just a stronger shade of the SAME colour drawn a touch wider —
+        // not the bright/dim "plaid" of the old tiered grid — and since the grid
+        // now blends over geometry (no depth punch-through) it reads cleanly. The
+        // pristine-grid coverage still greys each tier out evenly when it gets
+        // dense, so no moiré; the opacity slider dims the whole sheet together.
+        float covMajor = gridCoverage(uv * u_scale * 0.1, 1.6);
         rgb = sketchCol;
         a   = covMinor * u_minorAlpha;
+        rgb = mix(rgb, sketchMajor, covMajor);
+        a   = max(a, covMajor);
     } else {
         // WORLD / GROUND GRID: three tiers — minor (every 1), major (every 10),
         // mega (every 100). The coarser 10- and 100-unit lines read on top;
