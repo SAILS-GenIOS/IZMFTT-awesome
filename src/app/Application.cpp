@@ -108,6 +108,7 @@ namespace materializr { namespace force_link { void linkAll(); } }
 #include <BRep_Tool.hxx>
 #include <BRepTools.hxx>
 #include <Geom_Plane.hxx>
+#include <GeomLib_IsPlanarSurface.hxx>
 #include <Geom_CylindricalSurface.hxx>
 #include <GeomAbs_CurveType.hxx>
 #include <gp_Circ.hxx>
@@ -3552,12 +3553,59 @@ void Application::enterSketchOnFace(const TopoDS_Face& face, int sourceBodyId) {
     // has no single plane — we'd otherwise drop the sketch onto a tangent plane
     // at an arbitrary point on the curve, which isn't useful and a construction
     // plane (Add Plane…) covers properly. Refuse with guidance.
+    //
+    // Detect planarity GEOMETRICALLY, not by surface type: a face can be flat
+    // while backed by a non-Geom_Plane surface — e.g. a slanted side face
+    // produced by scaling a box's top into a frustum is a planar trapezoid on a
+    // ruled/BSpline surface. A literal Geom_Plane type-check called those
+    // "curved" by mistake. GeomLib_IsPlanarSurface accepts the flat ones (and
+    // recovers their plane) while still rejecting genuinely warped faces.
+    gp_Pln pln;
     {
         Handle(Geom_Surface) s = BRep_Tool::Surface(face);
-        if (s.IsNull() || !s->IsKind(STANDARD_TYPE(Geom_Plane))) {
+        bool planar = false;
+        if (!s.IsNull()) {
+            if (s->IsKind(STANDARD_TYPE(Geom_Plane))) {
+                pln = Handle(Geom_Plane)::DownCast(s)->Pln();
+                planar = true;
+            } else {
+                GeomLib_IsPlanarSurface tester(s, 1.0e-7);
+                if (tester.IsPlanar()) { pln = tester.Plan(); planar = true; }
+            }
+        }
+        if (!planar) {
             showToast("Can't sketch on a curved face \xE2\x80\x94 use Add "
                       "Plane\xE2\x80\xA6 to place a construction plane.");
             return;
+        }
+    }
+
+    // Align the sketch plane's X axis to the face's LONGEST straight edge so the
+    // grid runs parallel to the face. The plane recovered from the surface uses
+    // the surface's intrinsic parametric X, which for a lofted face (e.g. a
+    // scaled-down box top) can sit ~45° off the visible edges. For an ordinary
+    // box face this is a no-op or a 90° turn that looks identical on a square
+    // grid; a face with no straight edge (a circular cap) keeps the surface X.
+    {
+        const gp_Dir n = pln.Position().Direction();
+        gp_Dir bestX;
+        double bestLen = -1.0;
+        bool found = false;
+        for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More(); ex.Next()) {
+            BRepAdaptor_Curve c(TopoDS::Edge(ex.Current()));
+            if (c.GetType() != GeomAbs_Line) continue;
+            gp_Pnt p0, p1;
+            c.D0(c.FirstParameter(), p0);
+            c.D0(c.LastParameter(), p1);
+            gp_Vec ev(p0, p1);
+            // Project the edge into the plane; skip edges ~parallel to the normal.
+            gp_Vec proj = ev - gp_Vec(n) * (ev * gp_Vec(n));
+            double L = proj.Magnitude();
+            if (L > bestLen + 1e-9) { bestLen = L; bestX = gp_Dir(proj); found = (L > 1e-6); }
+        }
+        if (found) {
+            gp_Ax3 ax(pln.Position().Location(), n, bestX);
+            pln = gp_Pln(ax);
         }
     }
 
@@ -3570,10 +3618,9 @@ void Application::enterSketchOnFace(const TopoDS_Face& face, int sourceBodyId) {
     // routes through here, so setting it here keeps the source body consistent.
     m_activeSketch->setSourceBody(sourceBodyId);
 
-    Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
-    if (!surf.IsNull() && surf->IsKind(STANDARD_TYPE(Geom_Plane))) {
-        Handle(Geom_Plane) geomPlane = Handle(Geom_Plane)::DownCast(surf);
-        gp_Pln pln = geomPlane->Pln();
+    {
+        // `pln` was computed above and already handles planar faces whose surface
+        // isn't a literal Geom_Plane (scaled-frustum side faces, etc.).
         // Honour the face's topological orientation: a REVERSED face's outward
         // normal is opposite to its surface normal, so flip the sketch plane so
         // the camera lands on the visible side of the face.
@@ -3720,10 +3767,6 @@ void Application::enterSketchOnFace(const TopoDS_Face& face, int sourceBodyId) {
             }
             m_activeSketch->setFaceReferences(std::move(refs));
         }
-    } else {
-        // Fallback to default XY plane if face is non-planar
-        m_activeSketch->setPlane(gp_Pln(gp_Pnt(0,0,0), gp_Dir(0,0,1)));
-        std::fprintf(stderr, "Selected face is not planar; using XY plane instead\n");
     }
 
     m_sketchTool->setSketch(m_activeSketch.get());
