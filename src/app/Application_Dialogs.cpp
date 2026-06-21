@@ -274,6 +274,15 @@ void Application::renderSettings() {
                         "Opacity of the sketch-plane grid. Lower it if the grid "
                         "competes with your sketch lines; 0 hides it.");
 
+                    if (ImGui::SliderFloat("Grid shade", &m_sketchGridShade,
+                                           0.0f, 1.0f, "%.2f")) {
+                        changed = true;
+                    }
+                    ImGui::SetItemTooltip(
+                        "Sketch grid line shade: 0 = black, 1 = white. Go darker "
+                        "so the grid reads on a light/white body, lighter for a "
+                        "dark scene.");
+
                     ImGui::Spacing();
                     if (ImGui::Checkbox("Show level toggle in sketch toolbar",
                                         &m_showInferenceToolbarToggle)) {
@@ -2696,10 +2705,36 @@ void Application::renderSectionPanel() {
             ImGui::EndCombo();
         }
 
+        // Offset range adapts to the model so large parts can be fully
+        // traversed — the old fixed ±100 mm couldn't reach the far side of a
+        // bigger body. Use the largest bounding-box dimension of the visible
+        // bodies (floored at 100 mm so small parts keep a usable range), cached
+        // and refreshed every ~0.5 s so the bbox walk isn't run every frame.
+        static double s_secNextCheck = 0.0;
+        static float  s_secRange     = 100.0f;
+        double secNow = ImGui::GetTime();
+        if (secNow >= s_secNextCheck) {
+            try {
+                Bnd_Box bb;
+                bool any = false;
+                for (int id : m_document->getAllBodyIds()) {
+                    if (!m_document->isBodyVisible(id)) continue;
+                    BRepBndLib::Add(m_document->getBody(id), bb);
+                    any = true;
+                }
+                if (any && !bb.IsVoid()) {
+                    double xmn, ymn, zmn, xmx, ymx, zmx;
+                    bb.Get(xmn, ymn, zmn, xmx, ymx, zmx);
+                    double ext = std::max({xmx - xmn, ymx - ymn, zmx - zmn});
+                    s_secRange = std::max(100.0f, static_cast<float>(ext));
+                }
+            } catch (...) {}
+            s_secNextCheck = secNow + 0.5;
+        }
         ImGui::SetNextItemWidth(200.0f);
         if (ImGui::SliderFloat("Offset (mm)", &m_sectionOffset,
-                               -100.0f, 100.0f, "%.1f"))
-            m_sectionDirty = true; // Ctrl+click types exact values past ±100
+                               -s_secRange, s_secRange, "%.1f"))
+            m_sectionDirty = true; // Ctrl+click still types exact values past the range
         if (ImGui::Checkbox("Flip side", &m_sectionFlip))
             m_sectionDirty = true;
 

@@ -1335,6 +1335,7 @@ AppSettings Application::currentSettings() const {
     s.selectionLineWidth = m_selectionLineWidth;
     s.sketchLineWidth = m_sketchLineWidth;
     s.sketchGridOpacity = m_sketchGridOpacity;
+    s.sketchGridShade = m_sketchGridShade;
     s.smallScreenWarned = m_smallScreenWarned;
     s.leftPanelHidden = m_leftPanelHidden;
     s.rightPanelHidden = m_rightPanelHidden;
@@ -1401,6 +1402,7 @@ void Application::applyAppSettings(const AppSettings& s) {
     m_selectionLineWidth = s.selectionLineWidth;
     m_sketchLineWidth = s.sketchLineWidth;
     m_sketchGridOpacity = s.sketchGridOpacity;
+    m_sketchGridShade = s.sketchGridShade;
     m_smallScreenWarned = s.smallScreenWarned;
     m_leftPanelHidden = s.leftPanelHidden;
     m_rightPanelHidden = s.rightPanelHidden;
@@ -2978,7 +2980,9 @@ void Application::rebuildHistoryFromProject(const ProjectHistory& hist) {
         else
             msg = std::to_string(bakedBodySteps) + " feature(s) are baked from an "
                   "older save and can't be edited \xE2\x80\x94 re-apply them to adjust.";
-        showToast(msg);
+        // Double the default dwell (4s → 8s): this load-time report is a long
+        // sentence the user needs time to actually read on a fresh start.
+        showToast(msg, 8.0);
     }
 }
 

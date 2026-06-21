@@ -269,7 +269,8 @@ void Application::renderViewport() {
                            minorAlpha, m_sketchGridOpacity /*globalAlpha*/,
                            sketching ? 1.0f : 0.0f /*sketchGrid: uniform single tier*/,
                            sketching ? 0.0005f : -0.0005f /*depthBias*/,
-                           lightBg ? 1.0f : 0.0f /*lightBg palette*/);
+                           lightBg ? 1.0f : 0.0f /*lightBg palette*/,
+                           m_sketchGridShade /*sketch grid greyscale*/);
         };
         // Plugin-registered render passes (e.g. ConstructionPlanePlugin's
         // plane quads) draw between the grid/background and the body/edge

@@ -60,6 +60,7 @@ uniform float u_depthBias;     // signed depth nudge: + toward camera (draw the
                                // grid ON a coplanar face, e.g. the sketch face),
                                // - away (let a coplanar body face occlude it)
 uniform float u_lightBg;       // 1 = light viewport: use dark-on-light line palette
+uniform float u_sketchShade;   // sketch grid line shade: 0 = black … 1 = white
 
 out vec4 fragColor;
 
@@ -121,8 +122,11 @@ void main() {
     // coarser tiers get DARKER, so the grid reads the same way against either
     // background instead of washing out.
     bool lightBg     = u_lightBg > 0.5;
-    vec3 sketchCol   = lightBg ? vec3(0.34, 0.36, 0.42) : vec3(0.72, 0.75, 0.82);
-    vec3 sketchMajor = lightBg ? vec3(0.12, 0.14, 0.20) : vec3(0.96, 0.97, 1.00);
+    // Sketch grid: a user-chosen greyscale shade (0 = black … 1 = white) so it
+    // can be made dark enough to read on a light/white body or light for a dark
+    // scene. The every-10th line pushes toward the opposite extreme for contrast.
+    vec3 sketchCol   = vec3(u_sketchShade);
+    vec3 sketchMajor = mix(sketchCol, vec3(u_sketchShade < 0.5 ? 1.0 : 0.0), 0.4);
     vec3 minorCol    = lightBg ? vec3(0.60, 0.62, 0.68) : vec3(0.34, 0.34, 0.38);
     vec3 majorCol    = lightBg ? vec3(0.38, 0.40, 0.47) : vec3(0.85, 0.87, 0.95);
     vec3 megaCol     = lightBg ? vec3(0.18, 0.20, 0.27) : vec3(1.00, 1.00, 1.00);
@@ -223,6 +227,7 @@ bool Grid::initialize()
     m_locSketchGrid = glGetUniformLocation(m_shaderProgram, "u_sketchGrid");
     m_locDepthBias = glGetUniformLocation(m_shaderProgram, "u_depthBias");
     m_locLightBg = glGetUniformLocation(m_shaderProgram, "u_lightBg");
+    m_locSketchShade = glGetUniformLocation(m_shaderProgram, "u_sketchShade");
 
     // Create a dummy VAO (required for core profile, even with no vertex attributes)
     glGenVertexArrays(1, &m_vao);
@@ -234,7 +239,7 @@ void Grid::render(const glm::mat4& view, const glm::mat4& projection,
                   const glm::vec3& fadeCenter, float fadeDistance,
                   const Plane& plane, float minorStep,
                   float minorAlpha, float globalAlpha, float sketchGrid,
-                  float depthBias, float lightBg)
+                  float depthBias, float lightBg, float sketchShade)
 {
     if (!m_shaderProgram) return;
 
@@ -257,6 +262,7 @@ void Grid::render(const glm::mat4& view, const glm::mat4& projection,
     glUniform1f(m_locSketchGrid, sketchGrid);
     glUniform1f(m_locDepthBias, depthBias);
     glUniform1f(m_locLightBg, lightBg);
+    glUniform1f(m_locSketchShade, sketchShade);
 
     // Enable blending for grid transparency
     glEnable(GL_BLEND);
