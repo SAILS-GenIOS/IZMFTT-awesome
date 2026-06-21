@@ -42,6 +42,12 @@ public:
     std::string typeId() const override { return "move_hole"; }
     std::vector<int> plannedBodyIds() const override { return {m_bodyId}; }
     OperationDiff captureDiff() const override;
+    // Reload support: the seed wall persists as an ordinal index into the input
+    // shape's canonical face map (SubShapeIndex.h), the move as plain numbers —
+    // so a move-hole reloads as a real, editable op instead of baked geometry.
+    std::string serializeParams() const override;
+    bool deserializeParams(const std::string& blob) override;
+    bool rehydrateFromReload(const ReloadState& state, Document& doc) override;
 
     // Build the exact hole-void solid from a clicked wall face. Returns false if
     // the selection isn't a recognizable through-hole; sets isPocket=true (and
@@ -60,4 +66,7 @@ private:
     gp_Vec m_move{0.0, 0.0, 0.0};
     bool m_wasPocket = false;
     TopoDS_Shape m_previousShape; // for undo
+    // Seed wall as ordinal index/indices into the input shape (parsed on load,
+    // resolved against the reloaded previous shape in rehydrateFromReload).
+    std::vector<int> m_seedWallIndices;
 };

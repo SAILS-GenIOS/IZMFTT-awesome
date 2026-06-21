@@ -15,6 +15,7 @@
 #include "core/Operation.h"
 #include "io/ProjectIO.h"
 #include "modeling/FilletOp.h"
+#include "modeling/MoveHoleOp.h"
 #include "modeling/BooleanOp.h"
 #include "modeling/DeleteOp.h"
 #include "modeling/TransformOp.h"
@@ -25,8 +26,13 @@
 
 #include <gtest/gtest.h>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRep_Tool.hxx>
+#include <Geom_CylindricalSurface.hxx>
+#include <gp_Ax2.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Dir.hxx>
 #include <TopExp_Explorer.hxx>
@@ -63,6 +69,12 @@ double surfaceArea(Document& d, int id) {
     GProp_GProps g;
     BRepGProp::SurfaceProperties(d.getBody(id), g);
     return g.Mass();
+}
+
+gp_Pnt centreOfMass(Document& d, int id) {
+    GProp_GProps g;
+    BRepGProp::VolumeProperties(d.getBody(id), g);
+    return g.CentreOfMass();
 }
 
 } // namespace
@@ -228,6 +240,87 @@ TEST(ReloadEdit, FilletSurvivesRealFileRoundTrip) {
     ASSERT_TRUE(op->execute(doc)) << "reloaded fillet couldn't re-execute at a new radius";
     EXPECT_LT(volume(doc, B), vSaved - 1e-3)
         << "editing the reloaded fillet's radius had no effect (wrong/lost edge)";
+}
+
+// REAL file round-trip for a MOVE-HOLE: it must reload as a real, editable op
+// (seed wall resolved from the file) instead of baked geometry. Move-hole used
+// to have no reload support at all, so every move-hole baked on reload — which
+// also tripped the "frozen feature" warning on brand-new projects.
+TEST(ReloadEdit, MoveHoleSurvivesRealFileRoundTrip) {
+    using materializr::ProjectHistory;
+    using materializr::ProjectHistoryStep;
+    using materializr::ProjectIO;
+
+    // 1. Box with a centred through-hole, then slide the hole +X for real.
+    TopoDS_Shape box = BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 20.0, 20.0, 10.0).Shape();
+    TopoDS_Shape cyl = BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(10, 10, -1), gp_Dir(0, 0, 1)), 2.0, 12.0).Shape();
+    TopoDS_Shape holed = BRepAlgoAPI_Cut(box, cyl).Shape();
+
+    Document src;
+    int B = src.addBody(holed, "B");
+    const TopoDS_Shape B0 = src.getBody(B);
+
+    TopoDS_Face seed; // the hole's cylindrical wall
+    for (TopExp_Explorer ex(B0, TopAbs_FACE); ex.More(); ex.Next()) {
+        TopoDS_Face f = TopoDS::Face(ex.Current());
+        Handle(Geom_Surface) s = BRep_Tool::Surface(f);
+        if (!s.IsNull() && s->IsKind(STANDARD_TYPE(Geom_CylindricalSurface))) {
+            seed = f; break;
+        }
+    }
+    ASSERT_FALSE(seed.IsNull()) << "need the hole's cylindrical wall as the seed";
+
+    MoveHoleOp mh;
+    mh.setBody(B);
+    mh.setSeedWall(seed);
+    mh.setMoveVector(gp_Vec(5.0, 0.0, 0.0));
+    ASSERT_TRUE(mh.execute(src));
+    const TopoDS_Shape Bmoved = src.getBody(B);
+    const gp_Pnt cmSaved = centreOfMass(src, B); // CoM shifts as the hole moves off-centre
+
+    // 2. Build the savable history, save to a real file, load it back.
+    ProjectHistory hist;
+    hist.present = true;
+    hist.initialState = {{B, B0}};
+    ProjectHistoryStep st;
+    st.typeId      = mh.typeId();          // "move_hole"
+    st.name        = mh.name();
+    st.description = mh.description();
+    st.params      = mh.serializeParams(); // body + move vector + seed-wall index
+    st.changed     = {{B, Bmoved}};
+    hist.steps     = {st};
+    ASSERT_FALSE(st.params.empty()) << "move-hole must serialise params to save";
+
+    const std::string path = "/tmp/mtz_movehole_roundtrip.materializr";
+    ASSERT_TRUE(ProjectIO::save(path, src, &hist).success);
+    Document doc;
+    ProjectHistory loaded;
+    ASSERT_TRUE(ProjectIO::load(path, doc, &loaded).success);
+    std::remove(path.c_str());
+
+    ASSERT_EQ(loaded.steps.size(), 1u);
+    EXPECT_EQ(loaded.steps[0].typeId, "move_hole");
+    ASSERT_FALSE(loaded.steps[0].params.empty())
+        << "move-hole params lost in the file round-trip";
+    const TopoDS_Shape B0r = loaded.initialState[0].second;
+
+    // 3. Rehydrate from the LOADED params + shapes — the seed-wall index must
+    //    resolve against the box read back from BREP.
+    auto op = std::make_unique<MoveHoleOp>();
+    ASSERT_TRUE(op->deserializeParams(loaded.steps[0].params));
+    Operation::ReloadState rs;
+    rs.modifiedBefore = {{B, B0r}};
+    rs.modifiedAfter  = {{B, loaded.steps[0].changed[0].second}};
+    ASSERT_TRUE(op->rehydrateFromReload(rs, doc))
+        << "reloaded move-hole failed to rehydrate — seed wall lost across save";
+
+    // 4. Re-run against the rolled-back body (what editStep does); the hole must
+    //    land in the SAME place — proving the seed wall + vector survived.
+    doc.updateBody(B, B0r);
+    ASSERT_TRUE(op->execute(doc)) << "reloaded move-hole couldn't re-execute";
+    EXPECT_LT(centreOfMass(doc, B).Distance(cmSaved), 1e-6)
+        << "reloaded move-hole landed the hole in a different place";
 }
 
 // Free-space sketch push/pull with cut-intersecting: subtracts from VISIBLE

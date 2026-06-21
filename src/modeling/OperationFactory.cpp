@@ -16,6 +16,7 @@
 #include "TaperOp.h"
 #include "ScaleFaceOp.h"
 #include "DefeatureOp.h"
+#include "MoveHoleOp.h"
 #include "ProjectSketchOp.h"
 #include "ResizeCylindricalOp.h"
 #include "ThreadOp.h"
@@ -54,6 +55,7 @@ std::unique_ptr<Operation> create(const std::string& typeId) {
     if (typeId == "taper")   return std::make_unique<TaperOp>();
     if (typeId == "scale_face") return std::make_unique<ScaleFaceOp>();
     if (typeId == "defeature") return std::make_unique<DefeatureOp>();
+    if (typeId == "move_hole") return std::make_unique<MoveHoleOp>();
     if (typeId == "project_sketch") return std::make_unique<ProjectSketchOp>();
     if (typeId == "resize_cylindrical") return std::make_unique<ResizeCylindricalOp>();
     if (typeId == "thread")  return std::make_unique<ThreadOp>(); // pure derived geometry

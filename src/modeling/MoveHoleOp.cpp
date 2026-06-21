@@ -1,4 +1,7 @@
 #include "MoveHoleOp.h"
+#include "SubShapeIndex.h"
+#include <cstdio>
+#include <cstdlib>
 
 #include <BRep_Tool.hxx>
 #include <BRepTools.hxx>
@@ -229,13 +232,72 @@ bool MoveHoleOp::undo(Document& doc) {
 }
 
 OperationDiff MoveHoleOp::captureDiff() const {
-    // No params/rehydrate yet → reloads as a baked ReplayOp. Reporting the
-    // pre-op body lets that replay restore the right shape, so the moved hole
-    // survives save/reload (just not re-editable across sessions for now).
     OperationDiff d;
     if (m_bodyId >= 0 && !m_previousShape.IsNull())
         d.modifiedBefore.push_back({m_bodyId, m_previousShape});
     return d;
+}
+
+std::string MoveHoleOp::serializeParams() const {
+    // body + move vector as plain numbers; the seed wall as an ordinal index
+    // into the INPUT shape's canonical face map (see SubShapeIndex.h).
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "body=%d;move=%.9g,%.9g,%.9g",
+                  m_bodyId, m_move.X(), m_move.Y(), m_move.Z());
+    std::string blob = buf;
+    if (!m_previousShape.IsNull() && !m_seedWall.IsNull()) {
+        std::vector<TopoDS_Shape> faces{m_seedWall};
+        std::string idx = SubShapeIndex::serialize(m_previousShape, faces,
+                                                   TopAbs_FACE);
+        if (!idx.empty()) blob += ";wall=" + idx;
+    }
+    return blob;
+}
+
+bool MoveHoleOp::deserializeParams(const std::string& blob) {
+    bool any = false;
+    size_t pos = 0;
+    while (pos < blob.size()) {
+        size_t eq = blob.find('=', pos);
+        if (eq == std::string::npos) break;
+        size_t end = blob.find(';', eq);
+        if (end == std::string::npos) end = blob.size();
+        std::string key = blob.substr(pos, eq - pos);
+        std::string val = blob.substr(eq + 1, end - eq - 1);
+        if (key == "body") { m_bodyId = std::atoi(val.c_str()); any = true; }
+        else if (key == "move") {
+            double x = 0, y = 0, z = 0;
+            std::sscanf(val.c_str(), "%lf,%lf,%lf", &x, &y, &z);
+            m_move = gp_Vec(x, y, z);
+            any = true;
+        } else if (key == "wall") {
+            m_seedWallIndices = SubShapeIndex::parse(val);
+            any = true;
+        }
+        pos = end + 1;
+    }
+    return any;
+}
+
+bool MoveHoleOp::rehydrateFromReload(const ReloadState& state, Document& /*doc*/) {
+    if (m_bodyId < 0) return false;
+
+    m_previousShape.Nullify();
+    for (const auto& [id, shp] : state.modifiedBefore)
+        if (id == m_bodyId) { m_previousShape = shp; break; }
+    if (m_previousShape.IsNull()) return false;
+
+    // The seed wall must resolve against the reloaded input shape, else the BFS
+    // in buildVoid can't find the hole — decline so it falls back to a baked op.
+    if (m_seedWallIndices.empty()) return false;
+    std::vector<TopoDS_Shape> resolved;
+    if (!SubShapeIndex::resolveAll(m_previousShape, m_seedWallIndices,
+                                   TopAbs_FACE, resolved) ||
+        resolved.empty()) {
+        return false;
+    }
+    m_seedWall = TopoDS::Face(resolved[0]);
+    return true;
 }
 
 std::string MoveHoleOp::description() const {
