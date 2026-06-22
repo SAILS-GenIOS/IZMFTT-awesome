@@ -80,15 +80,26 @@ bool TransformOp::execute(Document& doc) {
         // Scale is deliberately skipped: it changes physical dimensions, which
         // a dimension-driven sketch shouldn't silently absorb. Effectively the
         // sketch detaches on Scale.
+        // Link model (2026-06): a body move no longer auto-drags its source
+        // sketch. Moving a body alone deliberately breaks it out of unison with
+        // its sketch (the gizmo commit marks the sketch detached); moving both
+        // together is handled by re-deriving the body from the moved sketch, not
+        // by a body transform. Auto-propagation here was also the root of the
+        // edit-after-move double-transform — so it's gone. m_previousSketchPlanes
+        // stays empty (the apply/undo loops below become no-ops).
         m_previousSketchPlanes.clear();
-        const bool propagateToSketches = (m_type != TransformType::Scale);
-        if (propagateToSketches) {
-            for (int sid : doc.getAllSketchIds()) {
-                auto sk = doc.getSketch(sid);
-                if (sk && sk->getSourceBody() == m_bodyId) {
-                    m_previousSketchPlanes.push_back({sid, sk->getPlane()});
-                }
+
+        // De-link any sketches this body-only move broke from the body. Capture
+        // their prior detached state once so undo can restore the link.
+        if (!m_detachSketchIds.empty()) {
+            if (!m_haveDetachBefore) {
+                for (int sid : m_detachSketchIds)
+                    if (auto sk = doc.getSketch(sid))
+                        m_detachBefore.push_back({sid, sk->isDetachedFromBody()});
+                m_haveDetachBefore = true;
             }
+            for (int sid : m_detachSketchIds)
+                if (auto sk = doc.getSketch(sid)) sk->setDetachedFromBody(true);
         }
 
         // Reloaded legacy step: apply the reconstructed rigid transform straight
@@ -180,6 +191,9 @@ bool TransformOp::undo(Document& doc) {
             auto sk = doc.getSketch(sid);
             if (sk) sk->setPlane(prevPln);
         }
+        // Re-link sketches this move had de-linked.
+        for (const auto& [sid, wasDetached] : m_detachBefore)
+            if (auto sk = doc.getSketch(sid)) sk->setDetachedFromBody(wasDetached);
         return true;
     } catch (...) {
         return false;

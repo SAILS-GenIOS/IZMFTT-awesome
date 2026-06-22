@@ -338,9 +338,26 @@ bool HistoryPanel::render() {
     // Bottom section: Undo/Redo + step counter
     ImGui::Separator();
 
+    // After an undo/redo of a SketchEditOp, the body built from that sketch is
+    // updated through the cascade (editStep), which the op's own undo/redo
+    // doesn't drive — publish a SketchEditedEvent so the body follows. Mirrors
+    // the Ctrl+Z/Ctrl+Y handlers in Application.
+    auto publishIfSketchEdit = [&](const Operation* op) {
+        if (!op || !m_eventBus || !m_document) return;
+        if (auto* se = dynamic_cast<const materializr::SketchEditOp*>(op)) {
+            if (auto target = se->getTarget()) {
+                int sid = m_document->findSketchId(target.get());
+                if (sid >= 0) m_eventBus->publish(SketchEditedEvent{sid});
+            }
+        }
+    };
+
     ImGui::BeginDisabled(m_historyLocked || !m_history->canUndo());
     if (ImGui::Button("Undo")) {
+        const Operation* undone =
+            m_history->getStep(m_history->currentStep());
         m_history->undo(*m_document);
+        publishIfSketchEdit(undone);
         modified = true;
     }
     ImGui::EndDisabled();
@@ -350,6 +367,7 @@ bool HistoryPanel::render() {
     ImGui::BeginDisabled(m_historyLocked || !m_history->canRedo());
     if (ImGui::Button("Redo")) {
         m_history->redo(*m_document);
+        publishIfSketchEdit(m_history->getStep(m_history->currentStep()));
         modified = true;
     }
     ImGui::EndDisabled();

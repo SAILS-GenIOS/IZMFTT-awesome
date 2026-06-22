@@ -26,6 +26,12 @@ public:
     // body's bounding-box centre so it rotates/scales in place.
     void setCenter(double cx, double cy, double cz);
 
+    // Sketches to de-link when this body moves on its own (link model): moving a
+    // body without its driving sketch breaks the parametric link. Bundled here so
+    // one undo reverts both the move and the de-link. The flag itself persists in
+    // the sketch block; this only restores it for in-session undo.
+    void addDetachSketch(int sketchId) { m_detachSketchIds.push_back(sketchId); }
+
     // Getters
     int getBodyId() const { return m_bodyId; }
     TransformType getType() const { return m_type; }
@@ -69,4 +75,9 @@ private:
     // transform applied to their plane so the sketch follows the host face
     // when the body moves. Cached previous planes for undo restoration.
     std::vector<std::pair<int, gp_Pln>> m_previousSketchPlanes;
+    // Link model: sketches de-linked by this body-only move, with their prior
+    // detached state captured on first execute for undo.
+    std::vector<int> m_detachSketchIds;
+    std::vector<std::pair<int, bool>> m_detachBefore;
+    bool m_haveDetachBefore = false;
 };

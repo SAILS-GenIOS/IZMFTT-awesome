@@ -2454,8 +2454,37 @@ void Application::commitLoft() {
 // follow" workflow this trade-off is fine: simple chains just work; chained
 // workflows leave the downstream ops on the stale body and the user
 // manually re-runs them.
+std::map<int, std::set<int>> Application::sketchBodyLinks() const {
+    std::map<int, std::set<int>> links;
+    if (!m_history) return links;
+    int n = m_history->stepCount();
+    for (int i = 0; i < n; ++i) {
+        const Operation* op = m_history->getStep(i);
+        if (!op) continue;
+        std::set<int> srcSketches;
+        if (auto* ext = dynamic_cast<const ExtrudeOp*>(op)) {
+            if (ext->getSketchId() >= 0) srcSketches.insert(ext->getSketchId());
+        } else if (auto* pp = dynamic_cast<const PushPullOp*>(op)) {
+            for (int t = 0; t < pp->targetCount(); ++t)
+                if (pp->getSketchIdAt(t) >= 0) srcSketches.insert(pp->getSketchIdAt(t));
+        }
+        if (srcSketches.empty()) continue;
+        // Bodies this step touched = created + modified.
+        OperationDiff diff = op->captureDiff();
+        std::set<int> bodies(diff.created.begin(), diff.created.end());
+        for (const auto& [id, _] : diff.modifiedBefore) bodies.insert(id);
+        for (int s : srcSketches)
+            links[s].insert(bodies.begin(), bodies.end());
+    }
+    return links;
+}
+
 void Application::cascadeFromSketchEdit(int sketchId) {
     if (sketchId < 0 || !m_history || !m_document) return;
+    // A detached sketch has been deliberately broken out of unison with its
+    // body (moved on its own in 3D) — editing it must NOT retro-drive the body.
+    if (auto sk = m_document->getSketch(sketchId); sk && sk->isDetachedFromBody())
+        return;
     int n = m_history->stepCount();
 
     // Re-derive the profile of every sketch-sourced extrude / push-pull that

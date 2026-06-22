@@ -218,8 +218,11 @@ ProjectSaveResult ProjectIO::save(const std::string& filePath, const Document& d
         std::string sname = doc.getSketchName(sid);
         bool svis = doc.isSketchVisible(sid);
 
+        // Trailing detached flag (0|1) is optional — older loaders stop after
+        // sourceBody, newer ones read it to restore the broken-link state.
         ofs << "SKETCH_START " << sid << " \"" << sname << "\" " << (svis ? 1 : 0)
-            << " " << sk->getSourceBody() << "\n";
+            << " " << sk->getSourceBody() << " " << (sk->isDetachedFromBody() ? 1 : 0)
+            << "\n";
 
         const gp_Pln& pln = sk->getPlane();
         gp_Pnt o = pln.Location();
@@ -539,7 +542,7 @@ void parseSketchBodyImpl(std::istream& ifs, materializr::Sketch& sk,
 // Read one sketch (everything between SKETCH_START and SKETCH_END) and add it to
 // the document. `startLine` is the already-read SKETCH_START line.
 void readSketch(std::istream& ifs, const std::string& startLine, Document& doc) {
-    int sid = 0, visible = 1, source = -1;
+    int sid = 0, visible = 1, source = -1, detached = 0;
     std::string name;
     {
         std::istringstream iss(startLine);
@@ -552,12 +555,14 @@ void readSketch(std::istream& ifs, const std::string& startLine, Document& doc) 
             name = rest.substr(fq + 1, lq - fq - 1);
             std::istringstream after(rest.substr(lq + 1));
             after >> visible >> source;
+            after >> detached; // optional; absent in pre-link-state files → 0
         }
     }
 
     auto sk = std::make_shared<Sketch>();
     parseSketchBodyImpl(ifs, *sk, "SKETCH_END");
     sk->setSourceBody(source);
+    sk->setDetachedFromBody(detached != 0);
     // Preserve the saved sketch id so SketchEditOps (and extrude/push-pull ops)
     // that reference a sketch BY id rebind correctly on reload. Legacy files
     // without a valid id (sid <= 0) fall back to a fresh assignment.

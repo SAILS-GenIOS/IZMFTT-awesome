@@ -159,6 +159,14 @@ public:
     // -1 means the sketch is on a freestanding plane (e.g. world XY).
     void setSourceBody(int bodyId) { m_sourceBodyId = bodyId; }
     int getSourceBody() const { return m_sourceBodyId; }
+
+    // Parametric link state. When true, this sketch no longer drives the body
+    // it created — set when the user moves the sketch (or its body) on its own
+    // in 3D, deliberately breaking them out of unison. The sketch-edit cascade
+    // skips detached sketches, so editing one won't retro-modify the body.
+    // Cleared when the sketch and body are moved together (re-linked).
+    void setDetachedFromBody(bool d) { m_detached = d; }
+    bool isDetachedFromBody() const { return m_detached; }
     void setSourceFace(const TopoDS_Face& face) { m_sourceFace = face; m_centroidValid = false; }
     const TopoDS_Face& getSourceFace() const { return m_sourceFace; }
 
@@ -221,6 +229,7 @@ private:
     std::string m_name = "Sketch";
     gp_Pln m_plane;
     int m_sourceBodyId = -1;
+    bool m_detached = false;   // link to driven body deliberately broken
     TopoDS_Face m_sourceFace;
 
     std::vector<SketchPoint> m_points;

@@ -19,6 +19,10 @@ public:
     void setSketch(int id) { m_sketchId = id; }
     void setTransform(const gp_Trsf& t) { m_transform = t; }
 
+    // Link-state change to apply alongside the move so one undo reverts both:
+    //   -1 = leave as-is, 0 = re-link (clear detached), 1 = de-link (set detached)
+    void setDetachTarget(int mode) { m_detachMode = mode; }
+
     bool execute(Document& doc) override;
     bool undo(Document& doc) override;
 
@@ -32,6 +36,9 @@ private:
     gp_Trsf m_transform;     // applied to the sketch's plane on execute
     gp_Pln  m_planeBefore;   // captured on first execute, restored on undo
     bool m_haveBefore = false;
+    int  m_detachMode = -1;        // see setDetachTarget
+    bool m_detachedBefore = false; // captured on first execute, restored on undo
+    bool m_haveDetachBefore = false;
     std::string m_description = "Sketch transform";
 };
 

@@ -358,6 +358,10 @@ private:
     // sketch immediately; chained workflows leave downstream ops on their
     // old body shape (user re-does manually).
     void cascadeFromSketchEdit(int sketchId);
+    // Map each sketch id to the body ids it drives (created/modified through a
+    // sketch-sourced extrude / push-pull). Used by the gizmo commit to tell a
+    // unison move (body + its driving sketch) from a lone move that de-links.
+    std::map<int, std::set<int>> sketchBodyLinks() const;
     void updateInteractiveExtrude();
     // Signed distance to pass to ExtrudeOp: Subtract cuts into the body (the
     // profile normal points outward), so it uses the negated distance.

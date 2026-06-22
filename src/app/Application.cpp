@@ -1032,11 +1032,18 @@ void Application::renderMenuBar() {
             if (ImGui::MenuItem("Undo", "Ctrl+Z", false,
                                 !histLocked && m_history->canUndo())) {
                 m_history->undo(*m_document);
+                // Keep a sketch-driven body in sync after undoing a sketch edit
+                // (the SketchEditOp undo only reverts geometry; the cascade did
+                // the body). Mirrors the keyboard Ctrl+Z path.
+                if (m_inSketchMode && m_activeSketch && m_activeSketchId >= 0)
+                    cascadeFromSketchEdit(m_activeSketchId);
                 m_meshesDirty = true;
             }
             if (ImGui::MenuItem("Redo", "Ctrl+Y", false,
                                 !histLocked && m_history->canRedo())) {
                 m_history->redo(*m_document);
+                if (m_inSketchMode && m_activeSketch && m_activeSketchId >= 0)
+                    cascadeFromSketchEdit(m_activeSketchId);
                 m_meshesDirty = true;
             }
             ImGui::EndMenu();
@@ -2129,6 +2136,11 @@ void Application::handleShortcuts() {
                     // point. Sweep any such orphan so undo leaves no dangling
                     // vertex.
                     m_activeSketch->pruneOrphanPoints();
+                    // A sketch edit's body update was applied through the cascade
+                    // (editStep) — the SketchEditOp's own undo only reverts the
+                    // sketch geometry, not the body. Re-cascade so the body follows
+                    // the now-reverted sketch instead of staying at its last shape.
+                    if (m_activeSketchId >= 0) cascadeFromSketchEdit(m_activeSketchId);
                 }
                 m_meshesDirty = true;
             }
@@ -2141,6 +2153,10 @@ void Application::handleShortcuts() {
                 if (!m_inSketchMode) {
                     m_selection->clear();
                     m_hoveredBodyId = -1;
+                } else if (m_activeSketch && m_activeSketchId >= 0) {
+                    // Mirror of the undo path: re-sync the body to the
+                    // re-applied sketch edit.
+                    cascadeFromSketchEdit(m_activeSketchId);
                 }
                 m_meshesDirty = true;
             }
