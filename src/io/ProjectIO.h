@@ -25,6 +25,9 @@ struct ProjectLoadResult {
     bool success = false;
     std::string errorMessage;
     int bodiesLoaded = 0;
+    // Version of Materializr that wrote this file. Empty string means the file
+    // predates SAVED_BY tagging (truly old format). Non-empty = modern file.
+    std::string savedByVersion;
 };
 
 // One persisted operation: identity/labels for the History panel plus a body

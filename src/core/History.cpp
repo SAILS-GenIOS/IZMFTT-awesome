@@ -169,6 +169,13 @@ bool History::editStep(int index, Document& doc, bool transactional) {
         return false;
     }
 
+    // Snapshot the body IDs BEFORE any undo/replay. Used at the end to detect
+    // and prune orphan bodies created when a downstream op has lost its
+    // reuseBodyIds (e.g., a push/pull op whose created-body tracking was
+    // corrupted in the saved file). Only applied in non-transactional (preview)
+    // mode — transactional failures are already handled by restoreSnapshot.
+    const std::vector<int> preEditBodyIds = doc.getAllBodyIds();
+
     // Transactional safety: snapshot the whole model up front so a replay that
     // fails partway (a downstream fillet whose edges can't re-bind after the
     // edited geometry moved, etc.) can be fully reverted — an edit must never
@@ -243,9 +250,15 @@ bool History::editStep(int index, Document& doc, bool transactional) {
                 const std::string& good = op->lastGoodParams();
                 if (i == index && !good.empty() &&
                     op->deserializeParams(good) && op->execute(doc)) {
+                    std::fprintf(stderr,
+                        "[history-dbg] editStep: step %d rejected new params, "
+                        "restored lastGoodParams\n", i);
                     editRejected = true;
                     continue;
                 }
+                std::fprintf(stderr,
+                    "[history-dbg] editStep: HARD FAILURE at step %d "
+                    "(edited=%d transactional=%d)\n", i, index, transactional);
                 if (transactional) { restoreSnapshot(); return false; }
                 m_currentIndex = i - 1;
                 m_failedReplayAt = i;
@@ -278,6 +291,39 @@ bool History::editStep(int index, Document& doc, bool transactional) {
             m_currentIndex = i;
         }
         if (cleared) m_failedReplayAt = -1;
+    }
+
+    // Orphan-body cleanup (non-transactional / preview mode only).
+    //
+    // Problem: if a push/pull op's body-ID state was lost when the project
+    // file was saved mid-undo (m_createdBodyIds was empty at save time so the
+    // body ended up in HISTORY_INITIAL_COUNT instead of the op's diff), then
+    // on reload the op has empty m_reuseBodyIds. Its undo() is a no-op (leaves
+    // the phantom initialState body in the doc) and its execute() creates a
+    // FRESH body with a new ID rather than reusing the original. The phantom
+    // stays AND a duplicate appears — causing missing or misplaced geometry.
+    //
+    // Fix: any body ID that wasn't in the document before this editStep but IS
+    // there now is an orphan created by a stateless op. Remove it so only the
+    // correctly-managed bodies remain. The op retains its m_createdBodyIds =
+    // {new_id} and m_reuseBodyIds will be set to {new_id} on the next undo(),
+    // so subsequent preview frames recreate and re-clean the same orphan via the
+    // tombstone mechanism — cosmetically invisible to the user.
+    //
+    // Transactional (commit) mode: restoreSnapshot() handles cleanup on failure;
+    // on success the history should be clean — skip this guard.
+    if (!transactional) {
+        std::set<int> preSet(preEditBodyIds.begin(), preEditBodyIds.end());
+        for (int id : doc.getAllBodyIds()) {
+            if (!preSet.count(id)) {
+                std::fprintf(stderr,
+                    "[editStep] orphan body %d removed (appeared during replay, "
+                    "not in pre-edit set of %zu) — likely a push/pull op with "
+                    "lost body-ID state from a mid-undo save.\n",
+                    id, preSet.size());
+                doc.removeBody(id);
+            }
+        }
     }
 
     // Note: we deliberately don't publish HistoryStepEvent here. editStep

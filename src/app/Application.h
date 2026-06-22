@@ -196,7 +196,8 @@ private:
     // Snapshot the operation history (parameters + per-step body diffs) for the
     // project file, and rebuild a replayable history from a loaded project.
     ProjectHistory captureProjectHistory();
-    void rebuildHistoryFromProject(const ProjectHistory& hist);
+    void rebuildHistoryFromProject(const ProjectHistory& hist,
+                                   const std::string& savedByVersion = "");
 
     // Dirty tracking + unsaved-changes prompt
     bool isDirty() const;
@@ -842,6 +843,14 @@ private:
     // geometry has no editable op behind it — we tell the user instead of
     // silently doing nothing.
     int m_edgeOpPickedBodyId = -1;
+    // Pre-edit geometry of the picked body, captured BEFORE the first editStep
+    // preview runs. Commit compares against these values to detect a frozen op
+    // (one that never actually changes the body). Capturing here rather than in
+    // commitInteractiveEdgeOp avoids a false-positive where the preview already
+    // brought the body to the new radius and the commit's editStep then looks
+    // "unchanged" because both snapshots are at the same new value.
+    double m_edgeOpPrePickedVol  = 0.0;
+    double m_edgeOpPrePickedArea = 0.0;
     // The radius/distance the op had when the edit began. Cancel (and the
     // confirm-at-zero "treat as cancel" path) restores it before replaying,
     // since the edit-mode live preview mutates the real op's parameter.
@@ -867,6 +876,11 @@ private:
     bool updateInteractiveEdgeOp();
     void commitInteractiveEdgeOp();
     void cancelInteractiveEdgeOp();
+    // Re-resolve every fillet/chamfer op's generated-face mapping against the
+    // current bodies. Must run after ANY editStep replay (commit, cancel, or
+    // zero-value bail) because the replay re-runs each op's execute(), leaving
+    // its faces at their pre-downstream-Transform positions until rebound.
+    void refreshAllEdgeOpFaces();
 
     // Resize-cylindrical (edit a closed cylindrical/conical face's diameter,
     // or a single circular edge of one) ====================================

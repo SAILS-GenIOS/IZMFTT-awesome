@@ -284,6 +284,28 @@ void Application::beginInteractiveEdgeOpEdit(int historyIndex) {
     // Clear the face selection so the gizmo / overlay rendering doesn't fight
     // a stale "Face Operations" panel while editing.
     m_selection->clear();
+
+    // Snapshot the picked body's geometry NOW — before the first editStep preview
+    // runs below. commitInteractiveEdgeOp() uses these as the "before" baseline
+    // to detect whether the edit actually changed anything.  If we let commit
+    // measure volBefore after the preview, it would compare "new radius" vs
+    // "new radius" (the preview already changed the body) and always report
+    // "unchanged" even for a successful edit.
+    m_edgeOpPrePickedVol  = 0.0;
+    m_edgeOpPrePickedArea = 0.0;
+    if (m_edgeOpPickedBodyId >= 0) {
+        try {
+            TopoDS_Shape s = m_document->getBody(m_edgeOpPickedBodyId);
+            if (!s.IsNull()) {
+                GProp_GProps gv, ga;
+                BRepGProp::VolumeProperties(s, gv);
+                BRepGProp::SurfaceProperties(s, ga);
+                m_edgeOpPrePickedVol  = gv.Mass();
+                m_edgeOpPrePickedArea = ga.Mass();
+            }
+        } catch (...) {}
+    }
+
     updateInteractiveEdgeOp();
 }
 
@@ -382,6 +404,7 @@ void Application::commitInteractiveEdgeOp() {
                            m_edgeOpOrigValue,
                            m_edgeOpTwoDist ? m_edgeOpOrigValue2 : -1.0f);
             m_history->editStep(m_edgeOpEditingIndex, *m_document);
+            refreshAllEdgeOpFaces();   // replayed — rebind every op's faces
         }
         m_edgeOpActive = false;
         m_edgeOpEditingIndex = -1;
@@ -394,46 +417,48 @@ void Application::commitInteractiveEdgeOp() {
 
     bool committed = true; // false if execute() rejected the result (create mode)
     if (m_edgeOpEditingIndex >= 0) {
-        // Geometric signature (volume + surface area) of the body whose face was
-        // clicked, so we can tell whether the edit actually changes what the user
-        // sees. A baked feature (frozen by an older save) leaves it untouched.
-        auto bodySig = [&](int id, double& vol, double& area) -> bool {
-            try {
-                TopoDS_Shape s = m_document->getBody(id);
-                if (s.IsNull()) return false;
-                GProp_GProps gv; BRepGProp::VolumeProperties(s, gv);  vol = gv.Mass();
-                GProp_GProps ga; BRepGProp::SurfaceProperties(s, ga); area = ga.Mass();
-                return true;
-            } catch (...) { return false; }
-        };
-        double volBefore = 0, areaBefore = 0;
-        const bool hadPicked = (m_edgeOpPickedBodyId >= 0) &&
-                               bodySig(m_edgeOpPickedBodyId, volBefore, areaBefore);
-
         // Update the existing op's parameter and rerun from that point so any
         // downstream ops (cuts, fillets stacked on this one, …) recompute too.
         setEdgeOpParam(m_history->getStep(m_edgeOpEditingIndex),
                        m_edgeOpType == EdgeOpType::Fillet,
                        m_edgeOpValue,
                        m_edgeOpTwoDist ? m_edgeOpValue2 : -1.0f);
-        m_history->editStep(m_edgeOpEditingIndex, *m_document);
+        bool editOk = m_history->editStep(m_edgeOpEditingIndex, *m_document);
+        // Refresh face→op mapping after the edit so ownsFace() works on the new
+        // body positions. The replay re-ran EVERY op's execute(), so every
+        // fillet/chamfer (not just the edited one) needs rebinding — otherwise
+        // the others' faces stay at their pre-Transform positions and become
+        // un-clickable until the next reload.
+        if (editOk) refreshAllEdgeOpFaces();
 
-        // If the clicked body's geometry is unchanged, the operation drives a
-        // different/deleted body — the feature the user sees is baked, with no
-        // editable op behind it. Say so instead of silently doing nothing.
-        if (hadPicked) {
+        // Detect a frozen op: the clicked body's geometry matches what we measured
+        // at beginInteractiveEdgeOpEdit() time — before any preview ran. If the
+        // commit didn't change the body at all from its original pre-edit state, the
+        // op likely drives a different/deleted body (save-corruption edge case).
+        // NOTE: we compare against the PRE-EDIT snapshot, not the post-preview
+        // snapshot. The preview already changed the body to the new radius, so a
+        // naive "before vs after this editStep" comparison would always report
+        // "unchanged" even for a perfectly working edit.
+        if (m_edgeOpPickedBodyId >= 0 &&
+            (m_edgeOpPrePickedVol != 0.0 || m_edgeOpPrePickedArea != 0.0)) {
             double volAfter = 0, areaAfter = 0;
-            const bool stillThere = bodySig(m_edgeOpPickedBodyId, volAfter, areaAfter);
-            const double vtol = 1e-6 * std::max(1.0, std::fabs(volBefore));
-            const double atol = 1e-6 * std::max(1.0, std::fabs(areaBefore));
-            const bool unchanged = stillThere &&
-                std::fabs(volAfter - volBefore) <= vtol &&
-                std::fabs(areaAfter - areaBefore) <= atol;
+            try {
+                TopoDS_Shape s = m_document->getBody(m_edgeOpPickedBodyId);
+                if (!s.IsNull()) {
+                    GProp_GProps gv, ga;
+                    BRepGProp::VolumeProperties(s, gv);  volAfter  = gv.Mass();
+                    BRepGProp::SurfaceProperties(s, ga); areaAfter = ga.Mass();
+                }
+            } catch (...) {}
+            const double vtol = 1e-6 * std::max(1.0, std::fabs(m_edgeOpPrePickedVol));
+            const double atol = 1e-6 * std::max(1.0, std::fabs(m_edgeOpPrePickedArea));
+            const bool unchanged =
+                std::fabs(volAfter  - m_edgeOpPrePickedVol)  <= vtol &&
+                std::fabs(areaAfter - m_edgeOpPrePickedArea) <= atol;
             if (unchanged) {
                 showToast("This fillet/chamfer is baked into the model \xE2\x80\x94 the "
-                          "geometry you clicked has no editable operation behind it "
-                          "(it was frozen by an older save). Re-apply it to make it "
-                          "adjustable.");
+                          "geometry you clicked has no editable operation behind it. "
+                          "Re-apply it to make it adjustable.");
             }
         }
         std::fprintf(stdout, "%s edited to %.1f mm\n",
@@ -503,7 +528,23 @@ void Application::cancelInteractiveEdgeOp() {
     m_edgeOpEdges.clear();
     m_edgeOpPreviousShape.Nullify();
     m_edgeOpType = EdgeOpType::None;
+    refreshAllEdgeOpFaces();   // body was replayed — rebind every op's faces
     m_meshesDirty = true;
+}
+
+void Application::refreshAllEdgeOpFaces() {
+    if (!m_history || !m_document) return;
+    for (int i = 0; i < m_history->stepCount(); ++i) {
+        const Operation* op = m_history->getStep(i);
+        if (!op || !op->isEnabled()) continue;
+        if (auto* f = const_cast<FilletOp*>(dynamic_cast<const FilletOp*>(op))) {
+            TopoDS_Shape b = m_document->getBody(f->getBodyId());
+            if (!b.IsNull()) f->refreshGeneratedFaces(b);
+        } else if (auto* c = const_cast<ChamferOp*>(dynamic_cast<const ChamferOp*>(op))) {
+            TopoDS_Shape b = m_document->getBody(c->getBodyId());
+            if (!b.IsNull()) c->refreshGeneratedFaces(b);
+        }
+    }
 }
 
 // ─── Edit Diameter (resize cylindrical / conical face) ──────────────────────

@@ -175,6 +175,10 @@ ProjectSaveResult ProjectIO::save(const std::string& filePath, const Document& d
     std::vector<int> bodyIds = doc.getAllBodyIds();
 
     ofs << "MATERIALIZR_PROJECT v3\n";
+#ifndef MATERIALIZR_VERSION
+#define MATERIALIZR_VERSION "0.0.0"
+#endif
+    ofs << "SAVED_BY " << MATERIALIZR_VERSION << "\n";
     ofs << "BODY_COUNT " << static_cast<int>(bodyIds.size()) << "\n";
 
     for (int id : bodyIds) {
@@ -606,6 +610,22 @@ ProjectLoadResult ProjectIO::load(const std::string& filePath, Document& doc,
             try { fileVersion = std::stoi(headerLine.substr(sp + 1)); } catch (...) {}
         }
     }
+
+    // Optional SAVED_BY line (written by builds that include version tagging).
+    // Peek at the next line; consume it only if it starts with SAVED_BY so
+    // older files that go straight to BODY_COUNT still parse correctly.
+    {
+        auto pos = ifs.tellg();
+        std::string peek;
+        if (std::getline(ifs, peek) && peek.rfind("SAVED_BY ", 0) == 0) {
+            result.savedByVersion = peek.substr(9); // after "SAVED_BY "
+        } else {
+            ifs.seekg(pos); // put it back — it's the BODY_COUNT line
+        }
+    }
+    std::fprintf(stderr, "[ProjectIO] file saved by: %s\n",
+                 result.savedByVersion.empty() ? "(pre-versioning build)"
+                                               : result.savedByVersion.c_str());
 
     std::string countLine;
     if (!std::getline(ifs, countLine)) {

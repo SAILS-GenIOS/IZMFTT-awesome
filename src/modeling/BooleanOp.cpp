@@ -3,6 +3,8 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
+#include <GProp_GProps.hxx>
+#include <BRepGProp.hxx>
 #include <cstdio>
 #include <cstdlib>
 #include <imgui.h>
@@ -71,6 +73,29 @@ bool BooleanOp::execute(Document& doc) {
                 }
                 resultShape = common.Shape();
                 break;
+            }
+        }
+
+        // Null/degenerate guard — IsDone() is necessary but not sufficient:
+        // OCCT can return a null or near-zero-volume compound while still
+        // reporting success. Committing that would silently corrupt the
+        // target body (it stores a null shape) and lose the tool body.
+        if (resultShape.IsNull()) {
+            std::fprintf(stderr, "[Boolean] result is null after %s "
+                         "(target=%d tool=%d) — refusing to commit.\n",
+                         m_mode == BooleanMode::Union ? "Fuse" :
+                         m_mode == BooleanMode::Subtract ? "Cut" : "Common",
+                         m_targetBodyId, m_toolBodyId);
+            return false;
+        }
+        {
+            GProp_GProps gp;
+            BRepGProp::VolumeProperties(resultShape, gp);
+            if (gp.Mass() < 1e-6) {
+                std::fprintf(stderr, "[Boolean] result volume ~= 0 "
+                             "(target=%d tool=%d) — refusing to commit.\n",
+                             m_targetBodyId, m_toolBodyId);
+                return false;
             }
         }
 

@@ -319,6 +319,13 @@ bool ChamferOp::rehydrateFromReload(const ReloadState& state, Document& /*doc*/)
     return true;
 }
 
+void ChamferOp::refreshGeneratedFaces(const TopoDS_Shape& currentBody) {
+    if (m_genFaceIndices.empty() || currentBody.IsNull()) return;
+    std::vector<TopoDS_Shape> gen;
+    if (SubShapeIndex::resolveAll(currentBody, m_genFaceIndices, TopAbs_FACE, gen))
+        m_generatedFaces = std::move(gen);
+}
+
 bool ChamferOp::ownsFace(const TopoDS_Shape& face) const {
     if (face.IsNull() || face.ShapeType() != TopAbs_FACE) return false;
     for (const auto& f : m_generatedFaces) {

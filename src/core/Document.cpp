@@ -5,6 +5,7 @@
 #include <gp_Ax3.hxx>
 #include <algorithm>
 #include <stdexcept>
+#include <cstdio>
 
 Document::Document() = default;
 Document::~Document() = default;
@@ -55,6 +56,8 @@ void Document::updateBody(int id, const TopoDS_Shape& shape) {
     if (idx >= 0) {
         m_bodies[idx].shape = shape;
         if (m_eventBus) m_eventBus->publish(materializr::DocumentModifiedEvent{true});
+    } else {
+        std::fprintf(stderr, "[doc] updateBody id=%d NOT FOUND\n", id);
     }
 }
 
@@ -65,7 +68,7 @@ void Document::putBody(int id, const TopoDS_Shape& shape, const std::string& nam
     // a non-existent body was serialized into a project's history.
     if (id < 0) {
         std::fprintf(stderr,
-                     "[Document] putBody called with id=%d — rejected.\n", id);
+                     "[doc] putBody id=%d — rejected (negative id).\n", id);
         return;
     }
     int idx = findBodyIndex(id);

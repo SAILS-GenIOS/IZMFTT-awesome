@@ -3,6 +3,24 @@
 All notable changes to Materializr are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [1.2.1] — 2026-06-21
+
+Parametric-edit reliability fixes found while dogfooding multi-feature parts.
+Backward compatible — existing projects open unchanged.
+
+### Fixed
+
+- **Editing a fillet/chamfer picks the right one.** Clicking a rounded face to
+  edit it no longer grabs a neighbouring fillet of a different radius, and the
+  "Edit Fillet/Chamfer" option no longer disappears after you cancel an edit.
+  Face→feature mapping is now matched by blend geometry instead of fragile
+  index bookkeeping, and is refreshed after every edit (commit *and* cancel).
+- **Editing an early feature no longer deletes geometry.** A body built from a
+  duplicated sketch (e.g. a lid) could, on a reloaded project, be cut into a
+  body it happened to overlap — deleting part of that body (a box losing its
+  floor) and stranding the rest of the history. A reloaded additive extrude now
+  faithfully recreates its own body instead.
+
 ## [1.2.0] — 2026-06-20
 
 Features that were long overlooked, plus a round of parametric-reliability and

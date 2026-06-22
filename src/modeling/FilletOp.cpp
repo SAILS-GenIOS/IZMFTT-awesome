@@ -12,8 +12,11 @@
 #include <BRepBndLib.hxx>
 #include <GProp_GProps.hxx>
 #include <BRepGProp.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <TopExp_Explorer.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
+#include <cmath>
 #include <imgui.h>
 
 namespace {
@@ -28,6 +31,22 @@ bool faceCenter(const TopoDS_Face& face, gp_Pnt& out) {
         gp.Normal((u0 + u1) * 0.5, (v0 + v1) * 0.5, out, n);
         return true;
     } catch (...) { return false; }
+}
+
+// Blend radius of a fillet face, if it is a recognisable analytic blend
+// surface (cylinder on a straight edge, torus/sphere where edges curve or
+// meet). Returns <0 when the face isn't such a surface — those we can't
+// discriminate by radius and must fall back to the saved indices.
+double faceBlendRadius(const TopoDS_Face& face) {
+    try {
+        BRepAdaptor_Surface s(face);
+        switch (s.GetType()) {
+            case GeomAbs_Cylinder: return s.Cylinder().Radius();
+            case GeomAbs_Torus:    return s.Torus().MinorRadius();
+            case GeomAbs_Sphere:   return s.Sphere().Radius();
+            default:               return -1.0;
+        }
+    } catch (...) { return -1.0; }
 }
 } // namespace
 
@@ -299,6 +318,47 @@ bool FilletOp::rehydrateFromReload(const ReloadState& state, Document& /*doc*/) 
         }
     }
     return true;
+}
+
+void FilletOp::refreshGeneratedFaces(const TopoDS_Shape& currentBody) {
+    if (currentBody.IsNull()) return;
+
+    // The saved indices were captured against THIS fillet's local result shape;
+    // resolving them against the final body (which may have more faces from
+    // later fillets, and may have been moved by downstream Transforms) can drift
+    // onto a neighbouring fillet's faces. So we rebind by geometry instead:
+    // a constant-radius fillet's blend faces are analytic surfaces of radius
+    // ≈ m_radius. Matching on radius keeps a 3 mm fillet from ever claiming a
+    // neighbouring 4 mm fillet's faces, and is invariant under rigid moves.
+    const double rtol = std::max(1e-3, 1e-2 * m_radius);
+
+    std::vector<TopoDS_Shape> result;
+    for (TopExp_Explorer ex(currentBody, TopAbs_FACE); ex.More(); ex.Next()) {
+        const TopoDS_Face& f = TopoDS::Face(ex.Current());
+        double r = faceBlendRadius(f);
+        if (r >= 0.0 && std::fabs(r - m_radius) <= rtol)
+            result.push_back(f);
+    }
+
+    // Add any index-resolved faces the radius scan can't classify (free-form
+    // blends), but exclude index faces whose radius clearly belongs to a
+    // DIFFERENT fillet — those are the drift this rebind exists to reject.
+    std::vector<TopoDS_Shape> idxFaces;
+    if (!m_genFaceIndices.empty() &&
+        SubShapeIndex::resolveAll(currentBody, m_genFaceIndices, TopAbs_FACE, idxFaces)) {
+        for (const auto& s : idxFaces) {
+            double r = faceBlendRadius(TopoDS::Face(s));
+            if (r >= 0.0 && std::fabs(r - m_radius) > rtol) continue; // wrong fillet
+            bool dup = false;
+            for (const auto& g : result) if (g.IsSame(s)) { dup = true; break; }
+            if (!dup) result.push_back(s);
+        }
+    }
+
+    if (!result.empty())
+        m_generatedFaces = std::move(result);
+    else if (!idxFaces.empty())
+        m_generatedFaces = std::move(idxFaces); // last-resort: trust the indices
 }
 
 bool FilletOp::ownsFace(const TopoDS_Shape& face) const {

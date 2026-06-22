@@ -341,18 +341,30 @@ bool PushPullOp::execute(Document& doc) {
                 doc.updateBody(tgt.sourceBodyId, result);
             } catch (...) { continue; }
         } else {
-            // Free-floating prism. When cut-intersecting is on, subtract it from
-            // every visible body it overlaps; if it hits nothing (or every cut is
-            // a no-op / invalid), fall back to creating a new body (prior
-            // behaviour).
-            bool cutAny = m_cutIntersecting && (cutVisibleBodies(prism, -1) > 0);
+            // Free-floating prism. Cut-intersecting subtracts it from every
+            // visible body it overlaps; if it hits nothing it falls back to a
+            // new body (the "free-space sketch that runs into a body cuts it"
+            // feature).
+            //
+            // BUT a REPLAY must reproduce what was saved. If this op previously
+            // created a body for this output (a reuse id is queued — set on redo,
+            // or on reload from the saved diff's created-id), it was a NEW-BODY
+            // extrude, not a cut. It must recreate that body even though its
+            // prism now overlaps an upstream body it didn't overlap at author
+            // time. Without this guard a reloaded additive extrude (e.g. a lid
+            // built from a duplicated sketch) silently cuts the overlapping box
+            // instead of creating its body — and the downstream boolean that
+            // consumes the missing body then hard-fails, stranding the whole
+            // replay (the "editing the box deletes its floor" bug).
+            bool willReuse = m_reuseIdx < m_reuseBodyIds.size();
+            bool cutAny = m_cutIntersecting && !willReuse &&
+                          (cutVisibleBodies(prism, -1) > 0);
             if (!cutAny) {
                 // Free-floating: create a new body. On redo, m_reuseBodyIds holds
                 // the ids from the previous execute so addOrPutBody picks the
                 // same one back up (Document's tombstone restore then brings the
                 // folder/colour/visibility/name back).
-                int id = (m_reuseIdx < m_reuseBodyIds.size())
-                           ? m_reuseBodyIds[m_reuseIdx] : -1;
+                int id = willReuse ? m_reuseBodyIds[m_reuseIdx] : -1;
                 doc.addOrPutBody(id, prism, m_distance > 0 ? "Push" : "Pull");
                 m_createdBodyIds.push_back(id);
                 ++m_reuseIdx;
@@ -541,7 +553,14 @@ bool PushPullOp::rehydrateFromReload(const ReloadState& state, Document& doc) {
     // A push/pull must have created or mutated SOMETHING; both sets empty
     // means the step's diff is missing from the file — decline so undo
     // doesn't silently no-op.
-    if (state.created.empty() && state.modifiedBefore.empty()) return false;
+    if (state.created.empty() && state.modifiedBefore.empty()) {
+        std::fprintf(stderr,
+            "[pushpull] rehydrateFromReload DECLINED: state.created and "
+            "state.modifiedBefore are BOTH EMPTY (dist=%.3f). This step has "
+            "NO body-tracking data in the file — will fall back to ReplayOp.\n",
+            m_distance);
+        return false;
+    }
     // Post-execution bookkeeping from the saved step's body delta, so undo()
     // removes/restores exactly the right bodies and a distance edit re-executes
     // under the same ids (tombstone metadata included).

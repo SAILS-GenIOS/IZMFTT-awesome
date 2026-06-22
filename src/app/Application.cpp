@@ -2822,7 +2822,8 @@ ProjectHistory Application::captureProjectHistory() {
     return h;
 }
 
-void Application::rebuildHistoryFromProject(const ProjectHistory& hist) {
+void Application::rebuildHistoryFromProject(const ProjectHistory& hist,
+                                            const std::string& savedByVersion) {
     m_history->clear();
     if (!hist.present) return;
 
@@ -2965,34 +2966,49 @@ void Application::rebuildHistoryFromProject(const ProjectHistory& hist) {
         m_history->pushExecuted(std::move(op));
     }
 
+    // After all ops are rehydrated, the document bodies reflect their final state
+    // (potentially after downstream Transforms). Re-resolve each fillet/chamfer's
+    // generated-face indices against the final body so ownsFace() matches the
+    // face positions the user actually sees and can click.
+    refreshAllEdgeOpFaces();
+
     // Health report. Two sources of non-editable geometry:
     //  • baked body-affecting STEPS (an op that didn't round-trip), and
-    //  • base bodies in the INITIAL STATE — geometry with no construction
-    //    history at all (imported, or frozen into the base by an older save's
-    //    history-loss bug). Features on those bodies (e.g. the fillet you see)
-    //    have no operation behind them and can't be edited. This is the real
-    //    cause behind "the fillet won't change", so surface it honestly.
-    const int baseBodies = static_cast<int>(hist.initialState.size());
+    //  • base bodies in the INITIAL STATE that are not touched by any history
+    //    step — geometry with no construction history (truly imported or frozen).
+    //
+    // A body in initialState that IS later modified by a step (common when the
+    // project was saved mid-undo, causing a push/pull to lose its created-body
+    // tracking) is NOT truly frozen: the ops still drive it. Count only bodies
+    // that no step's diff references at all.
+    std::set<int> touchedByOps;
+    for (const auto& st : hist.steps) {
+        for (const auto& [id, shp] : st.changed) touchedByOps.insert(id);
+    }
+    int frozenBodies = 0;
+    for (const auto& [id, shp] : hist.initialState) {
+        if (!touchedByOps.count(id)) ++frozenBodies;
+    }
     std::fprintf(stderr,
         "[Reload] health: %d steps, %d baked body-features, %d baked sketch-edits, "
-        "%d base bodies with NO editable history\n",
+        "%zu base bodies (%d truly frozen, %zu op-driven phantoms)\n",
         static_cast<int>(hist.steps.size()), bakedBodySteps, bakedSketchSteps,
-        baseBodies);
-    const int nonEditable = bakedBodySteps + baseBodies;
-    if (nonEditable > 0) {
-        // Honest wording: don't tell the user to "re-apply" — a baked fillet /
-        // chamfer has already consumed its edge, so there's nothing to select to
-        // redo it. The shapes are intact; point at Remove Face (defeaturing),
-        // which heals a baked round back to a sharp edge so it CAN be redone.
-        const int n        = baseBodies > 0 ? baseBodies : bakedBodySteps;
-        const char* what   = baseBodies > 0 ? "body(ies)" : "feature(s)";
+        hist.initialState.size(), frozenBodies,
+        hist.initialState.size() - static_cast<std::size_t>(frozenBodies));
+    const int nonEditable = bakedBodySteps + frozenBodies;
+    // Only warn about frozen geometry if the file predates version tagging
+    // (no SAVED_BY line). A file that WAS saved by a versioned build is current
+    // — phantom initialState bodies in it are save-tracking artifacts, not a
+    // true format downgrade, so we must not call it "older format".
+    if (nonEditable > 0 && savedByVersion.empty()) {
+        const int n        = frozenBodies > 0 ? frozenBodies : bakedBodySteps;
+        const char* what   = frozenBodies > 0 ? "body(ies)" : "feature(s)";
         std::string msg =
             "This project was saved in an older format: " + std::to_string(n) + " " +
             what + " are frozen and can't be edited by value. The shapes are intact "
             "\xE2\x80\x94 to change a baked round/chamfer, select its face and use "
             "Repair Geometry to restore the sharp edge, then redo it. New saves "
             "won't have this.";
-        // Long, important sentence shown once on load — give it a 9s dwell.
         showToast(msg, 9.0);
     }
 }
@@ -3064,7 +3080,7 @@ bool Application::loadProjectAt(const std::string& path) {
         std::fprintf(stderr, "Load failed: %s\n", result.errorMessage.c_str());
         return false;
     }
-    rebuildHistoryFromProject(hist);
+    rebuildHistoryFromProject(hist, result.savedByVersion);
     m_currentProjectPath = path;
     markSaved();
     m_meshesDirty = true;

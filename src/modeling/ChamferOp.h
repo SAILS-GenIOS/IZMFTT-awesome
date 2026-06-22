@@ -51,6 +51,10 @@ public:
     std::string serializeParams() const override;
     bool deserializeParams(const std::string& blob) override;
     bool rehydrateFromReload(const ReloadState& state, Document& doc) override;
+    // Re-resolve generated-face indices against the body's CURRENT shape (e.g.
+    // after downstream transforms moved the geometry). Called by the loader
+    // after all ops are rehydrated so ownsFace() works on the final body.
+    void refreshGeneratedFaces(const TopoDS_Shape& currentBody);
 
 private:
     int m_bodyId = -1;
