@@ -72,6 +72,13 @@ RUN patchelf --set-rpath '$ORIGIN/../lib' /AppDir/usr/bin/materializr || true
 RUN printf '[Desktop Entry]\nName=Materializr\nExec=materializr\nIcon=materializr\nType=Application\nCategories=Graphics;3DGraphics;Engineering;\nComment=Open-source parametric 3D CAD\nStartupWMClass=Materializr\n' \
     > /AppDir/materializr.desktop
 
+# AppStream metainfo — lets Gear Lever / AppImagePool / software centres
+# auto-populate the description, screenshot, links and release notes instead
+# of falling back to just the .desktop Name/Comment.
+RUN mkdir -p /AppDir/usr/share/metainfo \
+    && cp /src/com.materializr.app.metainfo.xml \
+        /AppDir/usr/share/metainfo/com.materializr.app.metainfo.xml
+
 # Use the project's icon.png if present at the repo root, resized to the
 # canonical 256x256 + 512x512 hicolor sizes so desktop environments pick
 # them up cleanly. Falls back to a tiny generated SVG placeholder during
