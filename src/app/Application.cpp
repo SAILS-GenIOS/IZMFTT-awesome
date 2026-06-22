@@ -4598,6 +4598,48 @@ void Application::run() {
             if (m_confirmedClose) break;
         }
 
+        // Autosave — MUST run before the idle short-circuit below. A change
+        // wakes only a brief render burst, then the loop idles and `continue`s
+        // past everything down-stream; if autosave lived after the skip it
+        // would essentially never fire for a model you edit and then leave
+        // alone. The timer uses SDL_GetTicks (wall clock) rather than
+        // ImGui::GetTime(), which is frozen while we're not rendering and so
+        // would never let the interval elapse during idle.
+        // Only for projects already on disk, only when there are pending
+        // changes; the interval is measured from the last save.
+        if (m_autosaveEnabled && !m_currentProjectPath.empty()) {
+            double now = SDL_GetTicks() / 1000.0;
+            if (isDirty()) {
+                // Never autosave while the user is below the history tip
+                // (mid undo-exploration): the file only persists APPLIED
+                // steps, so saving now would silently truncate the redo
+                // tail from the project. Resume once they redo back to the
+                // tip or push a new op (which discards the tail anyway).
+                if (m_history && m_history->canRedo()) {
+                    // hold off — keep checking each interval
+                } else if (anyInteractivePreviewActive() || m_inSketchMode ||
+                           m_edgeOpActive || m_moveFaceActive) {
+                    // hold off — an autosave must never cancel (or serialize) a
+                    // live tool preview / an in-progress sketch out from under
+                    // the user (a half-baked uncommitted-sketch state has
+                    // crashed before). Resume once the tool / sketch closes.
+                } else if (now - m_lastAutosaveTime >= m_autosaveIntervalSec) {
+                    // Defensive: a serialization failure (OCCT throw, bad
+                    // state) must never take the whole app down on a background
+                    // autosave — log and skip, try again next interval.
+                    try { saveProjectQuick(); }
+                    catch (...) {
+                        std::fprintf(stderr, "[Autosave] failed - skipped\n");
+                    }
+                    m_lastAutosaveTime = now;
+                }
+            } else {
+                m_lastAutosaveTime = now;
+            }
+        } else {
+            m_lastAutosaveTime = SDL_GetTicks() / 1000.0;
+        }
+
         // Skip rendering entirely when nothing has changed — saves ~30 % idle
         // GPU on a static viewport. hasActiveWork() is re-evaluated after the
         // deferred task and close checks above may have changed state.
@@ -4924,48 +4966,6 @@ void Application::run() {
             renderSketchRecoveryPrompt();
 
             handleShortcuts();
-        }
-
-        // Autosave: only for projects already on disk, and only when there are
-        // pending changes. The timer counts from the last save, so a quiet model
-        // never gets written and the interval is measured from when edits begin.
-        {
-            double now = ImGui::GetTime();
-            if (m_autosaveEnabled && !m_currentProjectPath.empty()) {
-                if (isDirty()) {
-                    // Never autosave while the user is below the history tip
-                    // (mid undo-exploration): the file only persists APPLIED
-                    // steps, so saving now would silently truncate the redo
-                    // tail from the project. Resume once they redo back to the
-                    // tip or push a new op (which discards the tail anyway).
-                    if (m_history && m_history->canRedo()) {
-                        // hold off — keep checking each interval
-                    } else if (anyInteractivePreviewActive() || m_inSketchMode ||
-                               m_edgeOpActive || m_moveFaceActive) {
-                        // hold off — an autosave must never cancel (or
-                        // serialize) a live tool preview / an in-progress
-                        // sketch out from under the user. anyInteractivePreview
-                        // missed sketch mode + the edge-op / Move Face previews,
-                        // so an autosave could fire mid-sketch and serialize a
-                        // half-baked, uncommitted-sketch state (crash risk).
-                        // Resume once the tool / sketch closes.
-                    } else if (now - m_lastAutosaveTime >= m_autosaveIntervalSec) {
-                        // Defensive: a serialization failure (OCCT throw, bad
-                        // state) must never take the whole app down on a
-                        // background autosave — log and skip, try again next
-                        // interval.
-                        try { saveProjectQuick(); }
-                        catch (...) {
-                            std::fprintf(stderr, "[Autosave] failed - skipped\n");
-                        }
-                        m_lastAutosaveTime = now;
-                    }
-                } else {
-                    m_lastAutosaveTime = now;
-                }
-            } else {
-                m_lastAutosaveTime = now;
-            }
         }
 
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
