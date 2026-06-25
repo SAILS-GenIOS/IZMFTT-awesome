@@ -3,6 +3,65 @@
 All notable changes to Materializr are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [1.2.5] — 2026-06-25
+
+Modeling and viewport polish.
+
+### Added
+
+- **Grid line thickness.** A "Grid thickness" slider (0.1×–2×) in Settings →
+  Appearance scales the grid line width, alongside the existing opacity and
+  shade controls. Applies to both the ground and sketch grids.
+
+### Fixed
+
+- **Move Face on a plain face.** Move Face wrongly refused an ordinary face
+  (e.g. a cube side) with an "only through-holes can be moved" message — the
+  hole detector flagged a face with no bore as a "pocket". Plain faces now move
+  normally; real hole-moving is unchanged.
+- **ViewCube no longer steals panel clicks.** Clicking a panel that overlaps the
+  ViewCube's corner (e.g. the Move Face *Cancel* button) registered as a
+  cube-face click and snapped the camera to that face. The cube now ignores
+  clicks an on-screen widget consumed.
+- **Orbiting out of a Top/Bottom view.** The first orbit after leaving a
+  straight-down/up view snapped the camera to a fixed right-side view; it now
+  tips off the pole following the view's current orientation.
+- **Splash flash.** Removed an occasional black flash on the startup splash by
+  priming both swap-chain buffers on the first frame.
+
+### Changed
+
+- **Move Face arrows** are coloured by world axis (X red, Y green, Z blue) to
+  match the main move gizmo, instead of a single yellow.
+- **Thicker gizmo handles** — the move arrows and rotate rings are easier to
+  grab.
+
+## [1.2.4] — 2026-06-24
+
+UI clarity and robustness.
+
+### Added
+
+- **Box / Cylinder / Sphere / Cone / Torus primitives**, authored in the Z-up UI
+  convention so they stand up correctly.
+- **Multi-target Subtract** — checkbox modal to subtract many tools from many
+  bodies at once, with an option to keep the tool bodies.
+
+### Fixed
+
+- **World grid** no longer drops out at grazing/level camera angles.
+- **Boolean robustness** — a tiny-fuzzy retry plus a `BRepCheck_Analyzer`
+  validity gate so a Subtract never commits self-intersecting geometry.
+- **Desktop startup** draws the UI without needing a click when the window
+  manager is slow to focus a terminal-launched window.
+
+### Changed
+
+- **Radial Pattern → Circular Pattern**, and **Lathe vs Revolve**: the toolbar
+  button reads "Lathe" for a selected sketch (spin a profile into a solid) and
+  "Revolve" for a body (rotate around an axis — a fan or hinge).
+- The **Shell** thickness slider snaps to 0.1.
+
 ## [1.2.3] — 2026-06-21
 
 Android startup fixes (regressions/oversights from 1.2.2).
