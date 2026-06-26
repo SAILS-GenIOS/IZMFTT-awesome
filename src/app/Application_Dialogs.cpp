@@ -274,15 +274,6 @@ void Application::renderSettings() {
                         "Opacity of the sketch-plane grid. Lower it if the grid "
                         "competes with your sketch lines; 0 hides it.");
 
-                    if (ImGui::SliderFloat("Grid shade", &m_sketchGridShade,
-                                           0.0f, 1.0f, "%.2f")) {
-                        changed = true;
-                    }
-                    ImGui::SetItemTooltip(
-                        "Sketch grid line shade: 0 = black, 1 = white. Go darker "
-                        "so the grid reads on a light/white body, lighter for a "
-                        "dark scene.");
-
                     if (ImGui::SliderFloat("Grid thickness", &m_sketchGridThickness,
                                            0.1f, 2.0f, "%.2fx")) {
                         changed = true;

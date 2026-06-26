@@ -60,7 +60,6 @@ uniform float u_depthBias;     // signed depth nudge: + toward camera (draw the
                                // grid ON a coplanar face, e.g. the sketch face),
                                // - away (let a coplanar body face occlude it)
 uniform float u_lightBg;       // 1 = light viewport: use dark-on-light line palette
-uniform float u_sketchShade;   // sketch grid line shade: 0 = black … 1 = white
 uniform float u_sketchThickness; // sketch grid line-width multiplier (1 = default)
 
 out vec4 fragColor;
@@ -125,14 +124,18 @@ void main() {
     // coarser tiers get DARKER, so the grid reads the same way against either
     // background instead of washing out.
     bool lightBg     = u_lightBg > 0.5;
-    // Sketch grid: a user-chosen greyscale shade (0 = black … 1 = white) so it
-    // can be made dark enough to read on a light/white body or light for a dark
-    // scene. The every-10th line pushes toward the opposite extreme for contrast.
-    vec3 sketchCol   = vec3(u_sketchShade);
-    vec3 sketchMajor = mix(sketchCol, vec3(u_sketchShade < 0.5 ? 1.0 : 0.0), 0.4);
-    vec3 minorCol    = lightBg ? vec3(0.60, 0.62, 0.68) : vec3(0.34, 0.34, 0.38);
-    vec3 majorCol    = lightBg ? vec3(0.38, 0.40, 0.47) : vec3(0.85, 0.87, 0.95);
-    vec3 megaCol     = lightBg ? vec3(0.18, 0.20, 0.27) : vec3(1.00, 1.00, 1.00);
+    // Sketch grid: a fixed mid-grey fine line with a noticeably DARKER every-10th
+    // so the decade lines read clearly while sketching. (Was a user "shade"
+    // slider — dropped: it only affected this grid and read as doing nothing in
+    // the normal 3D view.)
+    vec3 sketchCol   = vec3(0.50);
+    vec3 sketchMajor = vec3(0.26);
+    // World/ground grid: the minor (every-1) lines are dim, and the every-10th
+    // (major) + every-100th (mega) get progressively stronger so the decade lines
+    // stand out clearly against the rest.
+    vec3 minorCol    = lightBg ? vec3(0.62, 0.64, 0.70) : vec3(0.30, 0.30, 0.34);
+    vec3 majorCol    = lightBg ? vec3(0.32, 0.34, 0.41) : vec3(0.90, 0.92, 1.00);
+    vec3 megaCol     = lightBg ? vec3(0.16, 0.18, 0.25) : vec3(1.00, 1.00, 1.00);
 
     vec3  rgb;
     float a;
@@ -230,7 +233,6 @@ bool Grid::initialize()
     m_locSketchGrid = glGetUniformLocation(m_shaderProgram, "u_sketchGrid");
     m_locDepthBias = glGetUniformLocation(m_shaderProgram, "u_depthBias");
     m_locLightBg = glGetUniformLocation(m_shaderProgram, "u_lightBg");
-    m_locSketchShade = glGetUniformLocation(m_shaderProgram, "u_sketchShade");
     m_locSketchThickness = glGetUniformLocation(m_shaderProgram, "u_sketchThickness");
 
     // Create a dummy VAO (required for core profile, even with no vertex attributes)
@@ -243,7 +245,7 @@ void Grid::render(const glm::mat4& view, const glm::mat4& projection,
                   const glm::vec3& fadeCenter, float fadeDistance,
                   const Plane& plane, float minorStep,
                   float minorAlpha, float globalAlpha, float sketchGrid,
-                  float depthBias, float lightBg, float sketchShade,
+                  float depthBias, float lightBg,
                   float sketchThickness)
 {
     if (!m_shaderProgram) return;
@@ -267,7 +269,6 @@ void Grid::render(const glm::mat4& view, const glm::mat4& projection,
     glUniform1f(m_locSketchGrid, sketchGrid);
     glUniform1f(m_locDepthBias, depthBias);
     glUniform1f(m_locLightBg, lightBg);
-    glUniform1f(m_locSketchShade, sketchShade);
     glUniform1f(m_locSketchThickness, sketchThickness);
 
     // Enable blending for grid transparency

@@ -1377,7 +1377,6 @@ AppSettings Application::currentSettings() const {
     s.selectionLineWidth = m_selectionLineWidth;
     s.sketchLineWidth = m_sketchLineWidth;
     s.sketchGridOpacity = m_sketchGridOpacity;
-    s.sketchGridShade = m_sketchGridShade;
     s.sketchGridThickness = m_sketchGridThickness;
     s.smallScreenWarned = m_smallScreenWarned;
     s.leftPanelHidden = m_leftPanelHidden;
@@ -1445,7 +1444,6 @@ void Application::applyAppSettings(const AppSettings& s) {
     m_selectionLineWidth = s.selectionLineWidth;
     m_sketchLineWidth = s.sketchLineWidth;
     m_sketchGridOpacity = s.sketchGridOpacity;
-    m_sketchGridShade = s.sketchGridShade;
     m_sketchGridThickness = s.sketchGridThickness;
     m_smallScreenWarned = s.smallScreenWarned;
     m_leftPanelHidden = s.leftPanelHidden;

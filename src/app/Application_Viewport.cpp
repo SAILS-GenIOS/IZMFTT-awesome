@@ -296,7 +296,6 @@ void Application::renderViewport() {
                            sketching ? 1.0f : 0.0f /*sketchGrid: uniform single tier*/,
                            sketching ? 0.0005f : -0.0005f /*depthBias*/,
                            lightBg ? 1.0f : 0.0f /*lightBg palette*/,
-                           m_sketchGridShade /*sketch grid greyscale*/,
                            m_sketchGridThickness /*sketch grid line width*/);
         };
         // Plugin-registered render passes (e.g. ConstructionPlanePlugin's
