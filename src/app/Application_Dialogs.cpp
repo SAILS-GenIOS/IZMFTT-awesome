@@ -387,9 +387,14 @@ void Application::renderSettings() {
                         ImGui::SeparatorText("Touch sensitivity");
                         ImGui::TextWrapped("Scale how far the camera moves per gesture "
                                            "(1.00x = default).");
-                        if (ImGui::SliderFloat("Orbit", &m_touchOrbitSens, 0.25f, 3.0f, "%.2fx")) changed = true;
-                        if (ImGui::SliderFloat("Pan",   &m_touchPanSens,   0.25f, 3.0f, "%.2fx")) changed = true;
-                        if (ImGui::SliderFloat("Zoom",  &m_touchZoomSens,  0.25f, 3.0f, "%.2fx")) changed = true;
+                        // ##suffix keeps the visible label ("Orbit"/"Pan") but
+                        // gives a unique ID: the Orbit/Pan mouse-button Combos
+                        // above share this tab's ID scope, so a bare "Orbit"/"Pan"
+                        // slider collided with them (ImGui id-conflict warning).
+                        // Zoom had no matching Combo, which is why it never warned.
+                        if (ImGui::SliderFloat("Orbit##touchSens", &m_touchOrbitSens, 0.25f, 3.0f, "%.2fx")) changed = true;
+                        if (ImGui::SliderFloat("Pan##touchSens",   &m_touchPanSens,   0.25f, 3.0f, "%.2fx")) changed = true;
+                        if (ImGui::SliderFloat("Zoom##touchSens",  &m_touchZoomSens,  0.25f, 3.0f, "%.2fx")) changed = true;
                     }
                     ImGui::EndTabItem();
                 }

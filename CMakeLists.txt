@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Materializr VERSION 1.2.6 LANGUAGES CXX)
+project(Materializr VERSION 1.2.7 LANGUAGES CXX)
 
 # macOS: deliberately do NOT pin CMAKE_OSX_DEPLOYMENT_TARGET. The bundled Homebrew
 # OpenCASCADE/SDL2 dylibs are built for the build host's macOS, so they — not our
@@ -373,6 +373,20 @@ endif()
 # a single source of truth (the project() VERSION at the top of this file).
 target_compile_definitions(materializr PRIVATE
     MATERIALIZR_VERSION="${PROJECT_VERSION}")
+
+# OCC_CONVERT_SIGNALS turns the OCC_CATCH_SIGNALS macro into a real
+# Standard_ErrorHandler so that an OCCT kernel fault (SIGSEGV/SIGFPE deep inside
+# the modelling algorithms) longjmps to the nearest op-level try{} instead of
+# aborting the whole app. OSD::SetSignal() (in main.cpp) installs the handler;
+# this macro is what lets a `catch` actually receive the converted exception.
+# OCCT's own cmake only exports this for the RelWithDebInfo config, so our
+# Release AppImage was shipping with it OFF — every OCC_CATCH_SIGNALS (ShellOp,
+# MoveFaceOp, …) silently expanded to nothing and kernel faults killed the app
+# (issue #3: Shell-on-Shell crash). Define it unconditionally on Unix/Linux.
+# Not for Windows/MSVC, which throws from the signal handler natively (/EHa).
+if(NOT WIN32)
+    target_compile_definitions(materializr PRIVATE OCC_CONVERT_SIGNALS)
+endif()
 
 # libcurl powers the Help → Check for Updates feature (a small HTTPS GET to
 # GitHub's releases API). Required on both platforms.
