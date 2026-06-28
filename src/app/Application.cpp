@@ -2741,6 +2741,21 @@ void Application::handleViewCubeAction(int action) {
         case ViewCubeAction::FrontBottomLeft:  dir = {-1,-1, 1}; break;
         case ViewCubeAction::BackBottomRight:  dir = { 1,-1,-1}; break;
         case ViewCubeAction::BackBottomLeft:   dir = {-1,-1,-1}; break;
+        // Edge (two-face) views: look down the seam of two faces (one zero
+        // component) so both are visible. up stays world +Y — never parallel to
+        // an edge dir since each has a non-zero horizontal component.
+        case ViewCubeAction::TopFront:     dir = { 0, 1, 1}; break;
+        case ViewCubeAction::TopBack:      dir = { 0, 1,-1}; break;
+        case ViewCubeAction::TopLeft:      dir = {-1, 1, 0}; break;
+        case ViewCubeAction::TopRight:     dir = { 1, 1, 0}; break;
+        case ViewCubeAction::BottomFront:  dir = { 0,-1, 1}; break;
+        case ViewCubeAction::BottomBack:   dir = { 0,-1,-1}; break;
+        case ViewCubeAction::BottomLeft:   dir = {-1,-1, 0}; break;
+        case ViewCubeAction::BottomRight:  dir = { 1,-1, 0}; break;
+        case ViewCubeAction::FrontLeft:    dir = {-1, 0, 1}; break;
+        case ViewCubeAction::FrontRight:   dir = { 1, 0, 1}; break;
+        case ViewCubeAction::BackLeft:     dir = {-1, 0,-1}; break;
+        case ViewCubeAction::BackRight:    dir = { 1, 0,-1}; break;
         default: return;
     }
     dir = glm::normalize(dir);

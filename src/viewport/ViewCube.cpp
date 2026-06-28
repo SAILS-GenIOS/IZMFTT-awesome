@@ -174,6 +174,46 @@ ViewCubeAction ViewCube::render(Camera& camera, bool invertDrag, bool lightMode)
         }
     }
 
+    // --- Edge click-spots: clicking the seam between two visible faces snaps to
+    //     a two-face view (looking down that edge). Hover-revealed with no
+    //     persistent marker so the small cube stays uncluttered — hovering near a
+    //     cube edge highlights the whole segment. Tested after faces (an edge
+    //     wins over the face it lies on) but before corners (a corner still wins
+    //     at the very ends, since the hit zone is restricted to the mid-segment).
+    struct Edge { int a, b; ViewCubeAction act; };
+    static const Edge kEdges[12] = {
+        {6,7, ViewCubeAction::TopFront},    {2,3, ViewCubeAction::TopBack},
+        {3,7, ViewCubeAction::TopLeft},     {2,6, ViewCubeAction::TopRight},
+        {4,5, ViewCubeAction::BottomFront}, {0,1, ViewCubeAction::BottomBack},
+        {0,4, ViewCubeAction::BottomLeft},  {1,5, ViewCubeAction::BottomRight},
+        {4,7, ViewCubeAction::FrontLeft},   {5,6, ViewCubeAction::FrontRight},
+        {0,3, ViewCubeAction::BackLeft},    {1,2, ViewCubeAction::BackRight},
+    };
+    for (const auto& e : kEdges) {
+        // Both endpoints must face the camera, else the edge is on the far side.
+        if (eyeZ(kCorners[e.a]) < 0.0f || eyeZ(kCorners[e.b]) < 0.0f) continue;
+        ImVec2 A = sc[e.a], B = sc[e.b];
+        ImVec2 ab(B.x - A.x, B.y - A.y);
+        float lenSq = ab.x * ab.x + ab.y * ab.y;
+        float t = ((mp.x - A.x) * ab.x + (mp.y - A.y) * ab.y) / std::max(lenSq, 1e-6f);
+        bool hover = false;
+        if (t > 0.2f && t < 0.8f) { // mid-segment only; ends belong to corners
+            ImVec2 p(A.x + ab.x * t, A.y + ab.y * t);
+            float d = std::sqrt((mp.x - p.x) * (mp.x - p.x) +
+                                (mp.y - p.y) * (mp.y - p.y));
+            hover = d < 6.0f * ts;
+        }
+        if (hover) {
+            // Highlight the whole seam so it's clear which two faces will show.
+            dl->AddLine(A, B, IM_COL32(255, 220, 80, 255), 3.0f * ts);
+            cubeHover = true;
+            if (cubeClicked()) {
+                m_pendingClick = e.act;
+                m_cubeDragging = false;
+            }
+        }
+    }
+
     // --- Corner click-spots: a small dot at each visible vertex snaps to the
     //     matching isometric view. We test corners after faces so a face hover
     //     wins when they overlap (corner spots sit inside the face polygons).
