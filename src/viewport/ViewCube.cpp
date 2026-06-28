@@ -139,15 +139,43 @@ ViewCubeAction ViewCube::render(Camera& camera, bool invertDrag, bool lightMode)
     struct VisFace { int idx; float depth; };
     std::vector<VisFace> drawList;
     drawList.reserve(6);
+    bool faceFront[6] = { false, false, false, false, false, false };
     for (int i = 0; i < 6; ++i) {
         glm::vec4 ne = V * glm::vec4(kFaces[i].n, 0.0f);
         if (ne.z > 0.0f) {
+            faceFront[i] = true;
             glm::vec3 ctr3 = kFaces[i].n; // face center is the normal scaled to 1
             drawList.push_back({i, eyeZ(ctr3)});
         }
     }
     std::sort(drawList.begin(), drawList.end(),
               [](const VisFace& a, const VisFace& b){ return a.depth < b.depth; });
+
+    // A cube vertex / edge is part of the visible silhouette — and so clickable —
+    // whenever it borders a front-facing face. The earlier code culled on the
+    // corner's OWN eye-space Z (eyeZ(corner) < 0), which crosses zero at ~45° for
+    // the side corners of a face that is itself still visible (front-facing up to
+    // 90°). That made edges and corner dots vanish as soon as a face tilted past
+    // 45°. Keying off face-adjacency instead matches the real silhouette.
+    auto cornerVisible = [&](int ci) {
+        for (int f = 0; f < 6; ++f) {
+            if (!faceFront[f]) continue;
+            for (int k = 0; k < 4; ++k) if (kFaces[f].c[k] == ci) return true;
+        }
+        return false;
+    };
+    auto edgeVisible = [&](int a, int b) {
+        for (int f = 0; f < 6; ++f) {
+            if (!faceFront[f]) continue;
+            bool ha = false, hb = false;
+            for (int k = 0; k < 4; ++k) {
+                if (kFaces[f].c[k] == a) ha = true;
+                if (kFaces[f].c[k] == b) hb = true;
+            }
+            if (ha && hb) return true;
+        }
+        return false;
+    };
 
     for (auto& vf : drawList) {
         const Face& f = kFaces[vf.idx];
@@ -190,8 +218,8 @@ ViewCubeAction ViewCube::render(Camera& camera, bool invertDrag, bool lightMode)
         {0,3, ViewCubeAction::BackLeft},    {1,2, ViewCubeAction::BackRight},
     };
     for (const auto& e : kEdges) {
-        // Both endpoints must face the camera, else the edge is on the far side.
-        if (eyeZ(kCorners[e.a]) < 0.0f || eyeZ(kCorners[e.b]) < 0.0f) continue;
+        // Visible while either face sharing this edge faces the camera.
+        if (!edgeVisible(e.a, e.b)) continue;
         ImVec2 A = sc[e.a], B = sc[e.b];
         ImVec2 ab(B.x - A.x, B.y - A.y);
         float lenSq = ab.x * ab.x + ab.y * ab.y;
@@ -228,7 +256,7 @@ ViewCubeAction ViewCube::render(Camera& camera, bool invertDrag, bool lightMode)
         ViewCubeAction::FrontTopLeft       // 7: -X +Y +Z
     };
     for (int i = 0; i < 8; ++i) {
-        if (eyeZ(kCorners[i]) < 0.0f) continue; // back-of-cube vertex
+        if (!cornerVisible(i)) continue; // vertex with no front-facing face
         ImVec2 cp = sc[i];
         float dist = std::sqrt((mp.x - cp.x) * (mp.x - cp.x) +
                                (mp.y - cp.y) * (mp.y - cp.y));
