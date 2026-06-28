@@ -4791,6 +4791,15 @@ void Application::run() {
         // makes the whole desktop's cursor lag on a shared GPU, and it's pure
         // waste on mobile. Autosave + deferred tasks below still run; FOCUS_GAINED
         // is a significant event so we repaint instantly on return.
+        // Force continuous rendering for a short grace right after launch so the
+        // splash→UI handoff ALWAYS completes on its own. At a fresh idle startup
+        // there's no input event (m_wakeFrames == 0) and no active work, so the
+        // idle-skip below would otherwise leave the first real UI frame undrawn
+        // behind the loading screen until the user clicks or moves the mouse.
+        // This is a hard override of BOTH the focus gate and the idle-skip — the
+        // earlier "foreground for 3 s" only neutralised the focus term, leaving
+        // the idle term to still skip (the splash-hang regression).
+        const bool launchGrace = (SDL_GetTicks() - runStartMs < 3000u);
 #if defined(__ANDROID__)
         // Android exemption: the OS already pauses the activity (and SDL the GL
         // surface) when backgrounded, so the gate buys nothing here — and
@@ -4798,20 +4807,17 @@ void Application::run() {
         // froze the startup splash→UI handoff until the user tapped the screen.
         const bool foreground = true;
 #else
-        // Desktop: respect window focus to suspend when backgrounded — BUT force
-        // rendering for a short grace after launch. The WM may not report
-        // INPUT_FOCUS for a beat (especially when launched from a terminal that
-        // keeps focus), and the idle-skip below would otherwise leave the first
-        // real UI frame undrawn behind the loading screen until the user clicks.
-        const bool foreground = m_window->isForeground() ||
-                                (SDL_GetTicks() - runStartMs < 3000u);
+        // Desktop: respect window focus to suspend when backgrounded.
+        const bool foreground = m_window->isForeground() || launchGrace;
 #endif
 
         // When idle (or backgrounded), block up to 500 ms for the next event.
         // 500 ms is enough for autosave / update-check polling; anything
         // interactive wakes us immediately via SDL events. Force the wait when
-        // backgrounded so an active preview can't busy-spin pollEvents(0).
-        int waitMs = (!foreground || (m_wakeFrames == 0 && !hasActiveWork())) ? 500 : 0;
+        // backgrounded so an active preview can't busy-spin pollEvents(0). During
+        // the launch grace we never block — keep frames flowing for the handoff.
+        int waitMs = (!launchGrace &&
+                      (!foreground || (m_wakeFrames == 0 && !hasActiveWork()))) ? 500 : 0;
         int eventLevel = m_window->pollEvents(waitMs);
         // Significant events (click, key, scroll, resize, focus): 5 frames.
         // Trivial events (mouse motion, expose): 25 frames — at 60 fps that is
@@ -4932,8 +4938,9 @@ void Application::run() {
 
         // Skip rendering entirely when nothing has changed — saves ~30 % idle
         // GPU on a static viewport. hasActiveWork() is re-evaluated after the
-        // deferred task and close checks above may have changed state.
-        if (!foreground || (m_wakeFrames == 0 && !hasActiveWork())) continue;
+        // deferred task and close checks above may have changed state. The launch
+        // grace overrides the skip so the first real UI frame draws on its own.
+        if (!launchGrace && (!foreground || (m_wakeFrames == 0 && !hasActiveWork()))) continue;
         if (m_wakeFrames > 0) m_wakeFrames--;
         ++perfRendered;   // passed the idle skip → this iteration renders a frame
 
