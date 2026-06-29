@@ -129,7 +129,6 @@ namespace materializr { namespace force_link { void linkAll(); } }
 #include <TopExp.hxx>
 #include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <TopTools_ListOfShape.hxx>
-#include <TopTools_ListIteratorOfListOfShape.hxx>
 #include <TopTools_MapOfShape.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_GTransform.hxx>
@@ -3995,9 +3994,10 @@ void Application::enterSketchOnFace(const TopoDS_Face& face, int sourceBodyId) {
                         for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More(); ex.Next()) {
                             const TopoDS_Shape& he = ex.Current();
                             if (!edgeFaceMap.Contains(he)) continue;
-                            const TopTools_ListOfShape& adj = edgeFaceMap.FindFromKey(he);
-                            for (TopTools_ListIteratorOfListOfShape it(adj); it.More(); it.Next()) {
-                                const TopoDS_Shape& nf = it.Value();
+                            // Range-based loop instead of
+                            // TopTools_ListIteratorOfListOfShape — vcpkg OCCT
+                            // drops that standalone iterator header on Windows.
+                            for (const TopoDS_Shape& nf : edgeFaceMap.FindFromKey(he)) {
                                 if (nf.IsSame(face)) continue;
                                 if (!seenFaces.Add(nf)) continue; // already projected
                                 processFace(TopoDS::Face(nf));
