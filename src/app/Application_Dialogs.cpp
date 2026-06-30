@@ -66,7 +66,16 @@
 #include "io/FileDialogs.h"
 #include "io/ProjectIO.h"
 #include "io/Settings.h"
+#include "modeling/Unfold.h"
+#include "core/SheetSpec.h"
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Face.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <GeomAbs_SurfaceType.hxx>
 #include <algorithm>
+#include <cstdio>
+#include <cstdarg>
 #include "core/EventBus.h"
 #include "plugin/PluginContext.h"
 #include "plugin/PluginRegistry.h"
@@ -3296,6 +3305,544 @@ void Application::renderStlImportDialog() {
         ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         cancelStlImport();
     }
+    ImGui::End();
+}
+
+// ─── Unfold / Flatten ────────────────────────────────────────────────────────
+
+namespace {
+
+// Offset a fold segment perpendicular by ±d → the two parallel marking lines
+// (foam V-groove edges, or rigid mitre cut edges).
+void foldOffsetLines(const materializr::FoldLine& fl, double d,
+                     glm::dvec2& a1, glm::dvec2& b1, glm::dvec2& a2, glm::dvec2& b2) {
+    glm::dvec2 u = fl.b - fl.a;
+    const double len = glm::length(u);
+    u = (len > 1e-9) ? u / len : glm::dvec2{1, 0};
+    const glm::dvec2 n{-u.y, u.x};
+    a1 = fl.a + d * n; b1 = fl.b + d * n;
+    a2 = fl.a - d * n; b2 = fl.b - d * n;
+}
+
+// Write a 1:1-mm SVG. cut = solid black (the outline). For SemiRigid the fold
+// layer is the score centreline plus the V-groove offset edges; for Rigid it's
+// the mitre cut edges; Pliable emits no fold marks at all.
+bool writeFlatPatternSvg(const std::string& path, const materializr::FlatPattern& fp,
+                         materializr::FoldMode foldMode, double thicknessMm) {
+    double minx = 1e300, miny = 1e300, maxx = -1e300, maxy = -1e300;
+    auto grow = [&](const glm::dvec2& p) {
+        minx = std::min(minx, p.x); miny = std::min(miny, p.y);
+        maxx = std::max(maxx, p.x); maxy = std::max(maxy, p.y);
+    };
+    for (const auto& f : fp.faces)
+        for (const auto& l : f.loops)
+            for (const auto& p : l.pts) grow(p);
+    for (const auto& fl : fp.folds) { grow(fl.a); grow(fl.b); }
+    if (minx > maxx) return false;
+
+    const double M = 5.0;
+    const double W = (maxx - minx) + 2 * M;
+    const double H = (maxy - miny) + 2 * M;
+    auto X = [&](double x) { return (x - minx) + M; };
+    auto Y = [&](double y) { return (maxy - y) + M; };   // flip to SVG top-left
+
+    FILE* f = std::fopen(path.c_str(), "w");
+    if (!f) return false;
+    std::fprintf(f, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    std::fprintf(f, "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%.3fmm\" "
+                    "height=\"%.3fmm\" viewBox=\"0 0 %.3f %.3f\">\n", W, H, W, H);
+    auto line = [&](glm::dvec2 a, glm::dvec2 b) {
+        std::fprintf(f, "  <line x1=\"%.3f\" y1=\"%.3f\" x2=\"%.3f\" y2=\"%.3f\"/>\n",
+                     X(a.x), Y(a.y), X(b.x), Y(b.y));
+    };
+
+    std::fprintf(f, "<g id=\"cut\" fill=\"none\" stroke=\"#000000\" stroke-width=\"0.2\">\n");
+    for (const auto& face : fp.faces)
+        for (const auto& l : face.loops) {
+            if (l.pts.size() < 2) continue;
+            std::fprintf(f, "  <polygon points=\"");
+            for (const auto& p : l.pts) std::fprintf(f, "%.3f,%.3f ", X(p.x), Y(p.y));
+            std::fprintf(f, "\"/>\n");
+        }
+    std::fprintf(f, "</g>\n");
+
+    if (foldMode == materializr::FoldMode::Score) {
+        std::fprintf(f, "<g id=\"score\" stroke=\"#0066ff\" stroke-width=\"0.2\" "
+                        "stroke-dasharray=\"2,1\">\n");
+        for (const auto& fl : fp.folds) line(fl.a, fl.b);   // hinge centrelines
+        std::fprintf(f, "</g>\n");
+        std::fprintf(f, "<g id=\"bevel\" fill=\"none\" stroke=\"#ff8000\" stroke-width=\"0.15\">\n");
+        for (const auto& fl : fp.folds) {                   // V-groove edges
+            const double d = materializr::sheetFoldOffsetMm(thicknessMm, fl.foldAngleDeg);
+            if (d < 1e-3) continue;
+            glm::dvec2 a1, b1, a2, b2; foldOffsetLines(fl, d, a1, b1, a2, b2);
+            line(a1, b1); line(a2, b2);
+        }
+        std::fprintf(f, "</g>\n");
+    } else if (foldMode == materializr::FoldMode::Miter) {
+        std::fprintf(f, "<g id=\"miter\" fill=\"none\" stroke=\"#ff8000\" stroke-width=\"0.2\">\n");
+        for (const auto& fl : fp.folds) {                   // mitre cut edges
+            const double d = materializr::sheetFoldOffsetMm(thicknessMm, fl.foldAngleDeg);
+            glm::dvec2 a1, b1, a2, b2; foldOffsetLines(fl, std::max(d, 1e-3), a1, b1, a2, b2);
+            line(a1, b1); line(a2, b2);
+        }
+        std::fprintf(f, "</g>\n");
+    }
+    // Pliable: no fold marks.
+
+    std::fprintf(f, "</svg>\n");
+    std::fclose(f);
+    return true;
+}
+
+// Append a printf-formatted line to a PDF content stream / object body.
+void pdff(std::string& s, const char* fmt, ...) {
+    char buf[256];
+    va_list ap; va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    s += buf;
+}
+
+// Write the flat pattern as a TILED, 1:1 (full-size) PDF: each page is a US
+// Letter sheet carrying a slice of the pattern, with crop marks at the content
+// corners, an overlap between tiles for assembly, and a 50 mm scale bar in the
+// bottom strip so the print can be checked for true scale. Hand-rolled minimal
+// PDF (vector line art only) — no external dependency, matching the SVG path.
+bool writeFlatPatternPdf(const std::string& path, const materializr::FlatPattern& fp,
+                         materializr::FoldMode foldMode, double thicknessMm, bool a4) {
+    double minx = 1e300, miny = 1e300, maxx = -1e300, maxy = -1e300;
+    auto grow = [&](const glm::dvec2& p) {
+        minx = std::min(minx, p.x); miny = std::min(miny, p.y);
+        maxx = std::max(maxx, p.x); maxy = std::max(maxy, p.y);
+    };
+    for (const auto& f : fp.faces) for (const auto& l : f.loops) for (const auto& p : l.pts) grow(p);
+    for (const auto& fl : fp.folds) { grow(fl.a); grow(fl.b); }
+    if (minx > maxx) return false;
+
+    const double K = 72.0 / 25.4;            // points per millimetre (1:1 scale)
+    const double pad = 5.0;                  // mm of whitespace around the art
+    const double Wmm = (maxx - minx) + 2 * pad, Hmm = (maxy - miny) + 2 * pad;
+    auto DX = [&](double x) { return (x - minx) + pad; };   // world → drawing mm (Y up)
+    auto DY = [&](double y) { return (y - miny) + pad; };
+
+    const double pageWpt = a4 ? 595.28 : 612.0;             // A4 vs US Letter, portrait
+    const double pageHpt = a4 ? 841.89 : 792.0;
+    const double margin = 12.0, strip = 12.0, overlap = 12.0;  // mm
+    const double pageWmm = pageWpt / K, pageHmm = pageHpt / K;
+    const double cwMM = pageWmm - 2 * margin;               // tile content width
+    const double chMM = pageHmm - 2 * margin - strip;       // tile content height
+    const double stepX = std::max(10.0, cwMM - overlap), stepY = std::max(10.0, chMM - overlap);
+    auto tiles = [&](double total, double content, double step) {
+        return total <= content ? 1 : 1 + int(std::ceil((total - content) / step));
+    };
+    const int nCols = tiles(Wmm, cwMM, stepX), nRows = tiles(Hmm, chMM, stepY);
+
+    auto pageStream = [&](int col, int row) -> std::string {
+        const double ox = col * stepX, oy = row * stepY;    // tile origin (drawing mm)
+        auto PX = [&](double dxmm) { return (margin + (dxmm - ox)) * K; };
+        auto PY = [&](double dymm) { return (margin + strip + (dymm - oy)) * K; };
+        std::string s;
+        // Clip to the tile's content rectangle.
+        pdff(s, "q\n%.2f %.2f %.2f %.2f re W n\n", margin * K, (margin + strip) * K, cwMM * K, chMM * K);
+        // Cut outline (black, closed loops).
+        pdff(s, "0 0 0 RG 0.5 w\n");
+        for (const auto& face : fp.faces)
+            for (const auto& l : face.loops) {
+                if (l.pts.size() < 2) continue;
+                pdff(s, "%.2f %.2f m\n", PX(DX(l.pts[0].x)), PY(DY(l.pts[0].y)));
+                for (size_t i = 1; i < l.pts.size(); ++i)
+                    pdff(s, "%.2f %.2f l\n", PX(DX(l.pts[i].x)), PY(DY(l.pts[i].y)));
+                pdff(s, "h\n");
+            }
+        pdff(s, "S\n");
+        auto strokeSegs = [&](const std::vector<std::array<glm::dvec2, 2>>& segs) {
+            for (const auto& sg : segs) {
+                pdff(s, "%.2f %.2f m\n", PX(DX(sg[0].x)), PY(DY(sg[0].y)));
+                pdff(s, "%.2f %.2f l\n", PX(DX(sg[1].x)), PY(DY(sg[1].y)));
+            }
+            pdff(s, "S\n");
+        };
+        if (foldMode == materializr::FoldMode::Score) {
+            pdff(s, "0 0.4 1 RG 0.4 w [2 1] 0 d\n");                  // hinge centrelines
+            { std::vector<std::array<glm::dvec2, 2>> segs;
+              for (const auto& fl : fp.folds) segs.push_back({fl.a, fl.b}); strokeSegs(segs); }
+            pdff(s, "[] 0 d\n1 0.5 0 RG 0.35 w\n");                   // bevel V-groove edges
+            { std::vector<std::array<glm::dvec2, 2>> segs;
+              for (const auto& fl : fp.folds) {
+                  const double d = materializr::sheetFoldOffsetMm(thicknessMm, fl.foldAngleDeg);
+                  if (d < 1e-3) continue;
+                  glm::dvec2 a1, b1, a2, b2; foldOffsetLines(fl, d, a1, b1, a2, b2);
+                  segs.push_back({a1, b1}); segs.push_back({a2, b2});
+              }
+              strokeSegs(segs); }
+        } else if (foldMode == materializr::FoldMode::Miter) {
+            pdff(s, "1 0.5 0 RG 0.4 w\n");                            // mitre cut edges
+            std::vector<std::array<glm::dvec2, 2>> segs;
+            for (const auto& fl : fp.folds) {
+                const double d = materializr::sheetFoldOffsetMm(thicknessMm, fl.foldAngleDeg);
+                glm::dvec2 a1, b1, a2, b2; foldOffsetLines(fl, std::max(d, 1e-3), a1, b1, a2, b2);
+                segs.push_back({a1, b1}); segs.push_back({a2, b2});
+            }
+            strokeSegs(segs);
+        }
+        pdff(s, "Q\n");   // end clip
+
+        // Crop marks just outside the content rectangle's four corners.
+        pdff(s, "0 0 0 RG 0.3 w\n");
+        const double x0 = margin * K, y0 = (margin + strip) * K;
+        const double x1 = x0 + cwMM * K, y1 = y0 + chMM * K, t = 6.0;
+        auto seg = [&](double ax, double ay, double bx, double by) {
+            pdff(s, "%.2f %.2f m %.2f %.2f l S\n", ax, ay, bx, by);
+        };
+        seg(x0 - t, y0, x0, y0); seg(x0, y0 - t, x0, y0);            // bottom-left
+        seg(x1, y0, x1 + t, y0); seg(x1, y0 - t, x1, y0);            // bottom-right
+        seg(x0 - t, y1, x0, y1); seg(x0, y1, x0, y1 + t);            // top-left
+        seg(x1, y1, x1 + t, y1); seg(x1, y1, x1, y1 + t);            // top-right
+
+        // 50 mm scale bar in the bottom strip + caption + tile label.
+        const double by = (margin + strip * 0.5) * K, bx0 = margin * K, bx1 = (margin + 50.0) * K;
+        pdff(s, "0 0 0 RG 0.8 w\n");
+        seg(bx0, by, bx1, by);
+        seg(bx0, by - 3, bx0, by + 3); seg(bx1, by - 3, bx1, by + 3);
+        pdff(s, "BT /F1 8 Tf %.2f %.2f Td (50 mm \\(5 cm\\) - verify print scale) Tj ET\n",
+             (margin + 54.0) * K, by - 3.0);
+        pdff(s, "BT /F1 8 Tf %.2f %.2f Td (Tile %d,%d of %dx%d  -  1:1  Materializr) Tj ET\n",
+             (pageWmm - margin - 62.0) * K, by - 3.0, col + 1, row + 1, nCols, nRows);
+        return s;
+    };
+
+    // Assemble the PDF: 1=Catalog, 2=Pages, 3=Font, then a Page+Contents pair per tile.
+    std::vector<std::pair<int, int>> order;     // (col,row), row-major top is row 0
+    for (int r = 0; r < nRows; ++r) for (int c = 0; c < nCols; ++c) order.push_back({c, r});
+    const int nPages = int(order.size());
+    const int numObjs = 3 + 2 * nPages;
+    std::vector<size_t> off(numObjs + 1, 0);
+    std::string pdf = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
+    auto obj = [&](int n, const std::string& body) {
+        off[n] = pdf.size();
+        pdf += std::to_string(n) + " 0 obj\n" + body + "\nendobj\n";
+    };
+    obj(1, "<< /Type /Catalog /Pages 2 0 R >>");
+    std::string kids;
+    for (int i = 0; i < nPages; ++i) kids += std::to_string(4 + 2 * i) + " 0 R ";
+    obj(2, "<< /Type /Pages /Count " + std::to_string(nPages) + " /Kids [ " + kids + "] >>");
+    obj(3, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+    char mb[64];
+    std::snprintf(mb, sizeof mb, "[0 0 %.2f %.2f]", pageWpt, pageHpt);
+    for (int i = 0; i < nPages; ++i) {
+        std::string cs = pageStream(order[i].first, order[i].second);
+        if (cs.empty() || cs.back() != '\n') cs += "\n";
+        const int pageN = 4 + 2 * i, contN = 5 + 2 * i;
+        obj(pageN, std::string("<< /Type /Page /Parent 2 0 R /MediaBox ") + mb +
+                   " /Resources << /Font << /F1 3 0 R >> >> /Contents " + std::to_string(contN) + " 0 R >>");
+        obj(contN, "<< /Length " + std::to_string(cs.size()) + " >>\nstream\n" + cs + "endstream");
+    }
+    const size_t xref = pdf.size();
+    pdf += "xref\n0 " + std::to_string(numObjs + 1) + "\n0000000000 65535 f \n";
+    for (int n = 1; n <= numObjs; ++n) {
+        char b[32]; std::snprintf(b, sizeof b, "%010zu 00000 n \n", off[n]); pdf += b;
+    }
+    pdf += "trailer\n<< /Size " + std::to_string(numObjs + 1) + " /Root 1 0 R >>\nstartxref\n"
+         + std::to_string(xref) + "\n%%EOF\n";
+
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) return false;
+    std::fwrite(pdf.data(), 1, pdf.size(), f);
+    std::fclose(f);
+    return true;
+}
+
+} // namespace
+
+void Application::beginUnfoldDialog() {
+    std::vector<TopoDS_Face> faces;
+    int bodyId = -1;
+
+    // Prefer an explicit FACE selection — unfold just the faces of one panel
+    // (e.g. a wing's top skin), not the whole closed body. Falls back to the
+    // whole body only when no faces are picked.
+    if (m_selection)
+        for (const auto& e : m_selection->getSelection())
+            if (e.type == SelectionType::Face && !e.shape.IsNull() &&
+                e.shape.ShapeType() == TopAbs_FACE) {
+                faces.push_back(TopoDS::Face(e.shape));
+                if (bodyId < 0) bodyId = e.bodyId;
+            }
+
+    if (faces.empty()) {
+        if (m_selection)
+            for (const auto& e : m_selection->getSelection())
+                if (e.type == SelectionType::Body && e.bodyId >= 0) { bodyId = e.bodyId; break; }
+        if (bodyId < 0) {
+            showToast("Select a body, or pick the faces of one panel, to unfold.");
+            return;
+        }
+        TopoDS_Shape shape;
+        try { shape = m_document->getBody(bodyId); } catch (...) {}
+        if (shape.IsNull()) { showToast("Select a body to unfold."); return; }
+        for (TopExp_Explorer ex(shape, TopAbs_FACE); ex.More(); ex.Next())
+            faces.push_back(TopoDS::Face(ex.Current()));
+    }
+
+    m_unfoldSourceFaces = faces;
+    m_unfoldBodyId = bodyId;
+    if (m_document->isBodySheet(bodyId)) {
+        const materializr::SheetSpec s = m_document->getBodySheet(bodyId);
+        m_unfoldRigidity = s.rigidity;
+        m_unfoldThicknessMm = float(s.thicknessMm);
+    } else {
+        materializr::SheetSpec s;
+        s.isSheet = true;
+        s.rigidity = m_unfoldRigidity;
+        s.thicknessMm = m_unfoldThicknessMm;
+        m_document->setBodySheet(bodyId, s);
+    }
+    m_unfoldConformal = false;   // default to the developable net; conformal is opt-in
+    recomputeUnfold();
+    if (!m_unfoldPattern || !m_unfoldPattern->ok) {
+        const std::string w = m_unfoldPattern ? m_unfoldPattern->warning : std::string();
+        showToast("Couldn't unfold that: " + (w.empty() ? std::string("nothing to flatten.") : w));
+        m_unfoldSourceFaces.clear();
+        return;
+    }
+    m_unfoldDialogActive = true;
+}
+
+void Application::recomputeUnfold() {
+    if (m_unfoldSourceFaces.empty()) { m_unfoldPattern.reset(); return; }
+    // All-planar selection (a box, faceted panels) → the face-net engine, which
+    // spanning-trees the faces into a connected net with proper cut outlines even
+    // for a CLOSED body. Any curved face → the mesh engine (tessellate + unroll),
+    // where the bevel cap drives how finely a curve is diced into score lines.
+    bool allPlanar = true;
+    for (const TopoDS_Face& f : m_unfoldSourceFaces)
+        if (BRepAdaptor_Surface(f).GetType() != GeomAbs_Plane) { allPlanar = false; break; }
+
+    if (allPlanar) {
+        m_unfoldPattern = std::make_unique<materializr::FlatPattern>(
+            materializr::unfoldPlanarFaces(m_unfoldSourceFaces));
+    } else if (m_unfoldConformal) {
+        // Conformal (LSCM) unwrap → one stretchy piece. Falls back to the
+        // developable face-net if LSCM can't map it (e.g. a closed surface).
+        auto fp = materializr::unfoldConformal(m_unfoldSourceFaces, m_unfoldMaxBevelDeg, 1.0);
+        if (!fp.ok)
+            fp = materializr::unfoldDevelopableNet(m_unfoldSourceFaces, m_unfoldMaxBevelDeg, 1.0);
+        m_unfoldPattern = std::make_unique<materializr::FlatPattern>(std::move(fp));
+    } else {
+        // Papercraft net: unroll each face on its own and hinge whole faces along
+        // shared edges (keeps cone/cylinder seams open, joins panels to the flat
+        // face they border — no triangle-soup jumble). Falls back to the raw mesh
+        // unfold only if the net engine produces nothing.
+        auto fp = materializr::unfoldDevelopableNet(m_unfoldSourceFaces, m_unfoldMaxBevelDeg, 1.0);
+        if (!fp.ok)
+            fp = materializr::unfoldFaces(m_unfoldSourceFaces, m_unfoldMaxBevelDeg, 1.0);
+        m_unfoldPattern = std::make_unique<materializr::FlatPattern>(std::move(fp));
+    }
+}
+
+void Application::renderUnfoldDialog() {
+    if (!m_unfoldDialogActive || !m_unfoldPattern) return;
+
+    ImGui::SetNextWindowSize(uiSz(560, 580), ImGuiCond_Appearing);
+    if (!ImGui::Begin("Flat Pattern", &m_unfoldDialogActive,
+                      ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+
+    // Persist the current rigidity/thickness back onto the source body.
+    auto persistSheet = [&]() {
+        if (m_unfoldBodyId < 0) return;
+        materializr::SheetSpec s;
+        s.isSheet = true;
+        s.rigidity = m_unfoldRigidity;
+        s.thicknessMm = m_unfoldThicknessMm;
+        m_document->setBodySheet(m_unfoldBodyId, s);
+    };
+
+    // Rigidity (not a specific material) drives how folds are processed.
+    const char* rigs[] = {"Pliable", "Semi-rigid", "Rigid"};
+    int ri = static_cast<int>(m_unfoldRigidity);
+    ImGui::SetNextItemWidth(140.0f);
+    if (ImGui::Combo("Material", &ri, rigs, 3)) {
+        m_unfoldRigidity = static_cast<materializr::Rigidity>(ri);
+        // Material only drives the fold marks (score / bevel / mitre) — it no
+        // longer flips the unwrap algorithm; Conformal stays as the user set it.
+        persistSheet();
+        recomputeUnfold();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", materializr::rigidityHint(m_unfoldRigidity));
+
+    const materializr::FoldMode fm = materializr::foldModeFor(m_unfoldRigidity);
+
+    // Thickness sets the bevel/mitre setback; irrelevant for pliable (boundary only).
+    if (fm != materializr::FoldMode::None) {
+        ImGui::SetNextItemWidth(120.0f);
+        if (ImGui::InputFloat("Thickness (mm)", &m_unfoldThicknessMm, 0.5f, 1.0f, "%.1f")) {
+            m_unfoldThicknessMm = std::clamp(m_unfoldThicknessMm, 0.1f, 50.0f);
+            persistSheet();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled(fm == materializr::FoldMode::Score
+                            ? "→ V-groove bevels" : "→ mitre setback");
+    }
+
+    // Curve detail: how finely a curved surface is faceted. Drives the number of
+    // score lines AND the number of cut fragments/pieces — so it matters in every
+    // material (a coarser setting = bigger, fewer facets), which is why it's
+    // always shown, not just when there are folds.
+    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::SliderFloat("Curve detail", &m_unfoldMaxBevelDeg, 2.0f, 40.0f, "%.0f°"))
+        recomputeUnfold();
+    ImGui::SetItemTooltip("How finely curved surfaces are faceted (max angle per facet). "
+                          "Larger = coarser: fewer, bigger pieces/score lines. Smaller = "
+                          "closer to the true curve but many more cuts.");
+
+    // Conformal (LSCM) unwrap: one connected stretchy piece for a doubly-curved
+    // surface, instead of splitting into developable pieces. Best for materials
+    // that conform (vinyl, Monokote, fabric); the cost is some area stretch.
+    if (ImGui::Checkbox("Conformal unwrap (stretch to fit)", &m_unfoldConformal))
+        recomputeUnfold();
+    ImGui::SetItemTooltip("LSCM, like a Blender UV unwrap. One connected piece with the "
+                          "distortion spread out — cut it and let a pliable material stretch "
+                          "to shape. Off = accurate developable pieces (for rigid stock).");
+
+    // Bind AFTER any recompute above (recomputeUnfold replaces m_unfoldPattern).
+    if (!m_unfoldPattern) { ImGui::End(); return; }
+    const materializr::FlatPattern& fp = *m_unfoldPattern;
+
+    if (fm == materializr::FoldMode::None) {
+        ImGui::Text("Boundary cut only");
+    } else {
+        ImGui::Text("%zu fold/score line%s", fp.folds.size(), fp.folds.size() == 1 ? "" : "s");
+        // ~30 score lines on one piece is the practical ceiling for any material
+        // (holes don't count). Past that, suggest coarsening or splitting.
+        if (fp.folds.size() > 30) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                               "  — a lot to cut; coarsen the bevel or split the piece");
+        }
+    }
+    if (fp.hasOverlap) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                           "  ⚠ net overlaps — may need cutting into pieces");
+    }
+    // Developability: ~0 = unrolls exactly; large = doubly-curved.
+    if (m_unfoldConformal) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 360.0f);
+        if (fp.distortionPct > 0.5)
+            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f),
+                "Conformal unwrap — one piece, up to %.0f%% area stretch (a pliable "
+                "material takes up the difference).", fp.distortionPct);
+        else
+            ImGui::TextDisabled("Conformal unwrap — one piece, ~no stretch.");
+        ImGui::PopTextWrapPos();
+    } else if (fp.curvatureDeg > 12.0) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 360.0f);
+        ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.3f, 1.0f),
+            "⚠ Doubly-curved (~%.0f° total) — won't lie flat as accurate developable "
+            "pieces. Tick \"Conformal unwrap\" for one stretchy piece, or split into "
+            "developable strips.", fp.curvatureDeg);
+        ImGui::PopTextWrapPos();
+    } else if (fp.curvatureDeg > 1.5) {
+        ImGui::TextDisabled("Nearly developable (~%.1f° curvature).", fp.curvatureDeg);
+    } else {
+        ImGui::TextDisabled("Developable — unrolls exactly.");
+    }
+
+    // ── 2D canvas ──
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    // Leave room for the two control rows below (page-size combo + export buttons).
+    avail.y -= 2.0f * ImGui::GetFrameHeightWithSpacing() + 8.0f;
+    if (avail.y < 80.0f) avail.y = 80.0f;
+    ImGui::BeginChild("flatcanvas", avail, true);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 cmin = ImGui::GetCursorScreenPos();
+    const ImVec2 csz = ImGui::GetContentRegionAvail();
+
+    double minx = 1e300, miny = 1e300, maxx = -1e300, maxy = -1e300;
+    for (const auto& face : fp.faces)
+        for (const auto& l : face.loops)
+            for (const auto& p : l.pts) {
+                minx = std::min(minx, p.x); miny = std::min(miny, p.y);
+                maxx = std::max(maxx, p.x); maxy = std::max(maxy, p.y);
+            }
+    if (minx <= maxx) {
+        const double pw = std::max(1e-6, maxx - minx);
+        const double ph = std::max(1e-6, maxy - miny);
+        const double sc = std::min((csz.x - 20) / pw, (csz.y - 20) / ph);
+        const double ox = cmin.x + (csz.x - pw * sc) * 0.5;
+        const double oy = cmin.y + (csz.y - ph * sc) * 0.5;
+        auto S = [&](const glm::dvec2& p) {
+            return ImVec2(float(ox + (p.x - minx) * sc),
+                          float(oy + (maxy - p.y) * sc)); // flip Y
+        };
+        const ImU32 cutCol   = IM_COL32(230, 230, 235, 255);
+        const ImU32 scoreCol = IM_COL32(80, 150, 255, 255);   // hinge centreline
+        const ImU32 bevelCol = IM_COL32(255, 140, 40, 255);   // V-groove / mitre edges
+
+        for (const auto& face : fp.faces)
+            for (const auto& l : face.loops) {
+                for (size_t i = 0; i + 1 < l.pts.size(); ++i)
+                    dl->AddLine(S(l.pts[i]), S(l.pts[i + 1]), cutCol, 1.5f);
+                if (l.pts.size() >= 3)
+                    dl->AddLine(S(l.pts.back()), S(l.pts.front()), cutCol, 1.5f);
+            }
+
+        if (fm != materializr::FoldMode::None) {
+            for (const auto& fl : fp.folds) {
+                if (fm == materializr::FoldMode::Score)
+                    dl->AddLine(S(fl.a), S(fl.b), scoreCol, 1.0f);  // hinge line
+                const double d = materializr::sheetFoldOffsetMm(m_unfoldThicknessMm,
+                                                                fl.foldAngleDeg);
+                if (d < 1e-3 && fm == materializr::FoldMode::Score) continue;
+                glm::dvec2 a1, b1, a2, b2;
+                foldOffsetLines(fl, std::max(d, 1e-3), a1, b1, a2, b2);
+                dl->AddLine(S(a1), S(b1), bevelCol, 1.0f);        // bevel / mitre edges
+                dl->AddLine(S(a2), S(b2), bevelCol, 1.0f);
+            }
+        }
+    }
+    ImGui::EndChild();
+
+    // ── Export ──
+    {
+        int pg = m_unfoldPageA4 ? 1 : 0;
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::Combo("PDF page size", &pg, "US Letter\0A4\0")) m_unfoldPageA4 = (pg == 1);
+    }
+    if (ImGui::Button("Export SVG…", ImVec2(130, 0))) {
+        const double th = m_unfoldThicknessMm;
+        // Capture a COPY: the file dialog resolves on a later frame, by which
+        // time the bevel slider may have replaced m_unfoldPattern.
+        const materializr::FlatPattern pat = fp;
+        materializr::FileDialogs::exportFile(
+            "Export Flat Pattern", "flat-pattern.svg", "image/svg+xml",
+            {{"SVG Files", "*.svg"}},
+            [pat, fm, th](const std::string& path) {
+                return writeFlatPatternSvg(path, pat, fm, th);
+            });
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Export PDF…", ImVec2(130, 0))) {
+        const double th = m_unfoldThicknessMm;
+        const bool a4 = m_unfoldPageA4;
+        const materializr::FlatPattern pat = fp;   // copy; dialog may recompute later
+        materializr::FileDialogs::exportFile(
+            "Export Flat Pattern (tiled 1:1)", "flat-pattern.pdf", "application/pdf",
+            {{"PDF Files", "*.pdf"}},
+            [pat, fm, th, a4](const std::string& path) {
+                return writeFlatPatternPdf(path, pat, fm, th, a4);
+            });
+    }
+    ImGui::SetItemTooltip("Tiled, full-size (1:1) printable template with crop marks "
+                          "and a 50 mm scale bar to verify print scale.");
+    ImGui::SameLine();
+    if (ImGui::Button("Close", ImVec2(90, 0))) m_unfoldDialogActive = false;
+
     ImGui::End();
 }
 

@@ -3,6 +3,25 @@
 All notable changes to Materializr are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [1.3.0-beta.8] — 2026-06-30 (pre-release)
+
+### Added
+
+- **Unfold / flatten surfaces into 2D cut patterns.** Select a body — or just
+  the faces of one panel — and **Unfold / Flatten** lays the surfaces out flat
+  for laser cutters, CNC, or printed templates. Flat and box-like parts unfold
+  into a connected net; **developable** curved skins (cylinders, cones, extruded
+  profiles, a square→round loft) unroll into one connected piece, hinging whole
+  panels along their shared edges and picking the layout with the smallest flat
+  area. **Doubly-curved** surfaces (spheres, funnels) flatten via an opt-in
+  **Conformal unwrap** (Least-Squares Conformal Map, Blender-style) that
+  auto-cuts a seam to open closed shapes. A **material** setting (Pliable /
+  Semi-rigid / Rigid) and **thickness** drive the bend/score lines and mitre
+  offsets (e.g. ½″ ply at a 90° corner → a 6.5 mm mitre line). Export the flat
+  pattern as **SVG** (1:1 mm, for laser/CNC) or a **tiled, full-size PDF** (US
+  Letter or A4) with crop marks, tile overlap, and a 50 mm scale bar to verify
+  the print came out at true scale.
+
 ## [1.3.0-beta.7] — 2026-06-29 (pre-release)
 
 ### Added

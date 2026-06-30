@@ -40,6 +40,7 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/io/StlIO.cpp
     ${CMAKE_SOURCE_DIR}/src/io/MeshDecimate.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/Unfold.cpp
 )
 
 target_include_directories(materializr_core PUBLIC
@@ -68,6 +69,7 @@ target_link_libraries(materializr_core PUBLIC
     TKBin
     TKDESTL      # RWStl (STL read) for StlIO
     TKShHealing  # ShapeUpgrade_UnifySameDomain for StlIO
+    TKMesh       # BRepMesh_IncrementalMesh for Unfold (curved faces)
     ZLIB::ZLIB
 )
 
@@ -112,6 +114,11 @@ add_test(NAME test_pushpull_normal COMMAND test_pushpull_normal)
 add_executable(test_stl_import test_stl_import.cpp)
 target_link_libraries(test_stl_import PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_stl_import COMMAND test_stl_import)
+
+# test_unfold — planar-net flatten engine (box -> area-preserving net)
+add_executable(test_unfold test_unfold.cpp)
+target_link_libraries(test_unfold PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_unfold COMMAND test_unfold)
 
 # bench_stl_import — manual stopwatch for STL import stages (not run by ctest)
 add_executable(bench_stl_import bench_stl_import.cpp)

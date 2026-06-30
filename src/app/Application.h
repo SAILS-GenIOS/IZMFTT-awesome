@@ -22,6 +22,8 @@
 #include <array>
 #include "modeling/ExtrudeOp.h" // for ExtrudeMode
 #include "modeling/SketchConstraints.h" // for ConstraintType (applySketchConstraint)
+#include "modeling/Unfold.h" // for FlatPattern (m_unfoldPattern)
+#include "core/SheetSpec.h" // for SheetMaterial (m_unfoldMaterial)
 #include "io/Settings.h" // for AppSettings::RecentProject (m_recentProjects)
 
 // Global (non-namespaced) op, forward-declared for configureFaceOp's signature.
@@ -1251,6 +1253,23 @@ private:
     void commitStlImport();
     void cancelStlImport();
     void renderStlImportDialog();
+
+    // Unfold / Flatten — "lay it flat" for laser/CNC/templates. beginUnfoldDialog
+    // runs the planar-net unfold on the selected body and opens a 2D Flat-Pattern
+    // dialog (cut + fold lines), with a material dropdown driving fold handling
+    // and SVG export. See modeling/Unfold.h.
+    bool m_unfoldDialogActive = false;
+    int  m_unfoldBodyId = -1;
+    std::unique_ptr<materializr::FlatPattern> m_unfoldPattern;
+    materializr::Rigidity m_unfoldRigidity = materializr::Rigidity::SemiRigid;
+    float m_unfoldThicknessMm = 5.0f;
+    std::vector<TopoDS_Face> m_unfoldSourceFaces; // kept so the bevel slider can re-run
+    float m_unfoldMaxBevelDeg = 10.0f;            // angular tolerance: max bevel per score line
+    bool  m_unfoldConformal = false;              // LSCM unwrap (one stretchy piece) vs developable pieces
+    bool  m_unfoldPageA4 = false;                 // PDF export page size: A4 vs US Letter
+    void beginUnfoldDialog();
+    void recomputeUnfold();
+    void renderUnfoldDialog();
 
     // Revolve popup. Opens when the user clicks Revolve in the body Tools
     // panel; takes a sketch profile + an axis (canonical world axis or a

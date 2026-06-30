@@ -8,6 +8,7 @@
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Dir.hxx>
+#include "SheetSpec.h"
 
 namespace materializr { class Sketch; class EventBus; }
 
@@ -24,6 +25,10 @@ struct BodyEntry {
     // to take a mesh-aware path (cached picking, optional wireframe). Serialized
     // to project files since it can't be re-derived from the shape — see ProjectIO.
     bool isMesh = false;
+    // Set once the user marks this body as a fabrication sheet part (foam board,
+    // sheet metal, plywood, …). Drives the unfold/flatten engine. Serialized to
+    // project files (can't be re-derived from the shape) — see ProjectIO.
+    materializr::SheetSpec sheet;
 };
 
 // Bodies can be grouped under a folder for organisation in the Items panel.
@@ -98,6 +103,11 @@ public:
     bool isBodyVisible(int id) const;
     void setBodyMesh(int id, bool isMesh);
     bool isBodyMesh(int id) const;
+    // Fabrication sheet-part metadata (foam board / sheet metal / …). getBodySheet
+    // returns a default (isSheet=false) spec for a non-sheet or unknown body.
+    void setBodySheet(int id, const materializr::SheetSpec& spec);
+    materializr::SheetSpec getBodySheet(int id) const;
+    bool isBodySheet(int id) const;
     glm::vec3 getBodyColor(int id) const;
     void setBodyColor(int id, const glm::vec3& color);
     std::vector<int> getAllBodyIds() const;

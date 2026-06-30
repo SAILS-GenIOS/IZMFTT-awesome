@@ -2132,6 +2132,11 @@ void Application::handleToolAction(int action) {
             break;
         }
 
+        case ToolAction::Unfold: {
+            beginUnfoldDialog();
+            break;
+        }
+
         case ToolAction::EditFilletChamfer: {
             // Find the FilletOp / ChamferOp in history that owns the picked face,
             // then re-open it for editing with the existing radius / distance.
@@ -5361,6 +5366,7 @@ void Application::run() {
             renderConstructionAxisPanel();
             renderPrimitivePopup();
             renderStlImportDialog();
+            renderUnfoldDialog();
             renderRevolvePopup();
             renderRotatePlaneAboutAxisPopup();
             renderSketchMovePanel();
