@@ -1267,6 +1267,8 @@ private:
     float m_unfoldMaxBevelDeg = 10.0f;            // angular tolerance: max bevel per score line
     bool  m_unfoldConformal = false;              // LSCM unwrap (one stretchy piece) vs developable pieces
     bool  m_unfoldPageA4 = false;                 // PDF export page size: A4 vs US Letter
+    float m_unfoldRotationDeg = 0.0f;             // viewer/export rotation of the whole flat pattern
+    bool  m_unfoldShowPages = true;               // overlay the PDF page-break grid on the 2D canvas
     void beginUnfoldDialog();
     void recomputeUnfold();
     void renderUnfoldDialog();

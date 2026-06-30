@@ -3404,13 +3404,11 @@ void pdff(std::string& s, const char* fmt, ...) {
     s += buf;
 }
 
-// Write the flat pattern as a TILED, 1:1 (full-size) PDF: each page is a US
-// Letter sheet carrying a slice of the pattern, with crop marks at the content
-// corners, an overlap between tiles for assembly, and a 50 mm scale bar in the
-// bottom strip so the print can be checked for true scale. Hand-rolled minimal
-// PDF (vector line art only) — no external dependency, matching the SVG path.
-bool writeFlatPatternPdf(const std::string& path, const materializr::FlatPattern& fp,
-                         materializr::FoldMode foldMode, double thicknessMm, bool a4) {
+// Rotate a whole flat pattern by `deg` about its bounding-box centre — the
+// viewer's Rotate control re-orients the layout (e.g. to fall on fewer PDF
+// pages); the same rotated copy feeds both the canvas and the exporters.
+materializr::FlatPattern rotatePattern(const materializr::FlatPattern& fp, double deg) {
+    if (std::fabs(deg) < 1e-6) return fp;
     double minx = 1e300, miny = 1e300, maxx = -1e300, maxy = -1e300;
     auto grow = [&](const glm::dvec2& p) {
         minx = std::min(minx, p.x); miny = std::min(miny, p.y);
@@ -3418,25 +3416,71 @@ bool writeFlatPatternPdf(const std::string& path, const materializr::FlatPattern
     };
     for (const auto& f : fp.faces) for (const auto& l : f.loops) for (const auto& p : l.pts) grow(p);
     for (const auto& fl : fp.folds) { grow(fl.a); grow(fl.b); }
-    if (minx > maxx) return false;
+    if (minx > maxx) return fp;
+    const glm::dvec2 c{(minx + maxx) * 0.5, (miny + maxy) * 0.5};
+    const double r = deg * M_PI / 180.0, cs = std::cos(r), sn = std::sin(r);
+    auto rot = [&](glm::dvec2 p) { p -= c; return glm::dvec2{cs * p.x - sn * p.y, sn * p.x + cs * p.y} + c; };
+    materializr::FlatPattern out = fp;
+    for (auto& f : out.faces) for (auto& l : f.loops) for (auto& p : l.pts) p = rot(p);
+    for (auto& fl : out.folds) { fl.a = rot(fl.a); fl.b = rot(fl.b); }
+    return out;
+}
 
-    const double K = 72.0 / 25.4;            // points per millimetre (1:1 scale)
-    const double pad = 5.0;                  // mm of whitespace around the art
-    const double Wmm = (maxx - minx) + 2 * pad, Hmm = (maxy - miny) + 2 * pad;
-    auto DX = [&](double x) { return (x - minx) + pad; };   // world → drawing mm (Y up)
-    auto DY = [&](double y) { return (y - miny) + pad; };
-
-    const double pageWpt = a4 ? 595.28 : 612.0;             // A4 vs US Letter, portrait
-    const double pageHpt = a4 ? 841.89 : 792.0;
-    const double margin = 12.0, strip = 12.0, overlap = 12.0;  // mm
-    const double pageWmm = pageWpt / K, pageHmm = pageHpt / K;
-    const double cwMM = pageWmm - 2 * margin;               // tile content width
-    const double chMM = pageHmm - 2 * margin - strip;       // tile content height
-    const double stepX = std::max(10.0, cwMM - overlap), stepY = std::max(10.0, chMM - overlap);
+// Page-tiling geometry shared by the PDF export and the viewer's page-break
+// preview, so the overlay shows EXACTLY how the PDF will be split into sheets.
+struct PdfTiling {
+    double minx = 0, miny = 0, maxx = 0, maxy = 0;   // pattern bbox (mm)
+    double pageWpt = 612, pageHpt = 792;             // page size (points)
+    double pad = 5, margin = 12, strip = 12, overlap = 12;  // mm
+    double cwMM = 0, chMM = 0, stepX = 0, stepY = 0; // tile content + step (mm)
+    int nCols = 0, nRows = 0;
+};
+PdfTiling computePdfTiling(const materializr::FlatPattern& fp, bool a4) {
+    PdfTiling t;
+    t.minx = 1e300; t.miny = 1e300; t.maxx = -1e300; t.maxy = -1e300;
+    auto grow = [&](const glm::dvec2& p) {
+        t.minx = std::min(t.minx, p.x); t.miny = std::min(t.miny, p.y);
+        t.maxx = std::max(t.maxx, p.x); t.maxy = std::max(t.maxy, p.y);
+    };
+    for (const auto& f : fp.faces) for (const auto& l : f.loops) for (const auto& p : l.pts) grow(p);
+    for (const auto& fl : fp.folds) { grow(fl.a); grow(fl.b); }
+    const double K = 72.0 / 25.4;
+    t.pageWpt = a4 ? 595.28 : 612.0; t.pageHpt = a4 ? 841.89 : 792.0;
+    const double pageWmm = t.pageWpt / K, pageHmm = t.pageHpt / K;
+    t.cwMM = pageWmm - 2 * t.margin;
+    t.chMM = pageHmm - 2 * t.margin - t.strip;
+    t.stepX = std::max(10.0, t.cwMM - t.overlap);
+    t.stepY = std::max(10.0, t.chMM - t.overlap);
+    if (t.maxx < t.minx) return t;   // empty
+    const double Wmm = (t.maxx - t.minx) + 2 * t.pad, Hmm = (t.maxy - t.miny) + 2 * t.pad;
     auto tiles = [&](double total, double content, double step) {
         return total <= content ? 1 : 1 + int(std::ceil((total - content) / step));
     };
-    const int nCols = tiles(Wmm, cwMM, stepX), nRows = tiles(Hmm, chMM, stepY);
+    t.nCols = tiles(Wmm, t.cwMM, t.stepX);
+    t.nRows = tiles(Hmm, t.chMM, t.stepY);
+    return t;
+}
+
+// Write the flat pattern as a TILED, 1:1 (full-size) PDF: each page is a US
+// Letter sheet carrying a slice of the pattern, with crop marks at the content
+// corners, an overlap between tiles for assembly, and a 50 mm scale bar in the
+// bottom strip so the print can be checked for true scale. Hand-rolled minimal
+// PDF (vector line art only) — no external dependency, matching the SVG path.
+bool writeFlatPatternPdf(const std::string& path, const materializr::FlatPattern& fp,
+                         materializr::FoldMode foldMode, double thicknessMm, bool a4) {
+    const PdfTiling T = computePdfTiling(fp, a4);
+    if (T.nCols == 0) return false;
+
+    const double K = 72.0 / 25.4;            // points per millimetre (1:1 scale)
+    const double pad = T.pad, minx = T.minx, miny = T.miny;
+    auto DX = [&](double x) { return (x - minx) + pad; };   // world → drawing mm (Y up)
+    auto DY = [&](double y) { return (y - miny) + pad; };
+
+    const double pageWpt = T.pageWpt, pageHpt = T.pageHpt;
+    const double pageWmm = pageWpt / K;     // for the right-aligned tile label
+    const double margin = T.margin, strip = T.strip;
+    const double cwMM = T.cwMM, chMM = T.chMM, stepX = T.stepX, stepY = T.stepY;
+    const int nCols = T.nCols, nRows = T.nRows;
 
     auto pageStream = [&](int col, int row) -> std::string {
         const double ox = col * stepX, oy = row * stepY;    // tile origin (drawing mm)
@@ -3599,6 +3643,7 @@ void Application::beginUnfoldDialog() {
         m_document->setBodySheet(bodyId, s);
     }
     m_unfoldConformal = false;   // default to the developable net; conformal is opt-in
+    m_unfoldRotationDeg = 0.0f;   // start each unfold un-rotated
     recomputeUnfold();
     if (!m_unfoldPattern || !m_unfoldPattern->ok) {
         const std::string w = m_unfoldPattern ? m_unfoldPattern->warning : std::string();
@@ -3761,6 +3806,41 @@ void Application::renderUnfoldDialog() {
         ImGui::TextDisabled("Developable — unrolls exactly.");
     }
 
+    // ── Layout: rotate the pattern + preview the PDF page split ──
+    ImGui::SetNextItemWidth(150);
+    ImGui::SliderFloat("Rotate", &m_unfoldRotationDeg, -180.0f, 180.0f, "%.0f°");
+    ImGui::SameLine();
+    if (ImGui::Button("+90°")) {
+        m_unfoldRotationDeg += 90.0f;
+        if (m_unfoldRotationDeg > 180.0f) m_unfoldRotationDeg -= 360.0f;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Auto-fit")) {
+        // Search orientations for the one needing the fewest pages (tie → least
+        // wasted sheet area). Rotates the ORIGINAL pattern by each absolute angle.
+        const PdfTiling cur = computePdfTiling(rotatePattern(fp, m_unfoldRotationDeg), m_unfoldPageA4);
+        int bestPages = std::max(1, cur.nCols * cur.nRows);
+        double bestWaste = 1e300; float bestAng = m_unfoldRotationDeg;
+        for (int a = 0; a < 180; a += 3) {
+            const PdfTiling t = computePdfTiling(rotatePattern(fp, double(a)), m_unfoldPageA4);
+            if (t.nCols == 0) continue;
+            const int pages = t.nCols * t.nRows;
+            const double waste = pages * t.cwMM * t.chMM - (t.maxx - t.minx) * (t.maxy - t.miny);
+            if (pages < bestPages || (pages == bestPages && waste < bestWaste - 1e-6)) {
+                bestPages = pages; bestWaste = waste; bestAng = float(a);
+            }
+        }
+        m_unfoldRotationDeg = bestAng;
+    }
+    ImGui::SetItemTooltip("Rotate to the orientation that needs the fewest PDF pages.");
+    ImGui::SameLine();
+    ImGui::Checkbox("Page grid", &m_unfoldShowPages);
+
+    // The rotated pattern drives the canvas AND the exporters — what you see is
+    // what you get.
+    const materializr::FlatPattern rfp = rotatePattern(fp, m_unfoldRotationDeg);
+    const PdfTiling tiling = computePdfTiling(rfp, m_unfoldPageA4);
+
     // ── 2D canvas ──
     ImVec2 avail = ImGui::GetContentRegionAvail();
     // Leave room for the two control rows below (page-size combo + export buttons).
@@ -3772,27 +3852,51 @@ void Application::renderUnfoldDialog() {
     const ImVec2 csz = ImGui::GetContentRegionAvail();
 
     double minx = 1e300, miny = 1e300, maxx = -1e300, maxy = -1e300;
-    for (const auto& face : fp.faces)
+    for (const auto& face : rfp.faces)
         for (const auto& l : face.loops)
             for (const auto& p : l.pts) {
                 minx = std::min(minx, p.x); miny = std::min(miny, p.y);
                 maxx = std::max(maxx, p.x); maxy = std::max(maxy, p.y);
             }
+    // With the page grid shown, fit the view to the whole sheet extent so every
+    // page is visible; otherwise fit to the pattern alone.
+    const bool showGrid = m_unfoldShowPages && tiling.nCols > 0;
+    double gx0 = minx, gy0 = miny, gx1 = maxx, gy1 = maxy;
+    if (showGrid) {
+        gx0 = std::min(gx0, tiling.minx - tiling.pad);
+        gy0 = std::min(gy0, tiling.miny - tiling.pad);
+        gx1 = std::max(gx1, tiling.minx - tiling.pad + (tiling.nCols - 1) * tiling.stepX + tiling.cwMM);
+        gy1 = std::max(gy1, tiling.miny - tiling.pad + (tiling.nRows - 1) * tiling.stepY + tiling.chMM);
+    }
     if (minx <= maxx) {
-        const double pw = std::max(1e-6, maxx - minx);
-        const double ph = std::max(1e-6, maxy - miny);
+        const double pw = std::max(1e-6, gx1 - gx0);
+        const double ph = std::max(1e-6, gy1 - gy0);
         const double sc = std::min((csz.x - 20) / pw, (csz.y - 20) / ph);
         const double ox = cmin.x + (csz.x - pw * sc) * 0.5;
         const double oy = cmin.y + (csz.y - ph * sc) * 0.5;
         auto S = [&](const glm::dvec2& p) {
-            return ImVec2(float(ox + (p.x - minx) * sc),
-                          float(oy + (maxy - p.y) * sc)); // flip Y
+            return ImVec2(float(ox + (p.x - gx0) * sc),
+                          float(oy + (gy1 - p.y) * sc)); // flip Y
         };
         const ImU32 cutCol   = IM_COL32(230, 230, 235, 255);
         const ImU32 scoreCol = IM_COL32(80, 150, 255, 255);   // hinge centreline
         const ImU32 bevelCol = IM_COL32(255, 140, 40, 255);   // V-groove / mitre edges
 
-        for (const auto& face : fp.faces)
+        // Page-break grid behind the pattern: each rect is one PDF page's content
+        // area at 1:1 (adjacent pages overlap by the assembly margin).
+        if (showGrid) {
+            const ImU32 pageCol = IM_COL32(90, 200, 230, 70);
+            for (int r = 0; r < tiling.nRows; ++r)
+                for (int c = 0; c < tiling.nCols; ++c) {
+                    const double tx0 = tiling.minx - tiling.pad + c * tiling.stepX;
+                    const double ty0 = tiling.miny - tiling.pad + r * tiling.stepY;
+                    const ImVec2 a = S({tx0, ty0}), b = S({tx0 + tiling.cwMM, ty0 + tiling.chMM});
+                    dl->AddRect(ImVec2(std::min(a.x, b.x), std::min(a.y, b.y)),
+                                ImVec2(std::max(a.x, b.x), std::max(a.y, b.y)), pageCol, 0.0f, 0, 1.0f);
+                }
+        }
+
+        for (const auto& face : rfp.faces)
             for (const auto& l : face.loops) {
                 for (size_t i = 0; i + 1 < l.pts.size(); ++i)
                     dl->AddLine(S(l.pts[i]), S(l.pts[i + 1]), cutCol, 1.5f);
@@ -3801,7 +3905,7 @@ void Application::renderUnfoldDialog() {
             }
 
         if (fm != materializr::FoldMode::None) {
-            for (const auto& fl : fp.folds) {
+            for (const auto& fl : rfp.folds) {
                 if (fm == materializr::FoldMode::Score)
                     dl->AddLine(S(fl.a), S(fl.b), scoreCol, 1.0f);  // hinge line
                 const double d = materializr::sheetFoldOffsetMm(m_unfoldThicknessMm,
@@ -3814,6 +3918,13 @@ void Application::renderUnfoldDialog() {
             }
         }
     }
+    if (showGrid) {
+        const int pages = tiling.nCols * tiling.nRows;
+        char buf[96];
+        std::snprintf(buf, sizeof buf, "PDF: %d page%s  (%d x %d, %s)", pages, pages == 1 ? "" : "s",
+                      tiling.nCols, tiling.nRows, m_unfoldPageA4 ? "A4" : "Letter");
+        dl->AddText(ImVec2(cmin.x + 6, cmin.y + 6), IM_COL32(150, 215, 235, 230), buf);
+    }
     ImGui::EndChild();
 
     // ── Export ──
@@ -3824,9 +3935,9 @@ void Application::renderUnfoldDialog() {
     }
     if (ImGui::Button("Export SVG…", ImVec2(130, 0))) {
         const double th = m_unfoldThicknessMm;
-        // Capture a COPY: the file dialog resolves on a later frame, by which
-        // time the bevel slider may have replaced m_unfoldPattern.
-        const materializr::FlatPattern pat = fp;
+        // Capture a COPY of the ROTATED pattern: the file dialog resolves on a
+        // later frame, by which time the bevel slider may have replaced it.
+        const materializr::FlatPattern pat = rfp;
         materializr::FileDialogs::exportFile(
             "Export Flat Pattern", "flat-pattern.svg", "image/svg+xml",
             {{"SVG Files", "*.svg"}},
@@ -3838,7 +3949,7 @@ void Application::renderUnfoldDialog() {
     if (ImGui::Button("Export PDF…", ImVec2(130, 0))) {
         const double th = m_unfoldThicknessMm;
         const bool a4 = m_unfoldPageA4;
-        const materializr::FlatPattern pat = fp;   // copy; dialog may recompute later
+        const materializr::FlatPattern pat = rfp;  // rotated copy; dialog may recompute later
         materializr::FileDialogs::exportFile(
             "Export Flat Pattern (tiled 1:1)", "flat-pattern.pdf", "application/pdf",
             {{"PDF Files", "*.pdf"}},
