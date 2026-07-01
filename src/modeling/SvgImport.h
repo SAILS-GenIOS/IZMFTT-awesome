@@ -33,6 +33,11 @@ public:
     // snap/inference, same as Text-tool glyphs. Returns loops added.
     static int place(Sketch* sketch, const SvgPaths& svg, glm::vec2 pos,
                      float widthMm, float angleDeg);
+
+    // Spline recovery detail: scales how many control points curves keep (1 =
+    // default; higher = finer / more points / more faithful). Driven by the
+    // persisted "SVG import detail" setting; read at place() time.
+    static float detail;
 };
 
 } // namespace materializr

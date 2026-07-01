@@ -94,6 +94,7 @@ void applyKv(const std::map<std::string, std::string>& kv, AppSettings& s) {
     readBool(kv, "showInferenceToolbarToggle", s.showInferenceToolbarToggle);
     readInt (kv, "angleSnapDeg",         s.angleSnapDeg);
     readFloat(kv, "stlImportAccuracy",   s.stlImportAccuracy);
+    readFloat(kv, "svgImportDetail",     s.svgImportDetail);
     readBool(kv, "meshShowWireframe",    s.meshShowWireframe);
 
     // Recently opened/saved projects: contiguous indexed keys recentN_ref /
@@ -287,6 +288,7 @@ bool SettingsIO::save(const std::string& path, const AppSettings& s) {
         << (s.showInferenceToolbarToggle ? "true" : "false") << "\n";
     ofs << "angleSnapDeg = "             << s.angleSnapDeg        << "\n";
     ofs << "stlImportAccuracy = "        << s.stlImportAccuracy   << "\n";
+    ofs << "svgImportDetail = "          << s.svgImportDetail     << "\n";
     ofs << "meshShowWireframe = "        << (s.meshShowWireframe ? "true" : "false") << "\n";
 
     return ofs.good();
@@ -345,6 +347,7 @@ bool SettingsIO::exportJson(const std::string& path, const AppSettings& s) {
         << b(s.showInferenceToolbarToggle) << ",\n";
     ofs << "  \"angleSnapDeg\": "             << s.angleSnapDeg          << ",\n";
     ofs << "  \"stlImportAccuracy\": "        << s.stlImportAccuracy     << ",\n";
+    ofs << "  \"svgImportDetail\": "          << s.svgImportDetail       << ",\n";
     ofs << "  \"meshShowWireframe\": "        << b(s.meshShowWireframe)  << "\n";
     ofs << "}\n";
 

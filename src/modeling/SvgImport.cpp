@@ -783,7 +783,7 @@ namespace {
 // geometry — they snap, edit and can anchor a region; spline-internal points and
 // leftover lines stay fromText (out of the inference guides). Returns true if it
 // placed anything.
-bool emitDetectedLoop(Sketch* sk, const std::vector<glm::vec2>& P, bool closed) {
+bool emitDetectedLoop(Sketch* sk, const std::vector<glm::vec2>& P, bool closed, float detail) {
     constexpr double PI = 3.14159265358979323846;
     const int n = static_cast<int>(P.size());
     if (n < 2) return false;
@@ -804,7 +804,7 @@ bool emitDetectedLoop(Sketch* sk, const std::vector<glm::vec2>& P, bool closed) 
     if (diag < 1e-9) { emitPolyline(); return true; }
 
     const double circTol = 0.004 * diag;    // whole-loop circle acceptance
-    const double dpTol   = 0.0016 * diag;   // Douglas–Peucker fidelity (spline / line)
+    const double dpTol   = 0.0016 * diag / std::clamp(detail, 0.25f, 8.0f); // ↑detail = more pts
     const double CORNER  = 0.52;            // ~30°: a sharper turn splits a segment
 
     // Cyclic accessor: wraps for closed loops; also handles negative indices.
@@ -936,6 +936,8 @@ bool emitDetectedLoop(Sketch* sk, const std::vector<glm::vec2>& P, bool closed) 
 
 } // namespace
 
+float SvgImport::detail = 1.0f;
+
 int SvgImport::place(Sketch* sketch, const SvgPaths& svg, glm::vec2 pos,
                      float widthMm, float angleDeg) {
     if (!sketch || svg.empty() || widthMm <= 0.01f) return 0;
@@ -960,7 +962,7 @@ int SvgImport::place(Sketch* sketch, const SvgPaths& svg, glm::vec2 pos,
         std::vector<glm::vec2> P;
         P.reserve(loop.size());
         for (const auto& p : loop) P.push_back(map(p));
-        if (emitDetectedLoop(sketch, P, svg.closed[li])) placed++;
+        if (emitDetectedLoop(sketch, P, svg.closed[li], detail)) placed++;
     }
     std::fprintf(stderr, "[SVG] placed %d loops at %.1f mm wide\n", placed,
                  widthMm);

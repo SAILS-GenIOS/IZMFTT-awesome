@@ -41,6 +41,7 @@
 #include "ui/HelpPanel.h"
 #include "ui/UpdateChecker.h"
 #include "modeling/Sketch.h"
+#include "modeling/SvgImport.h"
 #include "modeling/SketchSolver.h"
 #include "modeling/SketchTool.h"
 #include "modeling/TextSketchOp.h"
@@ -504,6 +505,15 @@ void Application::renderSettings() {
                     }
                     ImGui::SetItemTooltip("Pre-fills the STL import dialog. Lower = coarser/faster with "
                                           "larger merged flat faces; higher = more faithful but heavier.");
+                    // SVG spline-recovery detail. Applies to the NEXT import.
+                    if (ImGui::SliderFloat("SVG import detail", &m_svgImportDetail,
+                                           0.5f, 4.0f, "%.1fx")) {
+                        m_svgImportDetail = std::clamp(m_svgImportDetail, 0.25f, 8.0f);
+                        SvgImport::detail = m_svgImportDetail;
+                        changed = true;
+                    }
+                    ImGui::SetItemTooltip("Detail of recovered curves on the next SVG import. Higher keeps "
+                                          "more spline control points (finer, heavier); lower is coarser.");
                     ImGui::EndTabItem();
                 }
 

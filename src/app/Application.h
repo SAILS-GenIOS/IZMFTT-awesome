@@ -716,6 +716,7 @@ private:
     // fidelity slider; m_meshShowWireframe gates the facet wireframe of imported
     // mesh bodies (live — toggling it re-runs the mesh-body edge rebuild).
     float m_stlImportAccuracy = 0.5f;
+    float m_svgImportDetail = 1.0f;   // SVG spline-recovery detail (persisted; drives SvgImport::detail)
     bool  m_meshShowWireframe = true;
     // Apply m_light*/m_msaaSamples/m_selectionLineWidth to the renderer + viewport.
     void applyRenderingSettings();
