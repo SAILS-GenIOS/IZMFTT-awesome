@@ -194,6 +194,12 @@ public:
     // first Esc cancels just the in-progress shape, second Esc exits the
     // sketch mode entirely.
     bool isPlacing() const { return m_isPlacing; }
+    // True when a line chain has only its anchor placed (first click, no segment
+    // yet). The app defers that click's undo step so the first segment absorbs
+    // it — otherwise the lone anchor is a surprise extra step at the end of undo.
+    bool isChainAnchorPending() const {
+        return m_mode == SketchToolMode::Line && m_isPlacing && m_lineChain.size() == 1;
+    }
 
     // Grid step (in sketch-plane mm). Used for both visual grid and snap-to-line.
     // 0 disables grid snap entirely.

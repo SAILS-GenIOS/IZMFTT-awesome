@@ -434,6 +434,12 @@ private:
 private:
     // Sketch
     std::shared_ptr<Sketch> m_activeSketch;
+    // Deferred "before" snapshot from a line-chain anchor click (first click,
+    // only the start point placed). Held so the first segment's undo step
+    // absorbs the anchor into ONE step; see recordSketchMutation.
+    std::shared_ptr<Sketch> m_deferredSketchBefore;
+    size_t m_deferredSketchBeforeSig = 0;
+    Sketch* m_deferredSketchOwner = nullptr;
     // Snapshot taken at left-mouse-down in Select mode so a point/line drag
     // (which only moves positions, no structural change) can be committed to
     // history on mouse-up.

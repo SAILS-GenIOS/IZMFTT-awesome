@@ -4313,7 +4313,33 @@ void Application::recordSketchMutation(const std::function<void()>& mutator) {
     };
     size_t beforeSig = signature(*m_activeSketch);
     auto before = std::make_shared<Sketch>(*m_activeSketch);
+    // Fold a deferred anchor snapshot (from the first click of a line chain) in
+    // as the "before", so the anchor + first segment undo as ONE step. Drop it
+    // if it belongs to a different sketch (stale).
+    if (m_deferredSketchBefore) {
+        if (m_deferredSketchOwner == m_activeSketch.get()) {
+            before = m_deferredSketchBefore;
+            beforeSig = m_deferredSketchBeforeSig;
+        } else {
+            m_deferredSketchBefore.reset();
+            m_deferredSketchOwner = nullptr;
+        }
+    }
     mutator();
+    // A line-chain anchor click (only the start point placed) shouldn't be its
+    // own undo step: hold its before-snapshot and let the first segment absorb
+    // it. Esc (onCancel removes the anchor) and Enter (leaves an orphan) fall
+    // through the paths below and resolve correctly.
+    if (m_sketchTool && m_sketchTool->isChainAnchorPending()) {
+        if (!m_deferredSketchBefore) {
+            m_deferredSketchBefore = before;
+            m_deferredSketchBeforeSig = beforeSig;
+            m_deferredSketchOwner = m_activeSketch.get();
+        }
+        return;
+    }
+    m_deferredSketchBefore.reset();
+    m_deferredSketchOwner = nullptr;
     size_t afterSig = signature(*m_activeSketch);
     if (afterSig == beforeSig) return; // nothing structural changed → no history step
     auto after = std::make_shared<Sketch>(*m_activeSketch);
