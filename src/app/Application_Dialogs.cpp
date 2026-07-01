@@ -505,15 +505,6 @@ void Application::renderSettings() {
                     }
                     ImGui::SetItemTooltip("Pre-fills the STL import dialog. Lower = coarser/faster with "
                                           "larger merged flat faces; higher = more faithful but heavier.");
-                    // SVG spline-recovery detail. Applies to the NEXT import.
-                    if (ImGui::SliderFloat("SVG import detail", &m_svgImportDetail,
-                                           0.5f, 4.0f, "%.1fx")) {
-                        m_svgImportDetail = std::clamp(m_svgImportDetail, 0.25f, 8.0f);
-                        SvgImport::detail = m_svgImportDetail;
-                        changed = true;
-                    }
-                    ImGui::SetItemTooltip("Detail of recovered curves on the next SVG import. Higher keeps "
-                                          "more spline control points (finer, heavier); lower is coarser.");
                     ImGui::EndTabItem();
                 }
 
@@ -2946,6 +2937,15 @@ void Application::renderSvgToolPanel() {
                                ImGuiSliderFlags_Logarithmic))
             m_sketchTool->setSvgWidth(w);
 
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::SliderFloat("Detail", &m_svgImportDetail, 0.5f, 4.0f, "%.1fx")) {
+            m_svgImportDetail = std::clamp(m_svgImportDetail, 0.25f, 8.0f);
+            SvgImport::detail = m_svgImportDetail;
+            saveAppSettings();
+        }
+        ImGui::SetItemTooltip("Curve fidelity of the placed outlines — higher keeps more spline "
+                              "control points (finer, heavier). Applies to the NEXT placement.");
+
         int ang = m_sketchTool->getTextAngle();
         if (ImGui::Button("Rotate left"))
             m_sketchTool->setTextAngle(ang + 90);
@@ -2968,21 +2968,28 @@ void Application::renderSvgToolPanel() {
 
         if (materializr::touchMode()) {
             // Touch has no hover: drag in the sketch to slide the preview anchor
-            // (the Move toggle frees the camera; two-finger still pans/zooms),
-            // then commit with Place. Remove-last walks back through stamps.
-            ImGui::TextDisabled("Drag in the sketch to position.");
+            // (the Move toggle frees the camera; two-finger still pans/zooms).
+            ImGui::TextDisabled("Drag in the sketch to position, then Place Here.");
             if (ImGui::Button("Place Here"))
                 recordSketchMutation([&]{ m_sketchTool->commitStamp(); });
-            if (m_sketchTool->hasLastStamp()) {
-                ImGui::SameLine();
-                if (ImGui::Button("Remove Last Placement"))
-                    recordSketchMutation([&]{ m_sketchTool->undoLastStamp(); });
-            }
         } else {
-            ImGui::TextDisabled("Click in the sketch to place.");
-            if (m_sketchTool->hasLastStamp())
-                ImGui::TextDisabled("Backspace removes the last placement.");
+            ImGui::TextDisabled("Click in the sketch to place (Backspace undoes the last).");
         }
+
+        ImGui::Separator();
+        // SVG-scoped undo: pops just the most recent placement's elements (each
+        // press walks back one). recordSketchMutation makes it one history step,
+        // so it plays nicely with normal undo/redo too.
+        if (m_sketchTool->hasLastStamp()) {
+            if (ImGui::Button("Undo Last Placement"))
+                recordSketchMutation([&]{ m_sketchTool->undoLastStamp(); });
+            ImGui::SetItemTooltip("Remove the outlines from the most recent placement "
+                                  "(also Backspace). Press again to walk back further.");
+            ImGui::SameLine();
+        }
+        if (ImGui::Button("Finish"))
+            m_sketchTool->setMode(SketchToolMode::Select);
+        ImGui::SetItemTooltip("Done placing — return to the Select tool (same as the window's X).");
     }
     ImGui::End();
     if (!open) m_sketchTool->setMode(SketchToolMode::Select);
