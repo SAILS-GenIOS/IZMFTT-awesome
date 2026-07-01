@@ -151,10 +151,6 @@ public:
     // same cursor preview box, same fromText suppression on the result).
     void setSvgPaths(SvgPaths svg) { m_svgPaths = std::move(svg); }
     const SvgPaths& getSvgPaths() const { return m_svgPaths; }
-    // Remember the source file so the Import panel can re-sample at a new
-    // detail (sampling density lives in SvgImport::load, not place).
-    void setSvgPath(const std::string& p) { m_svgPath = p; }
-    const std::string& getSvgPath() const { return m_svgPath; }
     float getSvgWidth() const { return m_svgWidth; }
     void setSvgWidth(float w) { m_svgWidth = (w < 0.1f) ? 0.1f : w; }
     // Backspace while the Text/SVG tool is active yanks the whole last
@@ -415,7 +411,6 @@ private:
 
     // SVG placement state (see SvgImport.h)
     SvgPaths m_svgPaths;
-    std::string m_svgPath;    // source file, for re-sampling at a new detail
     float m_svgWidth = 50.0f; // target artwork width, mm
 
     // One entry per Text/SVG stamp (newest last), each holding that stamp's

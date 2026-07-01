@@ -230,8 +230,7 @@ void expandSvgUses(std::string& svg) {
 // Sample one cubic segment, point count driven by its control-polygon
 // length relative to the whole image (same idea as the glyph sampler's
 // deflection: dense enough that the chords read as the curve).
-void sampleCubic(std::vector<glm::vec2>& out, const float* p, float ref, float detail) {
-    const float d = std::clamp(detail, 0.25f, 8.0f);   // detail scales density directly
+void sampleCubic(std::vector<glm::vec2>& out, const float* p, float ref) {
     float clen = 0.0f;
     for (int i = 0; i < 3; ++i)
         clen += std::hypot(p[(i + 1) * 2] - p[i * 2],
@@ -250,8 +249,8 @@ void sampleCubic(std::vector<glm::vec2>& out, const float* p, float ref, float d
         return std::abs(std::atan2(v1x*v2y - v1y*v2x, v1x*v2x + v1y*v2y));
     };
     double turn = polyAng(0, 1, 2) + polyAng(1, 2, 3);
-    int nLen  = static_cast<int>(std::ceil(clen * d / (0.005f * ref)));
-    int nTurn = static_cast<int>(std::ceil(turn * d / 0.15));   // ≤ ~8.6°/chord at 1x, finer above
+    int nLen  = static_cast<int>(std::ceil(clen / (0.005f * ref)));
+    int nTurn = static_cast<int>(std::ceil(turn / 0.15));       // ≤ ~8.6° of bend per chord
     int n = std::clamp(std::max({1, nLen, nTurn}), 1, 256);
     for (int i = 1; i <= n; ++i) {
         float t = static_cast<float>(i) / n, u = 1.0f - t;
@@ -720,7 +719,7 @@ bool SvgImport::load(const std::string& path, SvgPaths& out) {
             std::vector<glm::vec2> pts;
             pts.push_back(glm::vec2(p->pts[0], p->pts[1]));
             for (int i = 0; i < p->npts - 1; i += 3)
-                sampleCubic(pts, &p->pts[i * 2], ref, SvgImport::detail);
+                sampleCubic(pts, &p->pts[i * 2], ref);
             // Collapse consecutive duplicates — SVG paths routinely carry
             // degenerate (zero-length) cubics at joints, and a zero-length
             // sketch line would sink the whole wire in buildWires.
@@ -799,7 +798,7 @@ namespace {
 // geometry — they snap, edit and can anchor a region; spline-internal points and
 // leftover lines stay fromText (out of the inference guides). Returns true if it
 // placed anything.
-bool emitDetectedLoop(Sketch* sk, const std::vector<glm::vec2>& P, bool closed, float detail) {
+bool emitDetectedLoop(Sketch* sk, const std::vector<glm::vec2>& P, bool closed) {
     constexpr double PI = 3.14159265358979323846;
     const int n = static_cast<int>(P.size());
     if (n < 2) return false;
@@ -820,13 +819,8 @@ bool emitDetectedLoop(Sketch* sk, const std::vector<glm::vec2>& P, bool closed, 
     if (diag < 1e-9) { emitPolyline(); return true; }
 
     const double circTol = 0.004 * diag;    // whole-loop circle acceptance
-    const double dpTol   = 0.0016 * diag / std::clamp(detail, 0.25f, 8.0f); // ↑detail = more pts
-    // Corner-angle threshold rises with detail so the same slider adds
-    // "roundness": at 1x, ~30° (sharp — text/polygons split to lines); higher
-    // lifts it so tight rounded ends (cursive stroke caps) stay smooth splines,
-    // while genuinely sharp vertices (90°+) still split at any setting.
-    const double CORNER  = std::clamp(0.52 + (static_cast<double>(detail) - 1.0) * 0.20,
-                                      0.35, 1.30);   // ~20°..~74°
+    const double dpTol   = 0.0016 * diag;   // Douglas–Peucker fidelity (spline / line)
+    const double CORNER  = 0.52;   // ~30°: a sharper turn splits a segment (curves stay smooth)
 
     // Cyclic accessor: wraps for closed loops; also handles negative indices.
     auto at = [&](int k) -> glm::vec2 { return P[((k % n) + n) % n]; };
@@ -957,8 +951,6 @@ bool emitDetectedLoop(Sketch* sk, const std::vector<glm::vec2>& P, bool closed, 
 
 } // namespace
 
-float SvgImport::detail = 1.0f;
-
 int SvgImport::place(Sketch* sketch, const SvgPaths& svg, glm::vec2 pos,
                      float widthMm, float angleDeg) {
     if (!sketch || svg.empty() || widthMm <= 0.01f) return 0;
@@ -983,7 +975,7 @@ int SvgImport::place(Sketch* sketch, const SvgPaths& svg, glm::vec2 pos,
         std::vector<glm::vec2> P;
         P.reserve(loop.size());
         for (const auto& p : loop) P.push_back(map(p));
-        if (emitDetectedLoop(sketch, P, svg.closed[li], detail)) placed++;
+        if (emitDetectedLoop(sketch, P, svg.closed[li])) placed++;
     }
     std::fprintf(stderr, "[SVG] placed %d loops at %.1f mm wide\n", placed,
                  widthMm);

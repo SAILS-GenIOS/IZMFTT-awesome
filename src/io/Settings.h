@@ -125,7 +125,6 @@ struct AppSettings {
     // Default fidelity for STL import, 0..1 (coarse/fast .. faithful/slow). Pre-
     // fills the import dialog's accuracy slider. See StlIO::import.
     float stlImportAccuracy = 0.5f;
-    float svgImportDetail = 1.0f;    // SVG spline-recovery detail; higher = finer curves
     // Whether imported mesh (STL) bodies draw their facet wireframe. Off gives a
     // clean shaded body to sketch on; the merged flat-region edges are still
     // useful, so it defaults on and the import dialog/Settings can disable it.

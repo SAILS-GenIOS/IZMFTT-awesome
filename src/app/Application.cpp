@@ -1430,7 +1430,6 @@ AppSettings Application::currentSettings() const {
     s.showInferenceToolbarToggle = m_showInferenceToolbarToggle;
     s.angleSnapDeg = m_sketchTool ? m_sketchTool->getAngleSnapDeg() : 15;
     s.stlImportAccuracy = m_stlImportAccuracy;
-    s.svgImportDetail = m_svgImportDetail;
     s.meshShowWireframe = m_meshShowWireframe;
     return s;
 }
@@ -1494,8 +1493,6 @@ void Application::applyAppSettings(const AppSettings& s) {
     m_sketchGridStep = s.sketchGridStep;
     m_showInferenceToolbarToggle = s.showInferenceToolbarToggle;
     m_stlImportAccuracy = s.stlImportAccuracy;
-    m_svgImportDetail = s.svgImportDetail;
-    SvgImport::detail = m_svgImportDetail;   // sync the geometry-side knob
     m_meshShowWireframe = s.meshShowWireframe;
     materializr::FileDialogs::setLastDir(s.lastFileDir);
     if (m_sketchTool) {
@@ -1806,7 +1803,6 @@ void Application::handleToolAction(int action) {
                         materializr::SvgPaths svg;
                         if (!materializr::SvgImport::load(path, svg)) return;
                         m_sketchTool->setSvgPaths(std::move(svg));
-                        m_sketchTool->setSvgPath(path);   // for re-sampling on detail change
                         seedUprightPlacementAngle();
                         m_sketchTool->setMode(SketchToolMode::Svg);
                     });
