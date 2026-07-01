@@ -842,12 +842,24 @@ bool emitDetectedLoop(Sketch* sk, const std::vector<glm::vec2>& P, bool closed) 
     //    samples. Centripetal Catmull-Rom interpolates its control points, so a
     //    spline joins its neighbours exactly — no gaps, and truer to the curve
     //    than the arc fit was. ──
-    auto isCorner = [&](int i) -> bool {
+    auto turnAt = [&](int i) -> double {
         glm::vec2 v1 = at(i) - at(i-1), v2 = at(i+1) - at(i);
-        if (glm::length(v1) < 1e-9f || glm::length(v2) < 1e-9f) return false;
+        if (glm::length(v1) < 1e-9f || glm::length(v2) < 1e-9f) return 0.0;
         double cr = static_cast<double>(v1.x)*v2.y - static_cast<double>(v1.y)*v2.x;
         double dt = static_cast<double>(v1.x)*v2.x + static_cast<double>(v1.y)*v2.y;
-        return std::abs(std::atan2(cr, dt)) > CORNER;
+        return std::atan2(cr, dt);
+    };
+    auto isCorner = [&](int i) -> bool {
+        double t = std::abs(turnAt(i));
+        if (t <= CORNER) return false;
+        // A real corner concentrates its turning at ONE sample (straight-ish
+        // approaches either side); a tight-but-smooth curve spreads it, so every
+        // sample turns a similar amount. Require this sample to exceed its two
+        // neighbours' turning combined — otherwise it's curvature, not a corner.
+        // Keeps blunt/square breaks off tight rounded tips while still catching
+        // genuine sharp vertices (whose neighbours are ~straight, so ~0 turn).
+        double tp = std::abs(turnAt(i - 1)), tn = std::abs(turnAt(i + 1));
+        return t > tp + tn;
     };
     std::vector<int> corners;
     if (closed) { for (int i = 0; i < n; ++i)     if (isCorner(i)) corners.push_back(i); }
