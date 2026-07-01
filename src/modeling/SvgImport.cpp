@@ -235,8 +235,23 @@ void sampleCubic(std::vector<glm::vec2>& out, const float* p, float ref) {
     for (int i = 0; i < 3; ++i)
         clen += std::hypot(p[(i + 1) * 2] - p[i * 2],
                            p[(i + 1) * 2 + 1] - p[i * 2 + 1]);
-    int n = std::max(1, static_cast<int>(std::ceil(clen / (0.005f * ref))));
-    n = std::min(n, 64);
+    // Curvature-aware: a tight cap (a thin cursive stroke's rounded end) has a
+    // small chord length but bends ~180°, so length-based sampling gives it 1–2
+    // points and its lone chord reads as a sharp corner (squared end). Also
+    // sample by how much the control polygon TURNS, so a bendy cubic gets enough
+    // points that no chord exceeds the corner threshold — the end stays a smooth
+    // curve while a straight edge (no turn) stays cheap.
+    auto polyAng = [&](int a, int b, int c) -> double {
+        double v1x = p[b*2] - p[a*2], v1y = p[b*2+1] - p[a*2+1];
+        double v2x = p[c*2] - p[b*2], v2y = p[c*2+1] - p[b*2+1];
+        double l1 = std::hypot(v1x, v1y), l2 = std::hypot(v2x, v2y);
+        if (l1 < 1e-9 || l2 < 1e-9) return 0.0;
+        return std::abs(std::atan2(v1x*v2y - v1y*v2x, v1x*v2x + v1y*v2y));
+    };
+    double turn = polyAng(0, 1, 2) + polyAng(1, 2, 3);
+    int nLen  = static_cast<int>(std::ceil(clen / (0.005f * ref)));
+    int nTurn = static_cast<int>(std::ceil(turn / 0.15));   // ≤ ~8.6° of bend per chord
+    int n = std::clamp(std::max({1, nLen, nTurn}), 1, 128);
     for (int i = 1; i <= n; ++i) {
         float t = static_cast<float>(i) / n, u = 1.0f - t;
         out.push_back(glm::vec2(
@@ -805,7 +820,12 @@ bool emitDetectedLoop(Sketch* sk, const std::vector<glm::vec2>& P, bool closed, 
 
     const double circTol = 0.004 * diag;    // whole-loop circle acceptance
     const double dpTol   = 0.0016 * diag / std::clamp(detail, 0.25f, 8.0f); // ↑detail = more pts
-    const double CORNER  = 0.52;            // ~30°: a sharper turn splits a segment
+    // Corner-angle threshold rises with detail so the same slider adds
+    // "roundness": at 1x, ~30° (sharp — text/polygons split to lines); higher
+    // lifts it so tight rounded ends (cursive stroke caps) stay smooth splines,
+    // while genuinely sharp vertices (90°+) still split at any setting.
+    const double CORNER  = std::clamp(0.52 + (static_cast<double>(detail) - 1.0) * 0.20,
+                                      0.35, 1.30);   // ~20°..~74°
 
     // Cyclic accessor: wraps for closed loops; also handles negative indices.
     auto at = [&](int k) -> glm::vec2 { return P[((k % n) + n) % n]; };
