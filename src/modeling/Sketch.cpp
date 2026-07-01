@@ -686,6 +686,11 @@ std::vector<TopoDS_Wire> Sketch::buildWires() const {
         // points; emitOcctEdge interpolates a smooth B-spline through ALL
         // its control points.
         int splineIdx = -1;
+        // Spline sub-edge: when a point lands on the spline and splits it, a
+        // sub-edge emits only samp[splineSampStart..splineSampEnd] of the sampled
+        // curve (sample density must match emitOcctEdge). -1/-1 = whole spline.
+        int splineSampStart = -1;
+        int splineSampEnd = -1;
     };
     std::vector<EdgeSpec> edges;
 
@@ -875,10 +880,56 @@ std::vector<TopoDS_Wire> Sketch::buildWires() const {
         const auto& sp = m_splines[si];
         if (sp.isConstruction) continue;
         if (sp.controlPointIds.size() < 2) continue;
+        const bool closedSp = sp.controlPointIds.size() > 2 &&
+                              sp.controlPointIds.front() == sp.controlPointIds.back();
+        // Sample the curve (density MUST match emitOcctEdge's sampleSpline2D) and
+        // find any adjacency node lying ON it other than the spline's own control
+        // points — a line endpoint landed there, and the spline must split so the
+        // loop-walker (and a dividing line) can route through that point.
+        std::vector<glm::vec2> samp = sampleSpline2D(sp, 24);
+        const int ns = static_cast<int>(samp.size());
+        std::unordered_set<int> ownCtrl(sp.controlPointIds.begin(), sp.controlPointIds.end());
+        struct SplineSplit { int sampleIdx; int ptId; };
+        std::vector<SplineSplit> splits;
+        if (ns >= 3) {
+            for (const auto& kv : coord) {
+                if (ownCtrl.count(kv.first)) continue;
+                int bestI = -1; float bestD = onLineTol;
+                for (int i = 1; i < ns - 1; ++i) {       // interior samples only
+                    float d = glm::length(samp[i] - kv.second);
+                    if (d < bestD) { bestD = d; bestI = i; }
+                }
+                if (bestI > 0) splits.push_back({bestI, kv.first});
+            }
+            std::sort(splits.begin(), splits.end(),
+                      [](const SplineSplit& a, const SplineSplit& b) { return a.sampleIdx < b.sampleIdx; });
+            splits.erase(std::unique(splits.begin(), splits.end(),
+                         [](const SplineSplit& a, const SplineSplit& b){ return a.sampleIdx == b.sampleIdx; }),
+                         splits.end());
+        }
+        if (splits.empty()) {
+            EdgeSpec es;
+            es.splineIdx = static_cast<int>(si);
+            es.startPtId = sp.controlPointIds.front();
+            es.endPtId = sp.controlPointIds.back();
+            edges.push_back(es);
+            continue;
+        }
+        // Emit contiguous sub-edges: front -> split0 -> split1 -> ... -> back.
+        int prevIdx = 0, prevPt = sp.controlPointIds.front();
+        for (const auto& s : splits) {
+            EdgeSpec es;
+            es.splineIdx = static_cast<int>(si);
+            es.startPtId = prevPt; es.endPtId = s.ptId;
+            es.splineSampStart = prevIdx; es.splineSampEnd = s.sampleIdx;
+            edges.push_back(es);
+            prevIdx = s.sampleIdx; prevPt = s.ptId;
+        }
         EdgeSpec es;
         es.splineIdx = static_cast<int>(si);
-        es.startPtId = sp.controlPointIds.front();
-        es.endPtId = sp.controlPointIds.back();
+        es.startPtId = prevPt;
+        es.endPtId = closedSp ? sp.controlPointIds.front() : sp.controlPointIds.back();
+        es.splineSampStart = prevIdx; es.splineSampEnd = ns - 1;
         edges.push_back(es);
     }
 
@@ -938,23 +989,37 @@ std::vector<TopoDS_Wire> Sketch::buildWires() const {
             return false; // (a CLOSED spline legitimately starts where it ends)
 
         if (es.splineIdx >= 0) {
-            // The SAME centripetal Catmull-Rom curve the renderer draws,
-            // densely sampled and fitted with a B-spline — what you see is
-            // what extrudes. Walked in the chain's direction.
+            // The SAME centripetal Catmull-Rom curve the renderer draws, densely
+            // sampled and fitted with a B-spline — what you see is what extrudes.
+            // A sub-edge (splineSampStart/End set, from a point landing on the
+            // spline and splitting it) emits only that slice, with its ends pinned
+            // to the shared points so the pieces + the landing line meet exactly.
             const SketchSpline& sp = m_splines[es.splineIdx];
-            std::vector<glm::vec2> samp = sampleSpline2D(sp, 24);
+            std::vector<glm::vec2> full = sampleSpline2D(sp, 24); // density matches adjacency
+            const bool subEdge = (es.splineSampStart >= 0 && es.splineSampEnd >= 0);
+            std::vector<glm::vec2> samp;
+            if (subEdge) {
+                int a = std::max(0, es.splineSampStart);
+                int b = std::min(static_cast<int>(full.size()) - 1, es.splineSampEnd);
+                if (b <= a) return false;
+                for (int i = a; i <= b; ++i) samp.push_back(full[i]);
+                samp.front() = sc->second;   // pin to exact shared-point coords
+                samp.back()  = ec->second;
+            } else {
+                samp = std::move(full);
+            }
             if (samp.size() < 2) return false;
-            bool closedSp = sp.controlPointIds.size() > 2 &&
-                            sp.controlPointIds.front() ==
-                                sp.controlPointIds.back();
+            bool closedSp = !subEdge && sp.controlPointIds.size() > 2 &&
+                            sp.controlPointIds.front() == sp.controlPointIds.back();
             if (fromPt == es.endPtId && !closedSp)
                 std::reverse(samp.begin(), samp.end());
             try {
                 TColgp_Array1OfPnt arr(1, static_cast<int>(samp.size()));
                 for (size_t k = 0; k < samp.size(); ++k)
-                    arr.SetValue(static_cast<int>(k) + 1,
-                                 sketchToWorld(samp[k]));
-                GeomAPI_PointsToBSpline fit(arr, 3, 8, GeomAbs_C2, 1.0e-3);
+                    arr.SetValue(static_cast<int>(k) + 1, sketchToWorld(samp[k]));
+                int degMin = std::min(3, static_cast<int>(samp.size()) - 1);
+                if (degMin < 1) return false;
+                GeomAPI_PointsToBSpline fit(arr, degMin, 8, GeomAbs_C2, 1.0e-3);
                 if (!fit.IsDone()) return false;
                 BRepBuilderAPI_MakeEdge mk(fit.Curve());
                 if (!mk.IsDone()) return false;
