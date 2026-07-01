@@ -1806,6 +1806,7 @@ void Application::handleToolAction(int action) {
                         materializr::SvgPaths svg;
                         if (!materializr::SvgImport::load(path, svg)) return;
                         m_sketchTool->setSvgPaths(std::move(svg));
+                        m_sketchTool->setSvgPath(path);   // for re-sampling on detail change
                         seedUprightPlacementAngle();
                         m_sketchTool->setMode(SketchToolMode::Svg);
                     });

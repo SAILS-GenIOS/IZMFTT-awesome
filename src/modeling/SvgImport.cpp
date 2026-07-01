@@ -230,7 +230,8 @@ void expandSvgUses(std::string& svg) {
 // Sample one cubic segment, point count driven by its control-polygon
 // length relative to the whole image (same idea as the glyph sampler's
 // deflection: dense enough that the chords read as the curve).
-void sampleCubic(std::vector<glm::vec2>& out, const float* p, float ref) {
+void sampleCubic(std::vector<glm::vec2>& out, const float* p, float ref, float detail) {
+    const float d = std::clamp(detail, 0.25f, 8.0f);   // detail scales density directly
     float clen = 0.0f;
     for (int i = 0; i < 3; ++i)
         clen += std::hypot(p[(i + 1) * 2] - p[i * 2],
@@ -249,9 +250,9 @@ void sampleCubic(std::vector<glm::vec2>& out, const float* p, float ref) {
         return std::abs(std::atan2(v1x*v2y - v1y*v2x, v1x*v2x + v1y*v2y));
     };
     double turn = polyAng(0, 1, 2) + polyAng(1, 2, 3);
-    int nLen  = static_cast<int>(std::ceil(clen / (0.005f * ref)));
-    int nTurn = static_cast<int>(std::ceil(turn / 0.15));   // ≤ ~8.6° of bend per chord
-    int n = std::clamp(std::max({1, nLen, nTurn}), 1, 128);
+    int nLen  = static_cast<int>(std::ceil(clen * d / (0.005f * ref)));
+    int nTurn = static_cast<int>(std::ceil(turn * d / 0.15));   // ≤ ~8.6°/chord at 1x, finer above
+    int n = std::clamp(std::max({1, nLen, nTurn}), 1, 256);
     for (int i = 1; i <= n; ++i) {
         float t = static_cast<float>(i) / n, u = 1.0f - t;
         out.push_back(glm::vec2(
@@ -719,7 +720,7 @@ bool SvgImport::load(const std::string& path, SvgPaths& out) {
             std::vector<glm::vec2> pts;
             pts.push_back(glm::vec2(p->pts[0], p->pts[1]));
             for (int i = 0; i < p->npts - 1; i += 3)
-                sampleCubic(pts, &p->pts[i * 2], ref);
+                sampleCubic(pts, &p->pts[i * 2], ref, SvgImport::detail);
             // Collapse consecutive duplicates — SVG paths routinely carry
             // degenerate (zero-length) cubics at joints, and a zero-length
             // sketch line would sink the whole wire in buildWires.

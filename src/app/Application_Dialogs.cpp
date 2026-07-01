@@ -2941,10 +2941,19 @@ void Application::renderSvgToolPanel() {
         if (ImGui::SliderFloat("Detail", &m_svgImportDetail, 0.5f, 4.0f, "%.1fx")) {
             m_svgImportDetail = std::clamp(m_svgImportDetail, 0.25f, 8.0f);
             SvgImport::detail = m_svgImportDetail;
-            saveAppSettings();
         }
-        ImGui::SetItemTooltip("Curve fidelity of the placed outlines — higher keeps more spline "
-                              "control points (finer, heavier). Applies to the NEXT placement.");
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            // Re-sample the source at the new detail (sampling density lives in
+            // load(), not place), so rounded stroke ends actually get more points.
+            saveAppSettings();
+            const std::string& sp = m_sketchTool->getSvgPath();
+            if (!sp.empty()) {
+                SvgPaths re;
+                if (SvgImport::load(sp, re)) m_sketchTool->setSvgPaths(std::move(re));
+            }
+        }
+        ImGui::SetItemTooltip("Roundness & fidelity of the placed outlines — higher samples curves "
+                              "denser (rounder ends, more points). Applies to the next placement.");
 
         int ang = m_sketchTool->getTextAngle();
         if (ImGui::Button("Rotate left"))
