@@ -186,16 +186,44 @@ void Application::beginInteractiveEdgeOp(EdgeOpType type) {
         m_edgeOpMid = glm::vec3(p.X(), p.Y(), p.Z());
         if (tan.Magnitude() > 1e-9) {
             m_edgeOpDir = glm::normalize(glm::vec3(tan.X(), tan.Y(), tan.Z()));
-            // Outward handle direction: from the body centre to the edge, made
-            // perpendicular to the edge, so the arrow faces straight out of the edge.
-            Bnd_Box bb; BRepBndLib::Add(m_edgeOpPreviousShape, bb);
-            if (!bb.IsVoid()) {
-                double x1,y1,z1,x2,y2,z2; bb.Get(x1,y1,z1,x2,y2,z2);
-                glm::vec3 c((x1+x2)*0.5f, (y1+y2)*0.5f, (z1+z2)*0.5f);
-                glm::vec3 out = m_edgeOpMid - c;
-                out -= glm::dot(out, m_edgeOpDir) * m_edgeOpDir; // perpendicular to edge
-                if (glm::length(out) > 1e-5f) m_edgeOpOutDir = glm::normalize(out);
+            // Outward handle direction = the average of the two adjacent faces'
+            // OUTWARD normals at the edge, made perpendicular to the edge. This
+            // points the arrow the way the fillet actually grows for BOTH convex
+            // (outer) edges AND concave inner corners — e.g. the inside corners
+            // of a thin-wall hollow box, where the fillet bulges into the cavity.
+            // The old "bbox centre → edge" heuristic was inverted on concave
+            // edges (arrow faced out toward the wall). Falls back to it if the
+            // adjacent faces can't be read.
+            glm::vec3 out(0.0f);
+            try {
+                TopTools_IndexedDataMapOfShapeListOfShape efMap;
+                TopExp::MapShapesAndAncestors(m_edgeOpPreviousShape, TopAbs_EDGE,
+                                              TopAbs_FACE, efMap);
+                const TopoDS_Edge& e0 = TopoDS::Edge(edges.front());
+                if (efMap.Contains(e0)) {
+                    const TopTools_ListOfShape& fl = efMap.FindFromKey(e0);
+                    for (const TopoDS_Shape& fs : fl) {
+                        BRepGProp_Face gf(TopoDS::Face(fs));
+                        Standard_Real u0,u1,v0,v1; gf.Bounds(u0,u1,v0,v1);
+                        gp_Pnt fp; gp_Vec fn;
+                        gf.Normal(0.5*(u0+u1), 0.5*(v0+v1), fp, fn); // outward (orientation-corrected)
+                        if (fn.Magnitude() > 1e-9) {
+                            fn.Normalize();
+                            out += glm::vec3(fn.X(), fn.Y(), fn.Z());
+                        }
+                    }
+                }
+            } catch (...) {}
+            if (glm::length(out) <= 1e-5f) {   // fallback: bbox centre → edge
+                Bnd_Box bb; BRepBndLib::Add(m_edgeOpPreviousShape, bb);
+                if (!bb.IsVoid()) {
+                    double x1,y1,z1,x2,y2,z2; bb.Get(x1,y1,z1,x2,y2,z2);
+                    glm::vec3 c((x1+x2)*0.5f, (y1+y2)*0.5f, (z1+z2)*0.5f);
+                    out = m_edgeOpMid - c;
+                }
             }
+            out -= glm::dot(out, m_edgeOpDir) * m_edgeOpDir; // perpendicular to edge
+            if (glm::length(out) > 1e-5f) m_edgeOpOutDir = glm::normalize(out);
             m_edgeOpHasHandle = true;
         }
     } catch (...) {}
@@ -338,19 +366,34 @@ bool Application::updateInteractiveEdgeOp() {
         // are rejected inside editStep (the op snaps back to its last good
         // parameters), so the preview can never strand the model.
         if (m_edgeOpValue < 0.01f) return false; // don't preview "remove" mid-drag
+        // Partial remesh: re-tessellate only the bodies the replay changes, not
+        // every visible body — see CREATE mode below.
+        std::map<int, TopoDS_Shape> before;
+        for (int id : m_document->getAllBodyIds()) before[id] = m_document->getBody(id);
         setEdgeOpParam(m_history->getStep(m_edgeOpEditingIndex),
                        m_edgeOpType == EdgeOpType::Fillet,
                        m_edgeOpValue,
                        m_edgeOpTwoDist ? m_edgeOpValue2 : -1.0f);
         m_history->editStep(m_edgeOpEditingIndex, *m_document);
-        m_meshesDirty = true;
+        std::set<int> now;
+        for (int id : m_document->getAllBodyIds()) {
+            now.insert(id);
+            auto it = before.find(id);
+            if (it == before.end() || !it->second.IsEqual(m_document->getBody(id)))
+                m_dirtyBodyIds.insert(id);
+        }
+        for (auto& [id, s] : before) if (!now.count(id)) m_dirtyBodyIds.insert(id);
         return true;
     }
 
-    // CREATE mode: transient op against the snapshotted pre-state.
-    // Restore original first, so dragging back to ~0 shows no fillet/chamfer.
+    // CREATE mode: transient op against the snapshotted pre-state, touching
+    // ONLY m_edgeOpBodyId. Mark just that body dirty (partial remesh) instead
+    // of the global m_meshesDirty — a fillet on one body in a large scene was
+    // re-tessellating EVERY visible body per preview frame, which is why the
+    // op felt heavy with siblings shown and snappy with them hidden. Restore
+    // first, so dragging back to ~0 shows no fillet/chamfer.
     m_document->updateBody(m_edgeOpBodyId, m_edgeOpPreviousShape);
-    m_meshesDirty = true;
+    m_dirtyBodyIds.insert(m_edgeOpBodyId); // rebuildMeshes re-meshes its final state
     if (m_edgeOpValue < 0.01f) return false;
 
     try {
@@ -361,10 +404,7 @@ bool Application::updateInteractiveEdgeOp() {
             for (const auto& e : m_edgeOpEdges) typedEdges.push_back(TopoDS::Edge(e));
             op->setEdges(typedEdges);
             op->setRadius(static_cast<double>(m_edgeOpValue));
-            if (op->execute(*m_document)) {
-                m_meshesDirty = true;
-                return true;
-            }
+            if (op->execute(*m_document)) return true;
             // Failed — restore original
             m_document->updateBody(m_edgeOpBodyId, m_edgeOpPreviousShape);
         } else {
@@ -375,10 +415,7 @@ bool Application::updateInteractiveEdgeOp() {
             op->setEdges(typedEdges);
             op->setDistance(static_cast<double>(m_edgeOpValue));
             if (m_edgeOpTwoDist) op->setDistance2(static_cast<double>(m_edgeOpValue2));
-            if (op->execute(*m_document)) {
-                m_meshesDirty = true;
-                return true;
-            }
+            if (op->execute(*m_document)) return true;
             m_document->updateBody(m_edgeOpBodyId, m_edgeOpPreviousShape);
         }
     } catch (...) {
