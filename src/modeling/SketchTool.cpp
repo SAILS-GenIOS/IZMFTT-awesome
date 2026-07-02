@@ -668,14 +668,21 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
     const bool allowCharge      = (m_inferenceLevel == InferenceLevel::Full ||
                                    m_inferenceLevel == InferenceLevel::Max);
 
-    // Point snap radius scales with grid step so it remains useful at 10 mm grids
-    // and isn't overaggressive at 0.1 mm grids. (Steve: closing splines onto
-    // existing line/polygon endpoints was awkward — the old 0.4× / 0.15 mm
-    // floor was too tight to reliably grab the corner when you're drawing
-    // freehand toward it. Bumped to 0.6× / 0.25 mm.)
+    // Point snap radius. When grid snap is ACTIVE the band is tied PURELY to
+    // the grid step (0.6× < one increment), so it can never reach past a
+    // neighbouring grid intersection. The old absolute 0.25 mm floor meant a
+    // fine grid was swamped by it: at a 0.1 mm grid a second point placed one
+    // or two steps (0.1–0.2 mm) from the first snapped straight back onto it —
+    // so nothing shorter than ~0.3 mm could be drawn, and an endpoint snap
+    // hijacked the cursor within 0.3 mm of any point (Steve's report). Coarse
+    // grids are unaffected (gridStep·0.6 already dominated the floor above
+    // ~0.42 mm). Grid OFF: the cursor is freehand, so keep an absolute band to
+    // grab endpoints reliably.
     // Master snap band — endpoints, midpoints, face centres, on-line and
     // extension guides all derive from it, so the touch widening flows to all.
-    float pointSnapThreshold = std::max(0.25f, m_gridStep * 0.6f) * snapScale();
+    const bool gridSnapOnForBand = m_snapToGridEnabled && m_gridStep > 0.0f;
+    float pointSnapThreshold =
+        (gridSnapOnForBand ? m_gridStep * 0.6f : 0.25f) * snapScale();
     float curveSnapThreshold = pointSnapThreshold; // same band for circle/arc perimeters
 
     // Without a sketch only grid snap can apply.
@@ -966,7 +973,11 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
     };
     std::vector<LineCand> cands;
 
-    const float axisThresh   = std::max(0.2f, m_gridStep * 0.3f);
+    // Axis-from-point guide band — same grid-relative treatment as the point
+    // snap above: with grid snap on, an absolute 0.2 mm floor would fire a
+    // horizontal/vertical guide off a point within 0.2 mm on a fine grid,
+    // hijacking the cursor within one increment. Tie it to the grid instead.
+    const float axisThresh   = (gridActive ? m_gridStep * 0.3f : 0.2f);
     const float onLineThresh = pointSnapThreshold * 0.7f;
     const float extThresh    = pointSnapThreshold * 0.6f;
     // POSITIONAL cap on directional / charged inferences: fires-checks are
