@@ -3261,6 +3261,10 @@ bool Application::loadProjectAt(const std::string& path) {
     // shapes — drop them (the entries pin their TShapes alive; see
     // SelectionHighlight::clearCaches).
     if (m_selectionHighlight) m_selectionHighlight->clearCaches();
+    // Same for the static-sketch GPU buffers (keyed on the outgoing
+    // project's sketch pointers; signature validation makes staleness
+    // harmless, but the GPU memory belongs to dead sketches).
+    if (m_sketchRenderer) m_sketchRenderer->clearCache();
     ProjectHistory hist;
     auto result = ProjectIO::load(path, *m_document, &hist);
     if (!result.success) {
