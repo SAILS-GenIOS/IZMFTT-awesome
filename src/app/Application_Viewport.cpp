@@ -2492,23 +2492,48 @@ void Application::renderViewport() {
                 ImVec2 delta = io.MouseDelta;
                 if (io.KeyShift) anchoredPan(delta.x, delta.y);
                 else {
-                    // Re-anchor the orbit pivot onto the object at the VIEW
-                    // CENTRE, once per gesture. The centre ray is the view axis,
-                    // so moving the target along it to the surface hit shifts
-                    // only the pivot — the image doesn't jump — but the orbit now
-                    // spins around the object instead of a point that drifted
-                    // behind it. Desktop only (touch keeps its existing feel);
-                    // a miss (centre over empty space) leaves the target as-is.
+                    // Re-anchor the orbit pivot onto the geometry near the VIEW
+                    // CENTRE, once per gesture, so the orbit spins around the
+                    // object instead of a point that drifted behind it. Moving
+                    // the target is seamless (a tiny mouse delta preserves the
+                    // camera position; only the pivot relocates). Desktop only;
+                    // a total miss (nothing near centre) leaves the target as-is.
                     if (!m_orbitAnchorHeld) {
                         m_orbitAnchorHeld = true;
                         if (!materializr::touchMode() && m_picker && m_document) {
-                            try {
-                                auto r = m_picker->pick(contentSize.x * 0.5f,
-                                                        contentSize.y * 0.5f,
-                                                        contentSize.x, contentSize.y,
-                                                        cam, *m_document);
-                                if (r.hit) cam.setTarget(r.hitPoint);
-                            } catch (...) {}
+                            auto pk = [&](float sx, float sy, glm::vec3& out) -> bool {
+                                try {
+                                    auto r = m_picker->pick(sx, sy, contentSize.x,
+                                                            contentSize.y, cam, *m_document);
+                                    if (r.hit) { out = r.hitPoint; return true; }
+                                } catch (...) {}
+                                return false;
+                            };
+                            const float cx = contentSize.x * 0.5f;
+                            const float cy = contentSize.y * 0.5f;
+                            glm::vec3 pivot;
+                            bool got = pk(cx, cy, pivot); // dead-centre wins outright
+                            if (!got) {
+                                // Centre is over a gap: sample expanding rings and
+                                // AVERAGE the first ring that hits. One part flanking
+                                // the centre → pivot leans to it (nearest); two parts
+                                // flanking a gap → pivot lands between them (the
+                                // middle-ground blend).
+                                const float radii[] = {40.0f, 85.0f, 150.0f};
+                                for (float rad : radii) {
+                                    glm::vec3 sum(0.0f); int n = 0;
+                                    for (int a = 0; a < 8; ++a) {
+                                        float ang = 6.2831853f * a / 8.0f;
+                                        glm::vec3 h;
+                                        if (pk(cx + rad * std::cos(ang),
+                                               cy + rad * std::sin(ang), h)) {
+                                            sum += h; ++n;
+                                        }
+                                    }
+                                    if (n > 0) { pivot = sum / float(n); got = true; break; }
+                                }
+                            }
+                            if (got) cam.setTarget(pivot);
                         }
                     }
                     // Touch orbit honours the user's sensitivity slider; desktop
