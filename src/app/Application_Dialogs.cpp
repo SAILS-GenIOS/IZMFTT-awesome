@@ -1214,7 +1214,10 @@ void Application::renderSketchPatternPopup() {
     ImGui::InputText("##spcount", m_sketchPatternCountBuf,
                      sizeof(m_sketchPatternCountBuf),
                      ImGuiInputTextFlags_CharsDecimal);
-    int newCount = std::max(2, std::atoi(m_sketchPatternCountBuf));
+    // Clamp: atoi has no overflow guard, so a pasted/typed huge integer
+    // (e.g. "999999999") would ask PatternOp to build ~a billion instances
+    // and hang. 1000 is far beyond any hand-built parametric pattern.
+    int newCount = std::min(1000, std::max(2, std::atoi(m_sketchPatternCountBuf)));
     if (newCount != m_sketchPatternCount) { m_sketchPatternCount = newCount; changed = true; }
 
     if (m_sketchPatternKind == PatternKind::Linear) {
@@ -1367,7 +1370,8 @@ void Application::renderPatternPanel() {
                                        sizeof(m_patternCountBuf),
                                        ImGuiInputTextFlags_EnterReturnsTrue |
                                        ImGuiInputTextFlags_CharsDecimal);
-    int parsedCount = std::max(2, std::atoi(m_patternCountBuf));
+    // Clamp — see the sketch-pattern count above (billion-instance hang guard).
+    int parsedCount = std::min(1000, std::max(2, std::atoi(m_patternCountBuf)));
     bool countChanged = parsedCount != m_patternCount;
     if (countChanged) m_patternCount = parsedCount;
 
