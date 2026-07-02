@@ -81,7 +81,8 @@ spin or a hinge open), loft, booleans, fillet/chamfer, shell, mirror,
 linear & circular patterns, split. Drop in a **primitive** (box,
 cylinder, sphere, cone, torus) when that's the faster start. Direct face
 editing: **taper** (draft), **scale face** (pinch a wing tip into a winglet),
-edit a hole or boss to an exact diameter.
+**twist a face** about its normal to spiral the walls, edit a hole or boss to
+an exact diameter.
 
 **Detail** — validated **screw threads** (internal & external, standard
 coarse defaults from the diameter), and **Projection**: engrave or emboss
@@ -121,7 +122,16 @@ up front:
   threading is treated as a terminal finishing step rather than something you
   build on top of.
 
-These are tracked and on the roadmap; both ease once topological naming is in.
+- **Chamfering an edge that meets a fillet fails.** If a chamfer's edge runs
+  into a rounded (filleted) edge, the operation is refused where the chamfer and
+  the swept fillet surface intersect — there's no tolerance setting that rescues
+  it. *Why:* it's an upstream limit in OpenCASCADE's chamfer builder, not
+  something a knob fixes. *Workaround:* cut the chamfer with a sketch instead, or
+  chamfer the edge before you fillet its neighbour.
+
+The first two ease once topological naming lands; the chamfer/fillet case is an
+upstream OpenCASCADE limit we're tracking for a cut-based fallback. All three
+are on the roadmap.
 
 ## Documentation
 

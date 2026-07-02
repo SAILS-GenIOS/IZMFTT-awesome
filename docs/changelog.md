@@ -3,6 +3,69 @@
 All notable changes to Materializr are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [1.3.0-beta.11] — 2026-07-02 (pre-release)
+
+Feature-complete cut for 1.3.0. APK versionCode 27.
+
+### Added
+
+- **Twist Face.** The direct face-editing gizmo's Rotate mode gains its third
+  ring — the blue one, lying *in* the face plane (about the face normal). Grab it
+  to **spin a face relative to the opposite cap**, spiralling the walls between
+  them; the panel also takes an exact twist angle. Built as a layered ruled loft,
+  so any total angle works (a single loft would cap at ~45°), and an over-twist
+  that self-intersects is refused cleanly rather than producing garbage. Tilt and
+  twist are separate operations — one gesture does either, not both.
+
+### Changed
+
+- **Navigation tracks 1:1 at any zoom.** Pan, and the push/pull, extrude, and
+  scale-face drag handles, now move the world/face exactly one pixel's worth per
+  pixel dragged, instead of a fixed scale that felt sluggish zoomed in and jumpy
+  zoomed out. The grabbed point stays under the cursor.
+- **Orbit spins around the object.** The pivot re-anchors onto the geometry at
+  the view centre at the start of each orbit (with a ring-sample fallback that
+  lands between two parts when you're looking down the gap between them), instead
+  of a point that had drifted behind the model — which used to read as a blend of
+  pan and rotate. The image doesn't jump; only the pivot moves.
+- **Sketch snapping scales with the grid.** At a fine grid (e.g. 0.1 mm) the snap
+  bands are now grid-relative, so you can draw short segments and place points one
+  increment apart. Point/endpoint snapping — including loop closure — is gated
+  behind the inference toggle: with inferences off, nothing captures the cursor.
+  The live length readout shows hundredths (trailing zeros trimmed).
+- **Isolate & visibility.** Right-click **Isolate** now actually hides the other
+  bodies from the viewport menu, a new **Show All Bodies** brings them back, and
+  the redundant "Hide Others" entry was removed.
+
+### Fixed
+
+- **Crash-recovery race between two running instances** (a `SIGBUS` / wrong-session
+  restore) — each instance now claims its own recovery slot via an OS file lock,
+  so they never fight over one autosave file.
+- **"Unhide sketch → not responding"** on heavy projects — unhiding a complex
+  sketch no longer forces a full re-tessellation or an OCCT region rebuild on the
+  hover path.
+- **Push/pull on an unlinked sketch** no longer fuses the new material into the
+  body the sketch was *originally* drawn on; a detached sketch behaves as
+  free-floating.
+- **Couldn't draw short lines/arcs** — a segment no longer welds its second point
+  back onto its own start, so sub-0.3 mm geometry commits.
+- **Selection outline / gizmo lagging** at the pre-move position after a
+  multi-body move.
+- **Non-finite numeric input** (e.g. `1e999` → infinity) is rejected at every
+  entry box instead of flowing into the geometry kernel; pattern instance counts
+  are clamped so a huge typed number can't hang the app.
+
+### Performance
+
+- Big pass for complex projects and tablets: **gizmo Move/Rotate/Scale drags are
+  GPU-only** (no per-frame remesh), **static sketches and selection highlights
+  render from cached GPU buffers**, and several per-frame document walks (the
+  sketch↔body link map, the toolbar's face scans, history/items panel work) are
+  now memoized. Noticeably smoother orbit and drag with many bodies on screen.
+- Leftover per-interaction debug output is now gated behind `--verbose`, and a
+  round of dead code was removed.
+
 ## [1.3.0-beta.10] — 2026-06-30 (pre-release)
 
 ### Fixed
