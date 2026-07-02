@@ -716,6 +716,16 @@ glm::vec2 SketchTool::snap(glm::vec2 pos) const {
         // During a drag, skip the points being moved — they'd snap to
         // their own starting position and lock the drag in place.
         if (m_snapExcludePoints.count(pt.id)) continue;
+        // Don't SELF-WELD the active segment: while positioning the next
+        // vertex, the point just placed (m_lastPointId — the segment's start /
+        // previous chain vertex) must not capture the cursor, or the endpoint
+        // band welds the new point straight back onto it and you can't draw a
+        // segment shorter than the band. This is grid-INDEPENDENT (the band is
+        // 0.25 mm even with snap off), which is why Steve couldn't make a line
+        // under ~0.25 mm with grid AND inferences both off. Loop closure welds
+        // to the CHAIN start (m_chainStartPointId — a different id after the
+        // first segment), so auto-close is unaffected.
+        if (m_isPlacing && m_lastPointId >= 0 && pt.id == m_lastPointId) continue;
         // Glyph vertices are never snap targets — a word is hundreds of
         // points and drawing near text was impossible.
         if (pt.fromText) continue;

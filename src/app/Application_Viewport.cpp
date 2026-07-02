@@ -1442,6 +1442,26 @@ void Application::renderViewport() {
                 glm::vec3 Y(ax.YDirection().X(), ax.YDirection().Y(), ax.YDirection().Z());
                 auto sketch2world = [&](glm::vec2 p) { return O + p.x * X + p.y * Y; };
 
+                // Length readout: two decimals with trailing zeros trimmed, so
+                // short segments read at hundredth precision (0.27) while round
+                // values stay clean (0.90 -> 0.9, 1.00 -> 1). The old tenths
+                // format hid everything under 0.1 mm. (No <cstring> needed —
+                // trim over the fixed buffer by index.)
+                auto fmtLen = [](char* out, size_t n, float v, const char* suffix) {
+                    char num[32];
+                    int m = std::snprintf(num, sizeof(num), "%.2f", v);
+                    if (m > 0) {
+                        bool hasDot = false;
+                        for (int k = 0; k < m; ++k) if (num[k] == '.') { hasDot = true; break; }
+                        if (hasDot) {
+                            int e = m - 1;
+                            while (e > 0 && num[e] == '0') num[e--] = '\0';
+                            if (e >= 0 && num[e] == '.') num[e] = '\0';
+                        }
+                    }
+                    std::snprintf(out, n, "%s %s", num, suffix);
+                };
+
                 SketchToolMode pm = m_sketchTool->getPreviewType();
                 glm::vec2 ps = m_sketchTool->getPreviewStart();
                 glm::vec2 pe = m_sketchTool->getPreviewEnd();
@@ -1449,7 +1469,7 @@ void Application::renderViewport() {
                 if (pm == SketchToolMode::Line) {
                     float length = glm::length(pe - ps);
                     if (length > 1e-3f) {
-                        std::snprintf(dbuf, sizeof(dbuf), "%.1f mm", length);
+                        fmtLen(dbuf, sizeof(dbuf), length, "mm");
                         drawDim(sketch2world(ps), sketch2world(pe), dbuf);
                     }
                 } else if (pm == SketchToolMode::Circle) {
@@ -1457,7 +1477,7 @@ void Application::renderViewport() {
                     glm::vec2 rvec = pe - ps;
                     float dia = 2.0f * glm::length(rvec);
                     if (dia > 1e-3f) {
-                        std::snprintf(dbuf, sizeof(dbuf), "%.1f mm dia", dia);
+                        fmtLen(dbuf, sizeof(dbuf), dia, "mm dia");
                         drawDim(sketch2world(ps - rvec), sketch2world(pe), dbuf);
                     }
                 } else if (pm == SketchToolMode::Rectangle) {
@@ -1465,11 +1485,11 @@ void Application::renderViewport() {
                     glm::vec2 bl(ps.x, ps.y), br(pe.x, ps.y), tr(pe.x, pe.y);
                     float w = std::abs(pe.x - ps.x), h = std::abs(pe.y - ps.y);
                     if (w > 1e-3f) {
-                        std::snprintf(dbuf, sizeof(dbuf), "%.1f mm", w);
+                        fmtLen(dbuf, sizeof(dbuf), w, "mm");
                         drawDim(sketch2world(bl), sketch2world(br), dbuf);
                     }
                     if (h > 1e-3f) {
-                        std::snprintf(dbuf, sizeof(dbuf), "%.1f mm", h);
+                        fmtLen(dbuf, sizeof(dbuf), h, "mm");
                         drawDim(sketch2world(br), sketch2world(tr), dbuf);
                     }
                 } else if (pm == SketchToolMode::Arc) {
@@ -1484,7 +1504,7 @@ void Application::renderViewport() {
                     if (clicks == 1) {
                         float length = glm::length(pe - ps);
                         if (length > 1e-3f) {
-                            std::snprintf(dbuf, sizeof(dbuf), "%.1f mm", length);
+                            fmtLen(dbuf, sizeof(dbuf), length, "mm");
                             drawDim(sketch2world(ps), sketch2world(pe), dbuf);
                         }
                     } else if (clicks == 2) {
