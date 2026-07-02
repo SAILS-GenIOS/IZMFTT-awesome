@@ -6010,6 +6010,10 @@ void Application::renderViewport() {
 
     // Interactive fillet/chamfer UI
     if (m_edgeOpActive) {
+        // Fire a deferred fillet/chamfer preview once the value has settled
+        // (self-tuning debounce; see updateInteractiveEdgeOp). Runs every frame
+        // the panel is up — cheap no-op unless a recompute is pending.
+        tickInteractiveEdgeOp();
         const char* opName = m_edgeOpType == EdgeOpType::Fillet ? "FILLET" : "CHAMFER";
         const char* label = m_edgeOpType == EdgeOpType::Fillet ? "Radius (mm)" : "Distance (mm)";
 
