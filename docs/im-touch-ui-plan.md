@@ -1,5 +1,13 @@
 # "im-touch" tablet UI — implementation plan
 
+> **Historical note (2026-07):** this plan shipped, then the naming and file
+> layout were reorganized. What this document calls the "im-touch shell" is
+> now the **Modern** layout, and the "lite" variant is now the **im-touch**
+> layout; the coupled `imTouchUi`/`imTouchLite` flags became the `UiLayout`
+> enum (`classic | modern | imtouch`, settings key `uiLayout`). The code moved
+> from `Application_TouchShell.cpp` to `src/app/layout/{classic,modern,imtouch}/`
+> with the shared fundamentals in `src/app/layout/LayoutCommon.*`.
+
 Goal: an opt-in tablet shell (Settings → Interface → **im-touch UI**) that
 replaces the desktop docking layout (menu bar + dockable panels + status bar)
 with a purpose-built touch layout, per the mockup:

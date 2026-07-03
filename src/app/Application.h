@@ -148,15 +148,17 @@ private:
     void renderConstructionMenuItems();
     void renderViewMenuItems();
     void renderHelpMenuItems();
-    // "im-touch" tablet shell (Application_TouchShell.cpp): top app bar + tool
-    // rail + right panel replacing dockspace/menu bar/status bar when
-    // m_imTouchUi is on. Computes the viewport rect renderViewport() pins to.
-    void renderTouchShell();
-    void renderTouchShellLite();   // near-zero-chrome variant (imTouchLite)
-    // Polygon in the im-touch rail opens a side-count popout (matching the
-    // classic sketch toolbar). Shared by the modern rail and lite tool bar.
+    // Per-layout chrome (src/app/layout/<name>/). Modern: top app bar + tool
+    // rail + right panel (layout/modern/ModernLayout.cpp). im-touch: near-zero
+    // chrome, floating overlays (layout/imtouch/ImTouchLayout.cpp). Both
+    // compute the viewport rect renderViewport() pins to. Classic's menu bar
+    // is renderMenuBar() above (layout/classic/ClassicLayout.cpp).
+    void renderModernLayout();
+    void renderImTouchLayout();
+    // Polygon in the tool rail opens a side-count popout (matching the
+    // classic sketch toolbar). Shared by the modern rail and im-touch bar.
     void renderRailPolygonSidesPopup(bool clicked);
-    void renderTouchOverflowPopup(); // shared ⋯/☰ menu popup (both variants)
+    void renderTouchOverflowPopup(); // shared ⋯/☰ menu popup (modern + im-touch)
     // Undo/redo with the sketch-edit cascade (shared by the Edit menu, the
     // touch shell's top bar, and nothing else — the Ctrl+Z shortcut has its
     // own copy in handleShortcuts pending a merge).
@@ -715,23 +717,25 @@ private:
     bool m_touchMode = false;
 #endif
 
-    // "im-touch" tablet shell (see AppSettings::imTouchUi). Live-switchable:
-    // read every frame by run()/renderViewport(); persisted on save.
-    bool m_imTouchUi = false;
-    // Lite variant: near-zero chrome (full-bleed viewport + floating
-    // overlays). Only meaningful while m_imTouchUi is on.
-    bool m_imTouchLite = false;
-    // Lite-only: the transparent model tree on the right edge.
-    bool m_imTouchLiteTree = true;
-    // Lite-only: the Fusion-style history timeline along the bottom edge.
-    bool m_imTouchLiteTimeline = true;
-    // Lite timeline: step whose properties popup is open (-1 = none).
+    // Interface layout (see UiLayout in io/Settings.h and src/app/layout/).
+    // Live-switchable: read every frame by run()/renderViewport(); persisted
+    // on save. The helpers below are the preferred spelling at call sites.
+    UiLayout m_uiLayout = UiLayout::Classic;
+    bool classicLayout() const { return m_uiLayout == UiLayout::Classic; }
+    bool modernLayout()  const { return m_uiLayout == UiLayout::Modern;  }
+    bool imTouchLayout() const { return m_uiLayout == UiLayout::ImTouch; }
+    // im-touch only: the transparent model tree on the right edge.
+    bool m_imTouchTree = true;
+    // im-touch only: the Fusion-style history timeline along the bottom edge.
+    bool m_imTouchTimeline = true;
+    // im-touch timeline: step whose properties popup is open (-1 = none).
     // Mirrored into m_historyPanel's editing step so the viewport's orange
     // edited-element highlight follows. Session-local.
-    int m_liteHistoryEdit = -1;
-    // Center rect the touch shell leaves for the viewport window this frame
-    // (screen coords, points). Written by renderTouchShell(), read by
-    // renderViewport() to pin the undocked "Viewport" window.
+    int m_imTouchHistoryEdit = -1;
+    // Center rect the modern/im-touch layouts leave for the viewport window
+    // this frame (screen coords, points). Written by renderModernLayout() /
+    // renderImTouchLayout(), read by renderViewport() to pin the undocked
+    // "Viewport" window.
     float m_touchVpX = 0.0f, m_touchVpY = 0.0f, m_touchVpW = 0.0f, m_touchVpH = 0.0f;
     // Active tab of the touch shell's right panel (0 = Items,
     // 1 = History & Properties). Persisted.

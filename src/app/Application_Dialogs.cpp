@@ -186,16 +186,14 @@ void Application::renderSettings() {
                 // old General / Sketch / Rendering tabs into one place.
                 if (ImGui::BeginTabItem("Appearance")) {
                     ImGui::SeparatorText("Layout");
-                    // Interface layout is ONE mutually-exclusive choice, not two
-                    // coupled checkboxes — a dropdown so the modes can never
-                    // combine into an inconsistent state. Derive the index from
-                    // the two persisted flags; picking sets both together.
-                    //   0 Classic  1 Modern (im-touch shell)  2 im-touch (lite)
-                    int layoutMode = !m_imTouchUi ? 0 : (m_imTouchLite ? 2 : 1);
+                    // Interface layout is ONE mutually-exclusive choice
+                    // (UiLayout in io/Settings.h) — a dropdown so the modes
+                    // can never combine into an inconsistent state. The combo
+                    // order matches the enum's numeric values.
+                    int layoutMode = static_cast<int>(m_uiLayout);
                     const char* layoutNames[] = { "Classic", "Modern", "im-touch" };
                     if (ImGui::Combo("Interface", &layoutMode, layoutNames, 3)) {
-                        m_imTouchUi   = (layoutMode >= 1);
-                        m_imTouchLite = (layoutMode == 2);
+                        m_uiLayout = static_cast<UiLayout>(layoutMode);
                         changed = true;
                     }
                     ImGui::TextWrapped(
@@ -1789,7 +1787,7 @@ void Application::renderSnapWidget() {
     ImVec2 wp = ImGui::GetWindowPos();
     ImVec2 ws = ImGui::GetWindowSize();
     const bool anchorToCube =
-        materializr::touchMode() || (m_imTouchUi && m_imTouchLite);
+        materializr::touchMode() || imTouchLayout();
     float  size;
     ImVec2 widgetPos;
     if (anchorToCube) {

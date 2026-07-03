@@ -5,6 +5,17 @@
 
 namespace materializr {
 
+// The three interface layouts (Settings → Appearance → Interface). One
+// mutually-exclusive choice; add future layouts to the end (the numeric
+// values line up with the Settings combo order). Each layout's chrome lives
+// in src/app/layout/<name>/ — see src/app/layout/LayoutCommon.h for the
+// keep-in-lockstep contract when adding features or plugin entry points.
+//   Classic — desktop menu bar + docked panels + status bar.
+//   Modern  — top app bar + tool rail + right side panel.
+//   ImTouch — near-zero chrome: full-bleed viewport, floating overlays
+//             (the name is an homage to ImGui).
+enum class UiLayout { Classic = 0, Modern = 1, ImTouch = 2 };
+
 // User-facing application preferences that persist between launches. Defaults
 // here are the out-of-the-box behaviour and are also the fallback whenever a
 // key is missing or unreadable in the settings file.
@@ -18,23 +29,19 @@ struct AppSettings {
 #else
     bool touchMode          = false;
 #endif
-    // "im-touch" tablet shell: top app bar + tool rail + side panel replacing
-    // the desktop menu bar / docked panels / status bar. Orthogonal to
-    // touchMode (layout vs input model); switches live, no restart. See
-    // docs/im-touch-ui-plan.md.
-    bool imTouchUi          = false;
-    // Lite variant of the im-touch shell: near-zero chrome — full-bleed
-    // viewport, floating project/selection chip, contextual tool bar at the
-    // bottom, "+" create button. Only meaningful while imTouchUi is on.
-    bool imTouchLite        = false;
-    // Lite shell only: the transparent model tree (Bodies/Sketches/
+    // Interface layout (see the UiLayout enum above). Orthogonal to touchMode
+    // (layout vs input model); switches live, no restart. Serialized as the
+    // string key `uiLayout = classic | modern | imtouch`; older builds' bool
+    // pair imTouchUi/imTouchLite is still read as a fallback.
+    UiLayout uiLayout       = UiLayout::Classic;
+    // im-touch layout only: the transparent model tree (Bodies/Sketches/
     // Construction) floating on the right edge. Toggled by the list button
-    // in the lite top-right cluster.
-    bool imTouchLiteTree    = true;
-    // Lite shell only: the Fusion-style history timeline (one box per history
-    // step) floating along the bottom edge. Toggled by the clock button in
-    // the lite top-right cluster.
-    bool imTouchLiteTimeline = true;
+    // in the top-right cluster.
+    bool imTouchTree        = true;
+    // im-touch layout only: the Fusion-style history timeline (one box per
+    // history step) floating along the bottom edge. Toggled by the clock
+    // button in the top-right cluster.
+    bool imTouchTimeline    = true;
     int  touchRightTab      = 0;    // shell right panel: 0 = Items, 1 = History & Properties
     // Shell right-panel width in logical px (× uiScale at use) — written by
     // the panel's left-edge drag splitter / edge tab.

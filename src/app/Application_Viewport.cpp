@@ -165,9 +165,9 @@ void Application::gizmoPreviewApply(const glm::mat4& m) {
 void Application::renderViewport() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGuiWindowFlags vpFlags = 0;
-    if (m_imTouchUi) {
-        // Touch shell: pin the viewport (undocked, chrome-less) into the
-        // center rect renderTouchShell() computed earlier this frame.
+    if (!classicLayout()) {
+        // Modern/im-touch: pin the viewport (undocked, chrome-less) into the
+        // center rect the layout's renderer computed earlier this frame.
         ImGui::SetNextWindowDockID(0, ImGuiCond_Always);
         ImGui::SetNextWindowPos(ImVec2(m_touchVpX, m_touchVpY), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(m_touchVpW, m_touchVpH), ImGuiCond_Always);
@@ -5724,9 +5724,9 @@ void Application::renderViewport() {
     // ViewCube overlay. In im-touch-lite the top-right button cluster floats
     // over the viewport corner where the cube lives — drop the cube below it.
     const float uisVc = uiScale();
-    if (m_imTouchUi && m_imTouchLite)
-        m_viewCube->setExtraOffset(0.0f, 68.0f * uisVc); // clear the lite top-right cluster
-    else if (m_imTouchUi)
+    if (imTouchLayout())
+        m_viewCube->setExtraOffset(0.0f, 68.0f * uisVc); // clear the im-touch top-right cluster
+    else if (modernLayout())
         m_viewCube->setExtraOffset(8.0f * uisVc, -8.0f * uisVc); // centre Home in the corner
     else
         m_viewCube->setExtraOffset(0.0f, 0.0f);
@@ -5765,15 +5765,15 @@ void Application::renderViewport() {
         bool selectionContext = !m_inSketchMode ||
             (m_sketchTool && m_sketchTool->getMode() == SketchToolMode::Select);
         bool placing = m_inSketchMode && m_sketchTool && m_sketchTool->isPlacing();
-        // In the im-touch shell the Multi-Select toggle is hosted in the top app
-        // bar instead (down here it overlapped the FULL pill). Keep the rest of
-        // this bar — Delete, and the chain-tool Finish/Back — which the shell
-        // doesn't replicate.
-        const bool multiInLegacy = !m_imTouchUi;
+        // In the modern/im-touch layouts the Multi-Select toggle is hosted in
+        // their own chrome instead (down here it overlapped the FULL pill).
+        // Keep the rest of this bar — Delete, and the chain-tool Finish/Back —
+        // which those layouts don't replicate.
+        const bool multiInLegacy = classicLayout();
         const bool deleteHere = m_inSketchMode && m_sketchTool &&
                                 m_sketchTool->hasElementSelection();
         if ((selectionContext && (multiInLegacy || deleteHere)) ||
-            (placing && !m_imTouchUi)) {
+            (placing && classicLayout())) {
             ImGui::SetNextWindowPos(ImVec2(vpMin.x + 6.0f, vpMin.y + vpSize.y - 6.0f),
                                     ImGuiCond_Always, ImVec2(0.0f, 1.0f));
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 12.0f));
@@ -5810,7 +5810,7 @@ void Application::renderViewport() {
                     if (dhov) ImGui::SetTooltip("Delete the selected sketch elements (undoable)");
                 }
             }
-            if (placing && !m_imTouchUi) {
+            if (placing && classicLayout()) {
                 SketchToolMode mode = m_sketchTool->getMode();
                 // Circle/Rectangle are a single press-drag-release gesture now,
                 // so their only "placing" window is mid-drag with the finger

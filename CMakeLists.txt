@@ -158,7 +158,10 @@ add_executable(materializr
     src/app/FaceOpControllers.cpp
     src/app/Application_Dialogs.cpp
     src/app/Application_InteractiveOps.cpp
-    src/app/Application_TouchShell.cpp
+    src/app/layout/LayoutCommon.cpp
+    src/app/layout/classic/ClassicLayout.cpp
+    src/app/layout/modern/ModernLayout.cpp
+    src/app/layout/imtouch/ImTouchLayout.cpp
     src/app/Application_Viewport.cpp
     src/app/Window.cpp
     src/plugin/PluginContext.cpp

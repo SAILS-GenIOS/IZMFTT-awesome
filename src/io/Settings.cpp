@@ -48,16 +48,44 @@ void readBool(const std::map<std::string, std::string>& kv, const char* key, boo
     // anything else: keep default
 }
 
+// Serialized names for the UiLayout enum — what `uiLayout = ...` holds in
+// the settings file (readable, order-independent, extensible).
+const char* uiLayoutName(UiLayout l) {
+    switch (l) {
+        case UiLayout::Modern:  return "modern";
+        case UiLayout::ImTouch: return "imtouch";
+        case UiLayout::Classic: default: return "classic";
+    }
+}
+
 // Map a bag of string key/values onto the struct. Shared by the `.cfg` text
 // loader and the JSON importer so both honour the same keys and tolerance
 // rules (unknown keys ignored, missing keys keep their defaults).
 void applyKv(const std::map<std::string, std::string>& kv, AppSettings& s) {
     readInt (kv, "theme",                s.theme);
     readBool(kv, "touchMode",            s.touchMode);
-    readBool(kv, "imTouchUi",            s.imTouchUi);
-    readBool(kv, "imTouchLite",          s.imTouchLite);
-    readBool(kv, "imTouchLiteTree",      s.imTouchLiteTree);
-    readBool(kv, "imTouchLiteTimeline",  s.imTouchLiteTimeline);
+    // Interface layout. Legacy first (older builds wrote the coupled bool
+    // pair imTouchUi/imTouchLite, where "im-touch on + lite" is today's
+    // imtouch and "im-touch on" alone is today's modern), then the current
+    // string key so it wins whenever both are present.
+    {
+        bool legacyUi = false, legacyLite = false;
+        readBool(kv, "imTouchUi",   legacyUi);
+        readBool(kv, "imTouchLite", legacyLite);
+        if (legacyUi)
+            s.uiLayout = legacyLite ? UiLayout::ImTouch : UiLayout::Modern;
+        std::string v;
+        readString(kv, "uiLayout", v);
+        for (auto& c : v) c = static_cast<char>(::tolower(c));
+        if      (v == "classic") s.uiLayout = UiLayout::Classic;
+        else if (v == "modern")  s.uiLayout = UiLayout::Modern;
+        else if (v == "imtouch") s.uiLayout = UiLayout::ImTouch;
+        // unknown value: keep whatever legacy/default produced
+    }
+    readBool(kv, "imTouchLiteTree",      s.imTouchTree);      // legacy key
+    readBool(kv, "imTouchTree",          s.imTouchTree);
+    readBool(kv, "imTouchLiteTimeline",  s.imTouchTimeline);  // legacy key
+    readBool(kv, "imTouchTimeline",      s.imTouchTimeline);
     readInt (kv, "touchRightTab",        s.touchRightTab);
     readFloat(kv, "touchRightW",         s.touchRightW);
     readFloat(kv, "touchRailW",          s.touchRailW);
@@ -257,6 +285,15 @@ bool SettingsIO::save(const std::string& path, const AppSettings& s) {
             std::string key = trim(t.substr(0, eq));
             if (!key.empty()) oldKv[key] = trim(t.substr(eq + 1));
         }
+        // Legacy layout keys this build superseded (read via applyKv's
+        // migration, re-written as uiLayout/imTouchTree/imTouchTimeline).
+        // Don't round-trip them as "another version's" keys — a stale
+        // imTouchUi=true would override a later uiLayout=classic in any
+        // pre-rename build still lying around.
+        oldKv.erase("imTouchUi");
+        oldKv.erase("imTouchLite");
+        oldKv.erase("imTouchLiteTree");
+        oldKv.erase("imTouchLiteTimeline");
     }
 
     ensureParentDir(path);
@@ -266,10 +303,9 @@ bool SettingsIO::save(const std::string& path, const AppSettings& s) {
            "# defaults. Safe to edit by hand or to carry across versions.\n";
     ofs << "theme = "               << s.theme               << "\n";
     ofs << "touchMode = "           << (s.touchMode ? "true" : "false") << "\n";
-    ofs << "imTouchUi = "           << (s.imTouchUi ? "true" : "false") << "\n";
-    ofs << "imTouchLite = "         << (s.imTouchLite ? "true" : "false") << "\n";
-    ofs << "imTouchLiteTree = "     << (s.imTouchLiteTree ? "true" : "false") << "\n";
-    ofs << "imTouchLiteTimeline = " << (s.imTouchLiteTimeline ? "true" : "false") << "\n";
+    ofs << "uiLayout = "            << uiLayoutName(s.uiLayout) << "\n";
+    ofs << "imTouchTree = "         << (s.imTouchTree ? "true" : "false") << "\n";
+    ofs << "imTouchTimeline = "     << (s.imTouchTimeline ? "true" : "false") << "\n";
     ofs << "touchRightTab = "       << s.touchRightTab       << "\n";
     ofs << "touchRightW = "         << s.touchRightW         << "\n";
     ofs << "touchRailW = "          << s.touchRailW          << "\n";
@@ -361,7 +397,7 @@ bool SettingsIO::exportJson(const std::string& path, const AppSettings& s) {
     ofs << "{\n";
     ofs << "  \"theme\": "                   << s.theme                 << ",\n";
     ofs << "  \"touchMode\": "               << (s.touchMode ? "true" : "false") << ",\n";
-    ofs << "  \"imTouchUi\": "               << (s.imTouchUi ? "true" : "false") << ",\n";
+    ofs << "  \"uiLayout\": \""              << uiLayoutName(s.uiLayout) << "\",\n";
     ofs << "  \"orbitButton\": "             << s.orbitButton           << ",\n";
     ofs << "  \"panButton\": "               << s.panButton             << ",\n";
     ofs << "  \"levelOrbit\": "              << b(s.levelOrbit)         << ",\n";
