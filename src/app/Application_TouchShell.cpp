@@ -373,7 +373,10 @@ void Application::renderTouchShell() {
                 ImGui::SetCursorPos(keep);
             }
 
-            static const char* kTabs[] = { "Items", "History & Properties" };
+            // Properties lives inside the History tab (below the steps) but
+            // the tab just says "History" — that's where people expect it,
+            // and the short label keeps the switcher clean.
+            static const char* kTabs[] = { "Items", "History" };
             if (m_touchRightTab > 1) m_touchRightTab = 1; // migrate old 3-tab value
             const int tab = touchui::segmented("rightTabs", kTabs, 2,
                                                m_touchRightTab);
@@ -393,8 +396,9 @@ void Application::renderTouchShell() {
                 } else {
                     // History on top, Properties beneath — one tab hosts both
                     // (the step list and the editor for the selected step /
-                    // selection live together).
-                    const float histH = ImGui::GetContentRegionAvail().y * 0.5f;
+                    // selection live together). Properties rarely holds much,
+                    // so it gets the bottom third at most.
+                    const float histH = ImGui::GetContentRegionAvail().y * 0.667f;
                     if (ImGui::BeginChild("##histHalf", ImVec2(0, histH), false)) {
                         if (m_historyPanel && m_historyPanel->renderContent())
                             m_meshesDirty = true;
