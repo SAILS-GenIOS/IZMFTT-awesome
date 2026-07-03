@@ -146,6 +146,8 @@ private:
     // rail + right panel replacing dockspace/menu bar/status bar when
     // m_imTouchUi is on. Computes the viewport rect renderViewport() pins to.
     void renderTouchShell();
+    void renderTouchShellLite();   // near-zero-chrome variant (imTouchLite)
+    void renderTouchOverflowPopup(); // shared ⋯/☰ menu popup (both variants)
     // Undo/redo with the sketch-edit cascade (shared by the Edit menu, the
     // touch shell's top bar, and nothing else — the Ctrl+Z shortcut has its
     // own copy in handleShortcuts pending a merge).
@@ -699,6 +701,9 @@ private:
     // "im-touch" tablet shell (see AppSettings::imTouchUi). Live-switchable:
     // read every frame by run()/renderViewport(); persisted on save.
     bool m_imTouchUi = false;
+    // Lite variant: near-zero chrome (full-bleed viewport + floating
+    // overlays). Only meaningful while m_imTouchUi is on.
+    bool m_imTouchLite = false;
     // Center rect the touch shell leaves for the viewport window this frame
     // (screen coords, points). Written by renderTouchShell(), read by
     // renderViewport() to pin the undocked "Viewport" window.

@@ -23,6 +23,10 @@ struct AppSettings {
     // touchMode (layout vs input model); switches live, no restart. See
     // docs/im-touch-ui-plan.md.
     bool imTouchUi          = false;
+    // Lite variant of the im-touch shell: near-zero chrome — full-bleed
+    // viewport, floating project/selection chip, contextual tool bar at the
+    // bottom, "+" create button. Only meaningful while imTouchUi is on.
+    bool imTouchLite        = false;
     int  touchRightTab      = 0;    // shell right panel: 0 = Items, 1 = History
 #if defined(MZ_MOBILE)
     // Touch-first default: trackpad mode (one-finger drag = orbit, two-finger

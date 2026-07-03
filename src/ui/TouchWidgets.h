@@ -10,8 +10,14 @@ namespace materializr {
 namespace touchui {
 
 // Vertical rail entry: icon over a small label, accent-filled rounded rect
-// when active. Fills the current content width. Returns true on press.
-bool railButton(const char* id, const char* icon, const char* label, bool active);
+// when active. Fills the current content width (or `width` when > 0 — used
+// by the lite shell's horizontal tool bar). Returns true on press.
+bool railButton(const char* id, const char* icon, const char* label, bool active,
+                float width = 0.0f);
+
+// Floating action button: filled accent circle with a centered icon
+// (im-touch-lite's "+ create"). Returns true on press.
+bool fab(const char* id, const char* icon, float diameter = 0.0f);
 
 // Rounded pill with an icon and optional label (top-bar actions). Returns
 // true on press. `accent` fills it with the accent color (primary action).

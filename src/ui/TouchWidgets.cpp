@@ -25,9 +25,10 @@ void drawIconCentered(ImDrawList* dl, const ImVec2& center, float size,
 
 } // namespace
 
-bool railButton(const char* id, const char* icon, const char* label, bool active) {
+bool railButton(const char* id, const char* icon, const char* label, bool active,
+                float width) {
     const float s = uiScale();
-    const float w = ImGui::GetContentRegionAvail().x;
+    const float w = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
     const float h = 62.0f * s;
 
     ImGui::PushID(id);
@@ -114,6 +115,26 @@ bool iconButton(const char* id, const char* icon, float side) {
     drawIconCentered(dl, ImVec2(p.x + side * 0.5f, p.y + side * 0.5f), 17.0f * s,
                      icon,
                      ImGui::GetColorU32(enabled ? textPrimary() : textDim()));
+    ImGui::PopID();
+    return pressed;
+}
+
+bool fab(const char* id, const char* icon, float diameter) {
+    const float s = uiScale();
+    if (diameter <= 0.0f) diameter = 56.0f * s;
+
+    ImGui::PushID(id);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton("##fab", ImVec2(diameter, diameter));
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    ImVec4 bg = accentFill();
+    if (hovered) bg = ImVec4(0.62f, 0.75f, 0.96f, 1.0f);
+    if (ImGui::IsItemActive()) bg = accentDeep();
+    const ImVec2 c(p.x + diameter * 0.5f, p.y + diameter * 0.5f);
+    dl->AddCircleFilled(c, diameter * 0.5f, ImGui::GetColorU32(bg));
+    drawIconCentered(dl, c, 24.0f * s, icon, ImGui::GetColorU32(onAccent()));
     ImGui::PopID();
     return pressed;
 }

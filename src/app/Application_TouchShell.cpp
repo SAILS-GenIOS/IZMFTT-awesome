@@ -15,6 +15,8 @@
 #include "app/Application.h"
 #include "app/Window.h"
 #include "core/History.h"
+#include "core/SelectionManager.h"
+#include "plugin/PluginContext.h"
 #include "ui/HistoryPanel.h"
 #include "ui/ItemsPanel.h"
 #include "ui/Toolbar.h"       // ToolAction for the starter rail entries
@@ -39,7 +41,43 @@ constexpr ImGuiWindowFlags kShellWin =
 
 namespace materializr {
 
+// The ⋯/☰ menu shared by both shell variants: the full desktop menus,
+// flattened one level, via the shared item lists (renderFileMenuItems & co.)
+// so the shells and the desktop bar cannot drift. Caller does OpenPopup
+// ("##TouchOverflow") on its trigger button.
+void Application::renderTouchOverflowPopup() {
+    if (!ImGui::BeginPopup("##TouchOverflow")) return;
+    if (ImGui::BeginMenu(MZ_ICON_OPEN "  File")) {
+        renderFileMenuItems();
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu(MZ_ICON_UNDO "  Edit")) {
+        renderEditMenuItems();
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu(MZ_ICON_FOCUS "  View")) {
+        renderViewMenuItems();
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu(MZ_ICON_ABOUT "  Help")) {
+        renderHelpMenuItems();
+        ImGui::EndMenu();
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem(MZ_ICON_SETTINGS "  Settings...")) {
+        m_settingsOrbitButton = m_orbitButton;
+        m_settingsPanButton   = m_panButton;
+        m_showSettings = true;
+    }
+    ImGui::EndPopup();
+}
+
 void Application::renderTouchShell() {
+    if (m_imTouchLite) {
+        renderTouchShellLite();
+        return;
+    }
+
     touchui::Scope style; // TouchTheme push/pop around the whole shell
 
     const float s = uiScale();
@@ -142,33 +180,7 @@ void Application::renderTouchShell() {
         ImGui::SetCursorPosY(cy);
         if (touchui::iconButton("overflow", MZ_ICON_MORE, bh))
             ImGui::OpenPopup("##TouchOverflow");
-        if (ImGui::BeginPopup("##TouchOverflow")) {
-            // The full desktop menus, flattened one level: shared item lists
-            // (renderFileMenuItems & co.) so the two shells cannot drift.
-            if (ImGui::BeginMenu(MZ_ICON_OPEN "  File")) {
-                renderFileMenuItems();
-                ImGui::EndMenu();
-            }
-            if (ImGui::BeginMenu(MZ_ICON_UNDO "  Edit")) {
-                renderEditMenuItems();
-                ImGui::EndMenu();
-            }
-            if (ImGui::BeginMenu(MZ_ICON_FOCUS "  View")) {
-                renderViewMenuItems();
-                ImGui::EndMenu();
-            }
-            if (ImGui::BeginMenu(MZ_ICON_ABOUT "  Help")) {
-                renderHelpMenuItems();
-                ImGui::EndMenu();
-            }
-            ImGui::Separator();
-            if (ImGui::MenuItem(MZ_ICON_SETTINGS "  Settings...")) {
-                m_settingsOrbitButton = m_orbitButton;
-                m_settingsPanButton   = m_panButton;
-                m_showSettings = true;
-            }
-            ImGui::EndPopup();
-        }
+        renderTouchOverflowPopup();
     }
     ImGui::End();
 
@@ -253,6 +265,167 @@ void Application::renderTouchShell() {
     m_touchVpY = wp.y + topH;
     m_touchVpW = ws.x - railW - rightW;
     m_touchVpH = ws.y - topH;
+}
+
+// im-touch-lite: near-zero chrome. The viewport fills the whole work rect;
+// everything else floats over it — project/selection chip (top-left), undo +
+// keyboard + menu (top-right), the contextual tool catalogue as a centered
+// bottom bar, a "+" create FAB (bottom-right), and an fps readout.
+void Application::renderTouchShellLite() {
+    touchui::Scope style;
+
+    const float s = uiScale();
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const ImVec2 wp = vp->WorkPos;
+    const ImVec2 ws = vp->WorkSize;
+    const float m = 12.0f * s; // float margin from the work-rect edges
+
+    // Viewport underneath everything.
+    m_touchVpX = wp.x;
+    m_touchVpY = wp.y;
+    m_touchVpW = ws.x;
+    m_touchVpH = ws.y;
+
+    const ImGuiWindowFlags kFloat = kShellWin | ImGuiWindowFlags_AlwaysAutoResize;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 14.0f * s);
+
+    // ── Project / selection chip (top-left) ─────────────────────────────────
+    ImGui::SetNextWindowPos(ImVec2(wp.x + m, wp.y + m));
+    ImGui::SetNextWindowBgAlpha(0.55f);
+    if (ImGui::Begin("##LiteChip", nullptr, kFloat)) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float chip = 18.0f * s;
+        const ImVec2 c0 = ImGui::GetCursorScreenPos();
+        dl->AddRectFilled(c0, ImVec2(c0.x + chip, c0.y + chip),
+                          ImGui::GetColorU32(touchui::accentFill()), 5.0f * s);
+        ImGui::Dummy(ImVec2(chip, chip));
+        ImGui::SameLine();
+
+        std::string pn = "New project";
+        if (!m_currentProjectPath.empty()) {
+            pn = m_currentProjectPath;
+            auto slash = pn.find_last_of("/\\");
+            if (slash != std::string::npos) pn = pn.substr(slash + 1);
+        }
+        // Selection summary: "· Face (2)" of the primary type, mirroring the
+        // mockup's "mug.mzr · Face (1)".
+        std::string sel;
+        if (m_selection && m_selection->hasSelection()) {
+            const SelectionType t = m_selection->primaryType();
+            int n = 0;
+            for (const auto& e : m_selection->getSelection())
+                if (e.type == t) ++n;
+            static const char* kNames[] = { "None", "Body", "Face", "Edge",
+                                            "Vertex", "Sketch", "Region",
+                                            "Plane", "Axis" };
+            const int ti = static_cast<int>(t);
+            if (ti > 0 && ti < 9) {
+                sel = std::string("  ·  ") + kNames[ti] +
+                      " (" + std::to_string(n) + ")";
+            }
+        }
+        ImGui::TextColored(touchui::textPrimary(), "%s", pn.c_str());
+        if (!sel.empty()) {
+            ImGui::SameLine(0.0f, 0.0f);
+            ImGui::TextColored(touchui::textDim(), "%s", sel.c_str());
+        }
+    }
+    ImGui::End();
+
+    // ── Undo / keyboard / menu (top-right) ──────────────────────────────────
+    ImGui::SetNextWindowPos(ImVec2(wp.x + ws.x - m, wp.y + m),
+                            ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.0f);
+    if (ImGui::Begin("##LiteTopRight", nullptr, kFloat)) {
+        const float bh = 44.0f * s;
+        const bool histLocked = anyInteractivePreviewActive();
+        ImGui::BeginDisabled(histLocked || !m_history->canUndo());
+        if (touchui::iconButton("undo", MZ_ICON_UNDO, bh)) undoWithCascade();
+        ImGui::EndDisabled();
+        if (materializr::touchMode()) {
+            ImGui::SameLine(0.0f, 8.0f * s);
+            if (touchui::iconButton("kb", MZ_ICON_KEYBOARD, bh))
+                m_softKeyboardForced = !m_softKeyboardForced;
+        }
+        ImGui::SameLine(0.0f, 8.0f * s);
+        if (touchui::iconButton("menu", MZ_ICON_MENU_BARS, bh))
+            ImGui::OpenPopup("##TouchOverflow");
+        renderTouchOverflowPopup();
+    }
+    ImGui::End();
+
+    // ── Contextual tool bar (bottom-center) — the same catalogue the full
+    //    shell's rail uses, horizontal. Sketch mode appends Finish/Discard. ──
+    ImGui::SetNextWindowPos(ImVec2(wp.x + ws.x * 0.5f, wp.y + ws.y - m),
+                            ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.92f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, touchui::panelBg());
+    if (ImGui::Begin("##LiteToolBar", nullptr, kFloat)) {
+        if (m_toolbar) {
+            bool first = true;
+            for (const auto& tool : m_toolbar->railTools()) {
+                if (!first) ImGui::SameLine(0.0f, 4.0f * s);
+                first = false;
+                if (touchui::railButton(tool.label, tool.icon, tool.label,
+                                        tool.active, 64.0f * s))
+                    handleToolAction(static_cast<int>(tool.action));
+            }
+            if (m_inSketchMode) {
+                const float pillY = ImGui::GetCursorPosY() - 62.0f * s +
+                                    (62.0f - 44.0f) * 0.5f * s;
+                ImGui::SameLine(0.0f, 12.0f * s);
+                ImGui::SetCursorPosY(pillY);
+                if (touchui::pillButton("finish", MZ_ICON_FINISH, "Finish", true))
+                    handleToolAction(static_cast<int>(ToolAction::FinishSketch));
+                ImGui::SameLine(0.0f, 8.0f * s);
+                ImGui::SetCursorPosY(pillY);
+                if (touchui::pillButton("discard", MZ_ICON_DISCARD, "Discard"))
+                    handleToolAction(static_cast<int>(ToolAction::ExitSketchDiscard));
+            }
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+
+    // ── "+" create FAB (bottom-right) ───────────────────────────────────────
+    ImGui::SetNextWindowPos(ImVec2(wp.x + ws.x - m, wp.y + ws.y - m),
+                            ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.0f);
+    if (ImGui::Begin("##LiteFab", nullptr, kFloat)) {
+        if (touchui::fab("create", MZ_ICON_ADD))
+            ImGui::OpenPopup("##LiteCreate");
+        if (ImGui::BeginPopup("##LiteCreate")) {
+            if (ImGui::MenuItem(MZ_ICON_SKETCH "  New Sketch"))
+                handleToolAction(static_cast<int>(ToolAction::StartSketch));
+            if (m_pluginContext) {
+                ImGui::Separator();
+                if (ImGui::MenuItem(MZ_ICON_EXTRUDE "  Box"))
+                    m_pluginContext->requestInteractiveOp("PrimitiveBox");
+                if (ImGui::MenuItem(MZ_ICON_CIRCLE "  Cylinder"))
+                    m_pluginContext->requestInteractiveOp("PrimitiveCylinder");
+                if (ImGui::MenuItem(MZ_ICON_CIRCLE "  Sphere"))
+                    m_pluginContext->requestInteractiveOp("PrimitiveSphere");
+                if (ImGui::MenuItem(MZ_ICON_POLYGON "  Cone"))
+                    m_pluginContext->requestInteractiveOp("PrimitiveCone");
+                if (ImGui::MenuItem(MZ_ICON_CIRCLE "  Torus"))
+                    m_pluginContext->requestInteractiveOp("PrimitiveTorus");
+            }
+            ImGui::EndPopup();
+        }
+    }
+    ImGui::End();
+
+    // ── fps readout (bottom-left, like the mockup's "60 fps") ───────────────
+    ImGui::SetNextWindowPos(ImVec2(wp.x + m, wp.y + ws.y - m),
+                            ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.0f);
+    if (ImGui::Begin("##LiteFps", nullptr, kFloat)) {
+        ImGui::TextColored(touchui::textDim(), "%.0f fps",
+                           ImGui::GetIO().Framerate);
+    }
+    ImGui::End();
+
+    ImGui::PopStyleVar(); // WindowRounding
 }
 
 } // namespace materializr

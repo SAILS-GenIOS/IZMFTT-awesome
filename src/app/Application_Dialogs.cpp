@@ -160,6 +160,18 @@ void Application::renderSettings() {
                                        "tool rail and side panel replace the desktop "
                                        "menus and docked windows. Switches immediately; "
                                        "your desktop panel layout is kept.");
+                    ImGui::BeginDisabled(!m_imTouchUi);
+                    ImGui::Indent();
+                    if (ImGui::Checkbox("im-touch-lite (near-zero chrome)",
+                                        &m_imTouchLite)) {
+                        changed = true;
+                    }
+                    ImGui::TextWrapped("Full-screen viewport with floating "
+                                       "controls only: contextual tools at the "
+                                       "bottom, project/selection chip, undo and "
+                                       "menu buttons, and a + button to create.");
+                    ImGui::Unindent();
+                    ImGui::EndDisabled();
 
                     ImGui::Spacing();
                     ImGui::SeparatorText("Appearance");
