@@ -5723,8 +5723,13 @@ void Application::renderViewport() {
 
     // ViewCube overlay. In im-touch-lite the top-right button cluster floats
     // over the viewport corner where the cube lives — drop the cube below it.
-    m_viewCube->setExtraTopOffset(
-        (m_imTouchUi && m_imTouchLite) ? 68.0f * uiScale() : 0.0f);
+    const float uisVc = uiScale();
+    if (m_imTouchUi && m_imTouchLite)
+        m_viewCube->setExtraOffset(0.0f, 68.0f * uisVc); // clear the lite top-right cluster
+    else if (m_imTouchUi)
+        m_viewCube->setExtraOffset(8.0f * uisVc, -8.0f * uisVc); // centre Home in the corner
+    else
+        m_viewCube->setExtraOffset(0.0f, 0.0f);
     ViewCubeAction vcAction = m_viewCube->render(
         m_viewport->getCamera(), m_invertCubeDrag,
         m_themeManager && m_themeManager->getTheme() == Theme::Light);

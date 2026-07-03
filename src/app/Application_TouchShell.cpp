@@ -543,14 +543,24 @@ void Application::renderTouchShell() {
         auto edgeTab = [&](const char* id, float edgeX, int side,
                            bool* hiddenVar, float* widthVar, float minW,
                            float maxW, bool* dragged) {
-            ImGui::SetNextWindowPos(ImVec2(edgeX, midY), ImGuiCond_Always,
-                                    ImVec2(side < 0 ? 0.0f : 1.0f, 0.5f));
+            // Anchor by the window's LEFT edge (pivot 0) so the flat side lands
+            // exactly on the panel boundary. Two gotchas the earlier versions
+            // hit: (1) right-edge anchoring (pivot 1) offset the whole tab by
+            // the window's real width; (2) tabW (~25px) is below the default
+            // WindowMinSize (32), so ImGui clamped the window wider than tabW
+            // and GetWindowPos then disagreed with the requested pos. Fix: push
+            // WindowMinSize 0 AND derive geometry from our own winLeft, never
+            // GetWindowPos — so cx = winLeft(+tabW) is exactly edgeX.
+            const float winLeft = (side < 0) ? edgeX : edgeX - tabW;
+            ImGui::SetNextWindowPos(ImVec2(winLeft, midY), ImGuiCond_Always,
+                                    ImVec2(0.0f, 0.5f));
             ImGui::SetNextWindowSize(ImVec2(tabW, tabH));
             ImGui::SetNextWindowBgAlpha(0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1, 1));
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
             if (ImGui::Begin(id, nullptr, kShellWin)) {
-                const ImVec2 p = ImGui::GetWindowPos();
+                const ImVec2 p(winLeft, midY - tabH * 0.5f); // our exact rect
                 ImGui::SetCursorScreenPos(p);
                 ImGui::InvisibleButton("##grip", ImVec2(tabW, tabH));
                 const bool hov = ImGui::IsItemHovered();
@@ -599,7 +609,7 @@ void Application::renderTouchShell() {
                             ImGui::GetColorU32(touchui::textDim()), 2.0f * s);
             }
             ImGui::End();
-            ImGui::PopStyleVar(2);
+            ImGui::PopStyleVar(3);
         };
         edgeTab("##railTab", wp.x + railW, -1, &m_leftPanelHidden,
                 &m_touchRailW, 64.0f, 160.0f, &m_railTabDragged);

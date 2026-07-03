@@ -59,7 +59,7 @@ ViewCubeAction ViewCube::render(Camera& camera, bool invertDrag, bool lightMode)
     // Extra left inset in touch mode: the enlarged widget (and its Home button)
     // overhang further right, so nudge the whole thing ~10 px off the edge.
     const float rightInset = pad + widgetR + 26.0f +
-                             (materializr::touchMode() ? 10.0f : 0.0f);
+                             (materializr::touchMode() ? 10.0f : 0.0f) + m_extraLeft;
     ImVec2 center(wp.x + ws.x - rightInset,
                   wp.y + pad + widgetR + topOffset);
 

@@ -40,13 +40,17 @@ public:
     // this to suppress its own selection logic so cube clicks don't pass through.
     bool wasHovered() const { return m_lastHovered; }
 
-    // Extra downward inset (px) added to the cube's top-right anchor — the
-    // im-touch-lite shell floats its button cluster over the viewport's
-    // top-right corner, so the cube drops below it. 0 everywhere else.
-    void setExtraTopOffset(float px) { m_extraTop = px; }
+    // Extra offset (px) nudging the cube off its default top-right anchor:
+    // leftPx moves it left (toward the viewport), topPx moves it down (positive)
+    // or up (negative). The im-touch shells use it to clear their floating top
+    // chrome / centre the Home glyph in the corner. 0,0 everywhere else.
+    void setExtraOffset(float leftPx, float topPx) {
+        m_extraLeft = leftPx; m_extraTop = topPx;
+    }
 
 private:
     float m_size = 120.0f;
+    float m_extraLeft = 0.0f;
     float m_extraTop = 0.0f;
     bool  m_lastHovered = false;
     // Cube drag-to-orbit state: a press on a face arms a pending snap; if the
