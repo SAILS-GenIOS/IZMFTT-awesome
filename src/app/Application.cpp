@@ -5055,6 +5055,10 @@ void Application::run() {
         // once per frame: the layout can flip mid-frame (Settings dropdown) and
         // the pop below must match this push, not the new value.
         const bool frameTouchTheme = !classicLayout();
+        // Palette follows ThemeManager (View → Theme / Settings → Appearance)
+        // so the modern/im-touch layouts have a live light mode like classic.
+        touchui::setLightMode(m_themeManager &&
+                              m_themeManager->getTheme() == Theme::Light);
         if (frameTouchTheme) touchui::pushChrome();
         // Always submit the dockspace host — under every layout. ImGui only
         // keeps a dock node alive while its DockSpace() is submitted each frame;

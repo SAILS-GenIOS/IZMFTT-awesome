@@ -164,8 +164,8 @@ bool pillButton(const char* id, const char* icon, const char* label, bool accent
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     ImVec4 bg = accent ? accentFill() : rowBg();
-    if (hovered && !accent) bg = ImVec4(0.16f, 0.19f, 0.24f, 1.0f);
-    if (ImGui::IsItemActive()) bg = accent ? accentDeep() : ImVec4(0.20f, 0.24f, 0.31f, 1.0f);
+    if (hovered && !accent) bg = hoverBg();
+    if (ImGui::IsItemActive()) bg = accent ? accentDeep() : pressBg();
     dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), ImGui::GetColorU32(bg), h * 0.32f);
 
     const ImU32 fg = ImGui::GetColorU32(accent ? onAccent() : textPrimary());
@@ -196,8 +196,8 @@ bool iconButton(const char* id, const char* icon, float side) {
     const bool enabled =
         !(ImGui::GetCurrentContext()->CurrentItemFlags & ImGuiItemFlags_Disabled);
     ImVec4 bg = rowBg();
-    if (hovered) bg = ImVec4(0.16f, 0.19f, 0.24f, 1.0f);
-    if (ImGui::IsItemActive()) bg = ImVec4(0.20f, 0.24f, 0.31f, 1.0f);
+    if (hovered) bg = hoverBg();
+    if (ImGui::IsItemActive()) bg = pressBg();
     dl->AddRectFilled(p, ImVec2(p.x + side, p.y + side),
                       ImGui::GetColorU32(bg), 10.0f * s);
     drawIconCentered(dl, ImVec2(p.x + side * 0.5f, p.y + side * 0.5f), 17.0f * s,
@@ -326,9 +326,9 @@ bool timelineBox(const char* id, const char* icon, bool current, bool editing,
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
     ImVec4 bg = current ? accentFill() : rowBg();
-    if (hovered && !current) bg = ImVec4(0.16f, 0.19f, 0.24f, 1.0f);
+    if (hovered && !current) bg = hoverBg();
     if (ImGui::IsItemActive())
-        bg = current ? accentDeep() : ImVec4(0.20f, 0.24f, 0.31f, 1.0f);
+        bg = current ? accentDeep() : pressBg();
     dl->AddRectFilled(p, ImVec2(p.x + boxW, p.y + boxH),
                       ImGui::GetColorU32(bg), 10.0f * s);
     if (editing)
@@ -410,7 +410,7 @@ ListRowAction listRow(const char* id, bool* checked, const char* label,
                           ImGui::GetColorU32(rowBg()), 10.0f * s);
     else if (rowHov)
         dl->AddRectFilled(p, ImVec2(p.x + w - ovW, p.y + h),
-                          ImGui::GetColorU32(ImVec4(0.09f, 0.10f, 0.13f, 1.0f)),
+                          ImGui::GetColorU32(rowHoverBg()),
                           10.0f * s);
 
     if (checked) {
