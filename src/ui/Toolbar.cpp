@@ -99,6 +99,12 @@ std::vector<Toolbar::RailTool> Toolbar::railTools() const {
         for (size_t i = 0; i < contribs.size(); ++i) {
             const auto& c = contribs[i];
             if (!((1 << static_cast<int>(c.context)) & contextMask)) continue;
+            // Base construction creation is covered by the shared Construct
+            // menu ("New Plane/Axis…", renderConstructionMenuItems) which the
+            // rail's Construct group and the im-touch + FAB both host — rail
+            // buttons for them just duplicated the + menu (Steve).
+            if (c.name == "Construction Plane" ||
+                c.name == "Construction Axis") continue;
             const char* icon  = MZ_ICON_EDIT;
             const char* label = c.name.c_str();
             if      (c.name == "Union")              icon = MZ_ICON_UNION;
@@ -110,8 +116,6 @@ std::vector<Toolbar::RailTool> Toolbar::railTools() const {
             else if (c.name == "Linear Pattern")   { icon = MZ_ICON_PATTERN_LINEAR;   label = "Linear"; }
             else if (c.name == "Circular Pattern") { icon = MZ_ICON_PATTERN_CIRCULAR; label = "Circular"; }
             else if (c.name.rfind("Split", 0) == 0)  icon = MZ_ICON_SPLIT;
-            else if (c.name == "Construction Plane") { icon = MZ_ICON_FOCUS; label = "Plane"; }
-            else if (c.name == "Construction Axis")  { icon = MZ_ICON_AXES;  label = "Axis";  }
             t.push_back({icon, label, ToolAction::None, false,
                          c.tooltip.empty() ? nullptr : c.tooltip.c_str(),
                          static_cast<int>(i)});

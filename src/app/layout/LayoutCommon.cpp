@@ -283,10 +283,15 @@ void Application::renderConstructionMenuItems() {
     const bool anyAxis  = m_pluginContext &&
                           (haveCyl || straightEdge || twoVerts || faceNormal || midplane);
 
-    // Plane ▸ and Axis ▸ are always present so the catalogue is discoverable;
-    // every mode is derived FROM the selection, so with nothing suitable
-    // selected the submenu explains what to pick instead of vanishing.
+    // Plane ▸ and Axis ▸ are always present so the catalogue is discoverable.
+    // Each leads with the BASE "New …" creator (the world-plane/-axis popup —
+    // always available, selection or not), then the modes derived FROM the
+    // selection; with nothing suitable selected the derived section explains
+    // what to pick instead of vanishing.
     if (ImGui::BeginMenu("Plane")) {
+        if (m_pluginContext && ImGui::MenuItem("New Plane..."))
+            m_pluginContext->requestInteractiveOp("ConstructionPlane");
+        ImGui::Separator();
         if (!anyPlane) {
             ImGui::MenuItem("Select what to derive from:", nullptr, false, false);
             ImGui::MenuItem("2 flat faces/planes  - midplane", nullptr, false, false);
@@ -310,6 +315,9 @@ void Application::renderConstructionMenuItems() {
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Axis")) {
+        if (m_pluginContext && ImGui::MenuItem("New Axis..."))
+            m_pluginContext->requestInteractiveOp("ConstructionAxis");
+        ImGui::Separator();
         if (!anyAxis) {
             ImGui::MenuItem("Select what to derive from:", nullptr, false, false);
             ImGui::MenuItem("a cylinder or straight edge", nullptr, false, false);
