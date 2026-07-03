@@ -115,9 +115,9 @@ std::vector<Toolbar::RailTool> Toolbar::railTools() const {
             "Duplicate the selected sketch elements at an offset.");
         add(MZ_ICON_MIRROR,  "Mirror",   ToolAction::SketchMirror, false,
             "Mirror selected elements across a sketch line you'll pick next.");
-        add(MZ_ICON_PATTERN, "Linear",   ToolAction::SketchLinearPattern, false,
+        add(MZ_ICON_PATTERN_LINEAR,   "Linear",   ToolAction::SketchLinearPattern, false,
             "Linear pattern: copy the selected sketch elements N times along the sketch X axis.");
-        add(MZ_ICON_PATTERN, "Circular", ToolAction::SketchRadialPattern, false,
+        add(MZ_ICON_PATTERN_CIRCULAR, "Circular", ToolAction::SketchRadialPattern, false,
             "Circular pattern: copy the selected sketch elements around an origin you specify.");
     } else if (!m_selection || !m_selection->hasSelection()) {
         // No bare "Sketch" here: with nothing selected it just duplicated

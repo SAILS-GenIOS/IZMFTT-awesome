@@ -49,6 +49,48 @@ void drawIconCentered(ImDrawList* dl, const ImVec2& center, float size,
                         std::max(1.5f, size * 0.075f));
         return;
     }
+    // MZ_ICON_UNFOLD sentinel (U+E002): a cube-unfold "Latin cross" of unit
+    // squares — the flat-pattern look. (Iconoir's ruler-combine glyph didn't
+    // read as "unfold".)
+    if (std::strcmp(icon, "\xee\x80\x82") == 0) {
+        const float cell = size * 0.22f;
+        const float th   = std::max(1.2f, size * 0.05f);
+        const ImVec2 o(center.x - cell * 1.5f, center.y - cell * 2.0f); // grid TL
+        // (col,row) cells: a vertical strip of 4 with two arms on the 2nd row.
+        static const int cells[6][2] =
+            {{1,0},{0,1},{1,1},{2,1},{1,2},{1,3}};
+        for (const auto& c : cells)
+            dl->AddRect(ImVec2(o.x + c[0] * cell,       o.y + c[1] * cell),
+                        ImVec2(o.x + (c[0]+1) * cell,   o.y + (c[1]+1) * cell),
+                        col, 0.0f, 0, th);
+        return;
+    }
+    // MZ_ICON_PATTERN_LINEAR sentinel (U+E003): three squares in a row.
+    if (std::strcmp(icon, "\xee\x80\x83") == 0) {
+        const float cell = size * 0.26f;
+        const float th   = std::max(1.5f, size * 0.06f);
+        const ImVec2 o(center.x - cell * 1.5f, center.y - cell * 0.5f);
+        for (int i = 0; i < 3; ++i)
+            dl->AddRect(ImVec2(o.x + i * cell,     o.y),
+                        ImVec2(o.x + (i+1) * cell, o.y + cell), col, 0.0f, 0, th);
+        return;
+    }
+    // MZ_ICON_PATTERN_CIRCULAR sentinel (U+E004): three squares spaced around a
+    // centre (120° apart, one at the bottom) — the radial-pattern look.
+    if (std::strcmp(icon, "\xee\x80\x84") == 0) {
+        const float hs = size * 0.12f;                 // square half-side
+        const float r  = size * 0.30f;                 // ring radius
+        const float th = std::max(1.5f, size * 0.06f);
+        const ImVec2 ctr[3] = {
+            ImVec2(center.x,              center.y + r),         // bottom
+            ImVec2(center.x - 0.866f * r, center.y - 0.5f * r),  // top-left
+            ImVec2(center.x + 0.866f * r, center.y - 0.5f * r),  // top-right
+        };
+        for (const auto& c : ctr)
+            dl->AddRect(ImVec2(c.x - hs, c.y - hs), ImVec2(c.x + hs, c.y + hs),
+                        col, 0.0f, 0, th);
+        return;
+    }
     ImFont* font = ImGui::GetFont();
     const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, icon);
     dl->AddText(font, size, ImVec2(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f),

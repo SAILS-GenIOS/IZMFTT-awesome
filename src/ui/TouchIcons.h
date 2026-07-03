@@ -53,7 +53,12 @@
 #define MZ_ICON_MIRROR     ICON_IC_MIRROR
 #define MZ_ICON_MEASURE    ICON_IC_RULER
 #define MZ_ICON_AXES       ICON_IC_AXES
-#define MZ_ICON_UNFOLD     ICON_IC_RULER_COMBINE
+// Sentinels drawn by drawIconCentered (TouchWidgets.cpp): a cube-unfold "Latin
+// cross" of squares, and the two pattern glyphs (a row of squares = linear, a
+// ring of squares = circular) — Iconoir has nothing that reads as these.
+#define MZ_ICON_UNFOLD           "\xee\x80\x82"  // U+E002
+#define MZ_ICON_PATTERN_LINEAR   "\xee\x80\x83"  // U+E003
+#define MZ_ICON_PATTERN_CIRCULAR "\xee\x80\x84"  // U+E004
 #define MZ_ICON_REPAIR     ICON_IC_CUBE_BANDAGE
 #define MZ_ICON_LATHE      ICON_IC_ROTATE_CAMERA_RIGHT
 #define MZ_ICON_SUBTRACT   ICON_IC_MINUS
