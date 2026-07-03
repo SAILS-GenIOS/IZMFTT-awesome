@@ -38,6 +38,7 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/SketchSolver.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/ShellOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/MoveFaceOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/ThreadOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SubShapeIndex.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/EdgeAnchor.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/FaceAnchor.cpp
@@ -148,6 +149,12 @@ add_test(NAME test_topo_name COMMAND test_topo_name)
 add_executable(test_topo_edge test_topo_edge.cpp)
 target_link_libraries(test_topo_edge PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_topo_edge COMMAND test_topo_edge)
+
+# test_topo_thread — a live op (ThreadOp) follows an upstream cylinder move by
+# re-resolving its target-face topo::Ref and re-deriving axis/radius (rung 3)
+add_executable(test_topo_thread test_topo_thread.cpp)
+target_link_libraries(test_topo_thread PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_topo_thread COMMAND test_topo_thread)
 
 # bench_stl_import — manual stopwatch for STL import stages (not run by ctest)
 add_executable(bench_stl_import bench_stl_import.cpp)

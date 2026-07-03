@@ -7,6 +7,13 @@
 #include <algorithm>
 #include <vector>
 #include <Geom_CylindricalSurface.hxx>
+#include <BRep_Tool.hxx>
+#include <BRepTools.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Face.hxx>
+#include <gp_Cylinder.hxx>
+#include <gp_Ax3.hxx>
+#include <gp_Vec.hxx>
 #include <Geom2d_Line.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
@@ -38,6 +45,28 @@
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+
+// Extract the thread frame from a cylindrical face: axis at the face's V_min
+// end (origin = surface location + v0·axis, direction along the cylinder), and
+// the radius. Length is deliberately NOT taken from the face — the user's
+// chosen thread span is kept; only the cylinder's position and diameter follow
+// an edit. Returns false if the face isn't a plain cylinder.
+static bool cylFaceToThread(const TopoDS_Face& face, gp_Ax2& ax2, double& radius) {
+    Handle(Geom_Surface) gs = BRep_Tool::Surface(face);
+    Handle(Geom_CylindricalSurface) cs =
+        Handle(Geom_CylindricalSurface)::DownCast(gs);
+    if (cs.IsNull()) return false;
+    const gp_Cylinder cyl = cs->Cylinder();
+    radius = cyl.Radius();
+    Standard_Real u0, u1, v0, v1;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    const gp_Ax3 pos = cyl.Position();
+    const gp_Dir axisDir = pos.Direction();
+    const gp_Pnt origin =
+        pos.Location().Translated(gp_Vec(axisDir) * std::min(v0, v1));
+    ax2 = gp_Ax2(origin, axisDir, pos.XDirection());
+    return true;
+}
 
 ThreadOp::ThreadOp() = default;
 
@@ -770,6 +799,27 @@ bool ThreadOp::execute(Document& doc) {
         m_previousShape = doc.getBody(m_bodyId);
         if (m_previousShape.IsNull()) return false;
 
+        // Follow an upstream edit: on the recompute path (editStep / redo, i.e.
+        // no worker-precomputed result), re-resolve the target cylinder face
+        // against the current body and adopt its new axis + radius. The stored
+        // absolute params are the fallback when there's no ref or it can't
+        // resolve — today's behaviour, so nothing regresses for old files.
+        if (m_precomputed.IsNull() && !m_faceRef.empty()) {
+            materializr::topo::Context ctx;
+            ctx.doc = &doc;
+            ctx.shape = m_previousShape;
+            ctx.type = TopAbs_FACE;
+            TopoDS_Shape f;
+            if (materializr::topo::resolve(m_faceRef, ctx, f) &&
+                !f.IsNull() && f.ShapeType() == TopAbs_FACE) {
+                gp_Ax2 ax2; double r = 0.0;
+                if (cylFaceToThread(TopoDS::Face(f), ax2, r) && r > 1e-6) {
+                    setAxis(ax2);   // updates m_axis + serialized components
+                    m_radius = r;
+                }
+            }
+        }
+
         // The popup's worker thread may have already computed the result —
         // consume it; redo / editStep recompute synchronously as usual.
         TopoDS_Shape result;
@@ -840,7 +890,11 @@ std::string ThreadOp::serializeParams() const {
         m_isHole ? 1 : 0, m_rightHanded ? 1 : 0,
         m_axOX, m_axOY, m_axOZ, m_axDX, m_axDY, m_axDZ,
         m_axXX, m_axXY, m_axXZ);
-    return buf;
+    std::string s = buf;
+    // Target-face name LAST so its (delimiter-free) blob runs to end-of-string;
+    // absent in old files, which just keep their absolute axis/radius.
+    if (!m_faceRef.empty()) s += ";faceref=" + m_faceRef.serialize();
+    return s;
 }
 
 bool ThreadOp::deserializeParams(const std::string& blob) {
@@ -852,6 +906,13 @@ bool ThreadOp::deserializeParams(const std::string& blob) {
         size_t end = blob.find(';', eq);
         if (end == std::string::npos) end = blob.size();
         std::string key = blob.substr(pos, eq - pos);
+        // faceref carries an opaque length-prefixed blob and is written last,
+        // so read it to end-of-string (not to the next ';').
+        if (key == "faceref") {
+            m_faceRef = materializr::topo::Ref::parse(blob.substr(eq + 1));
+            any = true;
+            break;
+        }
         std::string val = blob.substr(eq + 1, end - eq - 1);
         double d = std::atof(val.c_str());
         int    i = std::atoi(val.c_str());

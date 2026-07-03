@@ -777,6 +777,29 @@ void Application::beginThread() {
     m_threadRightHanded = true;
     std::snprintf(m_threadPitchBuf, sizeof(m_threadPitchBuf), "%.2f", m_threadPitch);
     std::snprintf(m_threadDepthBuf, sizeof(m_threadDepthBuf), "%.2f", m_threadDepth);
+
+    // Name the picked cylinder face topologically so the committed thread
+    // FOLLOWS an upstream edit (the cylinder moving or its diameter changing)
+    // instead of floating at its original absolute axis. Best-effort — an
+    // unnameable face (imported/primitive cylinder with no sketch) leaves the
+    // ref empty and the thread keeps today's absolute-param behaviour.
+    m_threadFaceRef = materializr::topo::Ref{};
+    if (m_selection && m_document) {
+        for (const auto& e : m_selection->getSelection()) {
+            if (e.type != SelectionType::Face || e.shape.IsNull() ||
+                e.shape.ShapeType() != TopAbs_FACE)
+                continue;
+            try {
+                materializr::topo::Context ctx;
+                ctx.doc = m_document.get();
+                ctx.shape = m_document->getBody(m_threadBodyId);
+                ctx.type = TopAbs_FACE;
+                m_threadFaceRef = materializr::topo::mint(TopoDS::Face(e.shape), ctx);
+            } catch (...) {}
+            break;
+        }
+    }
+
     m_threadActive = true;
 }
 
@@ -794,6 +817,7 @@ std::unique_ptr<ThreadOp> Application::makeThreadOpFromState() const {
     op->setDepth(static_cast<double>(m_threadDepth));
     op->setIsHole(m_threadIsHole);
     op->setRightHanded(m_threadRightHanded);
+    op->setTargetFaceRef(m_threadFaceRef);
     return op;
 }
 

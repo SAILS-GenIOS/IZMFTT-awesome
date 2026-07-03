@@ -24,6 +24,7 @@
 #include "modeling/ExtrudeOp.h" // for ExtrudeMode
 #include "modeling/SketchConstraints.h" // for ConstraintType (applySketchConstraint)
 #include "modeling/Unfold.h" // for FlatPattern (m_unfoldPattern)
+#include "modeling/TopoName.h" // for topo::Ref (m_threadFaceRef)
 #include "core/SheetSpec.h" // for SheetMaterial (m_unfoldMaterial)
 #include "io/Settings.h" // for AppSettings::RecentProject (m_recentProjects)
 
@@ -1111,6 +1112,9 @@ private:
     bool   m_threadActive = false;
     int    m_threadBodyId = -1;
     bool   m_threadIsHole = false;
+    // Topological name of the picked cylinder face, minted at beginThread so
+    // the committed ThreadOp follows an upstream edit (see ThreadOp::setter).
+    materializr::topo::Ref m_threadFaceRef;
     double m_threadAxis[9] = {0, 0, 0, 0, 0, 1, 1, 0, 0}; // loc, dir, xdir
     double m_threadRadius = 5.0;
     double m_threadLength = 10.0;

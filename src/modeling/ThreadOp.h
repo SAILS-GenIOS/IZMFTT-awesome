@@ -1,6 +1,7 @@
 #pragma once
 #include "../core/Operation.h"
 #include "../core/Document.h"
+#include "TopoName.h"
 #include <TopoDS_Shape.hxx>
 #include <gp_Ax2.hxx>
 #include <string>
@@ -28,6 +29,15 @@ public:
     void setDepth(double d) { m_depth = d; }
     void setIsHole(bool h) { m_isHole = h; }
     void setRightHanded(bool rh) { m_rightHanded = rh; }
+
+    // Topological name of the target cylindrical face. When set, execute()
+    // re-resolves it against the CURRENT body and re-derives axis + radius from
+    // the cylinder's new geometry — so the thread FOLLOWS an upstream edit
+    // (the cylinder moving or its diameter changing) instead of floating at
+    // its original absolute position. Empty ref = today's absolute-param
+    // behaviour. Additive: an old file has no ref and just keeps its params.
+    void setTargetFaceRef(const materializr::topo::Ref& r) { m_faceRef = r; }
+    const materializr::topo::Ref& targetFaceRef() const { return m_faceRef; }
 
     // The heavy geometry (helix sweep + boolean cut), as a pure function of
     // the input body — no Document access, so the popup can run it on a
@@ -74,6 +84,7 @@ private:
 
     TopoDS_Shape m_previousShape; // for undo
     TopoDS_Shape m_precomputed;   // see setPrecomputedResult()
+    materializr::topo::Ref m_faceRef; // target cylinder face name (see setter)
 
     // Axis components for (de)serialisation; m_axis is rebuilt from these in
     // execute() so a reloaded op recomputes identically.
