@@ -254,10 +254,29 @@ ListRowAction listRow(const char* id, bool* checked, const char* label,
     ImGui::PushID(id);
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float lead = checked ? pad + box + pad : pad;
 
-    // Row body (select) — leaves room for the trailing ⋯.
-    act.clicked = ImGui::InvisibleButton("##row", ImVec2(w - ovW, h));
+    // Checkbox (visibility) FIRST, with its own exclusive hit area — a row
+    // button submitted before it would claim its clicks (ImGui gives the
+    // press to the first hovered item), leaving the checkbox untappable.
+    bool chkHov = false;
+    if (checked) {
+        const ImVec2 cb(p.x + pad, p.y + (h - box) * 0.5f);
+        ImGui::SetCursorScreenPos(cb);
+        if (ImGui::InvisibleButton("##chk", ImVec2(box, box))) {
+            *checked = !*checked;
+            act.toggled = true;
+        }
+        chkHov = ImGui::IsItemHovered();
+    }
+
+    // Row body (select) — from after the checkbox to before the trailing ⋯,
+    // so the three hit areas never overlap.
+    ImGui::SetCursorScreenPos(ImVec2(p.x + lead, p.y));
+    act.clicked = ImGui::InvisibleButton(
+        "##row", ImVec2(std::max(1.0f, w - lead - ovW), h));
     const bool rowHov = ImGui::IsItemHovered();
+
     if (selected)
         dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h),
                           ImGui::GetColorU32(rowBg()), 10.0f * s);
@@ -266,16 +285,8 @@ ListRowAction listRow(const char* id, bool* checked, const char* label,
                           ImGui::GetColorU32(ImVec4(0.09f, 0.10f, 0.13f, 1.0f)),
                           10.0f * s);
 
-    // Checkbox (visibility) — its own hit area inside the row.
     if (checked) {
         const ImVec2 cb(p.x + pad, p.y + (h - box) * 0.5f);
-        ImGui::SetCursorScreenPos(cb);
-        if (ImGui::InvisibleButton("##chk", ImVec2(box, box))) {
-            *checked = !*checked;
-            act.toggled = true;
-            act.clicked = false;
-        }
-        const bool chkHov = ImGui::IsItemHovered();
         if (*checked) {
             dl->AddRectFilled(cb, ImVec2(cb.x + box, cb.y + box),
                               ImGui::GetColorU32(accentFill()), 6.0f * s);
@@ -293,7 +304,7 @@ ListRowAction listRow(const char* id, bool* checked, const char* label,
     }
 
     // Label.
-    const float lx = p.x + (checked ? pad + box + pad : pad);
+    const float lx = p.x + lead;
     const ImVec2 ts = ImGui::CalcTextSize(label);
     dl->AddText(ImVec2(lx, p.y + (h - ts.y) * 0.5f),
                 ImGui::GetColorU32(textPrimary()), label);
