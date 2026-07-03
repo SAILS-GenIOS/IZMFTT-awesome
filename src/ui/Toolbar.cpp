@@ -1,5 +1,6 @@
 #include "UiTheme.h"
 #include "Toolbar.h"
+#include "TouchIcons.h"
 #include "../core/SelectionManager.h"
 #include "../core/History.h"
 #include "../core/Operation.h"
@@ -75,6 +76,80 @@ ToolAction Toolbar::render() {
 
     ImGui::End();
     return action;
+}
+
+// Primary tools of the current selection context, for the im-touch rail.
+// The dispatch mirrors render() above and each list is the head of the
+// matching render*Tools() — if you add a primary tool there, add it here
+// (full catalogue unification tracked in docs/im-touch-ui-plan.md Phase 3).
+std::vector<Toolbar::RailTool> Toolbar::railTools() const {
+    std::vector<RailTool> t;
+    auto add = [&](const char* icon, const char* label, ToolAction a,
+                   bool active = false) { t.push_back({icon, label, a, active}); };
+
+    if (m_sketchMode) {
+        // SketchToolMode ints per setActiveSketchMode(): 1=Select … 8=Trim.
+        add(MZ_ICON_SELECT,  "Select",  ToolAction::SelectSketch, m_activeSketchMode == 1);
+        add(MZ_ICON_LINE,    "Line",    ToolAction::Line,         m_activeSketchMode == 2);
+        add(MZ_ICON_CIRCLE,  "Circle",  ToolAction::Circle,       m_activeSketchMode == 3);
+        add(MZ_ICON_RECT,    "Rect",    ToolAction::Rectangle,    m_activeSketchMode == 4);
+        add(MZ_ICON_ARC,     "Arc",     ToolAction::Arc,          m_activeSketchMode == 5);
+        add(MZ_ICON_SPLINE,  "Spline",  ToolAction::Spline,       m_activeSketchMode == 6);
+        add(MZ_ICON_POLYGON, "Polygon", ToolAction::Polygon,      m_activeSketchMode == 7);
+        add(MZ_ICON_TRIM,    "Trim",    ToolAction::Trim,         m_activeSketchMode == 8);
+    } else if (!m_selection || !m_selection->hasSelection()) {
+        add(MZ_ICON_SKETCH,  "Sketch",  ToolAction::StartSketch);
+        add(MZ_ICON_MEASURE, "Measure", ToolAction::Measure);
+    } else if (m_selection->hasSelectedSketchRegions()) {
+        add(MZ_ICON_PUSHPULL, "Push",     ToolAction::PushPull);
+        add(MZ_ICON_EXTRUDE,  "Extrude",  ToolAction::ExtrudeSketch);
+        add(MZ_ICON_SUBTRACT, "Subtract", ToolAction::SubtractSketch);
+        add(MZ_ICON_EDIT,     "Edit",     ToolAction::EditSketch);
+        add(MZ_ICON_MOVE,     "Move",     ToolAction::Move);
+        add(MZ_ICON_ROTATE,   "Rotate",   ToolAction::Rotate);
+    } else if (m_selection->primaryType() == SelectionType::Plane) {
+        add(MZ_ICON_SKETCH, "Sketch", ToolAction::SketchOnFace);
+        add(MZ_ICON_MOVE,   "Move",   ToolAction::Move);
+        add(MZ_ICON_ROTATE, "Rotate", ToolAction::Rotate);
+    } else if (m_selection->primaryType() == SelectionType::Axis) {
+        add(MZ_ICON_MOVE, "Move", ToolAction::Move);
+    } else if (m_selection->hasSelectedSketches()) {
+        add(MZ_ICON_EDIT,     "Edit",     ToolAction::EditSketch);
+        add(MZ_ICON_EXTRUDE,  "Extrude",  ToolAction::ExtrudeSketch);
+        add(MZ_ICON_SUBTRACT, "Subtract", ToolAction::SubtractSketch);
+        add(MZ_ICON_LATHE,    "Lathe",    ToolAction::Revolve);
+        add(MZ_ICON_MOVE,     "Move",     ToolAction::Move);
+        add(MZ_ICON_ROTATE,   "Rotate",   ToolAction::Rotate);
+    } else if (m_selection->hasSelectedFaces()) {
+        add(MZ_ICON_SKETCH,   "Sketch",  ToolAction::SketchOnFace);
+        add(MZ_ICON_PUSHPULL, "Push",    ToolAction::PushPull);
+        add(MZ_ICON_EXTRUDE,  "Extrude", ToolAction::ExtrudeSketch);
+        add(MZ_ICON_SHELL,    "Shell",   ToolAction::Shell);
+        add(MZ_ICON_REPAIR,   "Repair",  ToolAction::RemoveFace);
+        if (m_canEditDiameter)
+            add(MZ_ICON_CIRCLE, "Diameter", ToolAction::EditDiameter);
+        add(MZ_ICON_MOVE,   "Move",   ToolAction::Move);
+        add(MZ_ICON_ROTATE, "Rotate", ToolAction::Rotate);
+        add(MZ_ICON_SCALE,  "Scale",  ToolAction::Scale);
+    } else if (m_selection->hasSelectedBodies()) {
+        add(MZ_ICON_MOVE,   "Move",   ToolAction::Move);
+        add(MZ_ICON_ROTATE, "Rotate", ToolAction::Rotate);
+        add(MZ_ICON_SCALE,  "Scale",  ToolAction::Scale);
+        add(MZ_ICON_MIRROR, "Mirror", ToolAction::Mirror);
+        add(MZ_ICON_LATHE,  "Revolve", ToolAction::Revolve);
+        if (m_selection->selectedBodyCount() == 1)
+            add(MZ_ICON_UNFOLD, "Unfold", ToolAction::Unfold);
+        add(MZ_ICON_MEASURE, "Measure", ToolAction::Measure);
+    } else if (m_selection->hasSelectedEdges()) {
+        add(MZ_ICON_FILLET,  "Fillet",  ToolAction::Fillet);
+        add(MZ_ICON_CHAMFER, "Chamfer", ToolAction::Chamfer);
+        if (m_canEditDiameter)
+            add(MZ_ICON_CIRCLE, "Diameter", ToolAction::EditDiameter);
+    } else {
+        add(MZ_ICON_SKETCH,  "Sketch",  ToolAction::StartSketch);
+        add(MZ_ICON_MEASURE, "Measure", ToolAction::Measure);
+    }
+    return t;
 }
 
 void Toolbar::setSketchMode(bool active) {

@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include <string>
+#include <vector>
 
 class SelectionManager;
 class History;
@@ -53,6 +54,18 @@ public:
     void setPluginContext(PluginContext* ctx) { m_pluginCtx = ctx; }
 
     ToolAction render();
+
+    // The im-touch shell's tool rail: the PRIMARY tools of the current
+    // selection context (mirrors render()'s dispatch — keep the two in sync;
+    // the full catalogue unification is tracked in docs/im-touch-ui-plan.md
+    // Phase 3). Icons are MZ_ICON_* strings, labels are short rail captions.
+    struct RailTool {
+        const char* icon;
+        const char* label;
+        ToolAction  action;
+        bool        active = false;   // highlight (current sketch tool)
+    };
+    std::vector<RailTool> railTools() const;
 
     void setSketchMode(bool active);
     bool isSketchMode() const;

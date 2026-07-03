@@ -81,13 +81,32 @@ void Application::renderTouchShell() {
             ImGui::TextColored(touchui::textDim(), "/ %s", pn.c_str());
         }
 
-        // Right-aligned controls: Undo, Redo, [Keyboard,] Focus, ⋯.
+        // Right-aligned controls: [Finish, Discard,] Undo, Redo, [Keyboard,]
+        // Focus, ⋯. Finish/Discard appear in sketch mode — the two actions
+        // that must never be hunted for.
         const float sp = 8.0f * s;
         const bool showKb = materializr::touchMode();
         const int nSquare = showKb ? 4 : 3;
-        const float focusW = bh + ImGui::CalcTextSize("Focus").x + 27.0f * s;
-        float x = ws.x - pad - (bh * nSquare + focusW + sp * nSquare);
+        auto pillW = [&](const char* label) {
+            return bh + ImGui::CalcTextSize(label).x + 27.0f * s;
+        };
+        const float focusW = pillW("Focus");
+        float total = bh * nSquare + focusW + sp * nSquare;
+        if (m_inSketchMode)
+            total += pillW("Finish") + pillW("Discard") + sp * 2;
+        float x = ws.x - pad - total;
         ImGui::SetCursorPos(ImVec2(x, cy));
+
+        if (m_inSketchMode) {
+            if (touchui::pillButton("finish", MZ_ICON_FINISH, "Finish", true))
+                handleToolAction(static_cast<int>(ToolAction::FinishSketch));
+            ImGui::SameLine(0.0f, sp);
+            ImGui::SetCursorPosY(cy);
+            if (touchui::pillButton("discard", MZ_ICON_DISCARD, "Discard"))
+                handleToolAction(static_cast<int>(ToolAction::ExitSketchDiscard));
+            ImGui::SameLine(0.0f, sp);
+            ImGui::SetCursorPosY(cy);
+        }
 
         const bool histLocked = anyInteractivePreviewActive();
         ImGui::BeginDisabled(histLocked || !m_history->canUndo());
@@ -153,19 +172,21 @@ void Application::renderTouchShell() {
     }
     ImGui::End();
 
-    // ── Left tool rail — starter entries; the full selection-aware catalogue
-    //    replaces this in Phase 3. ─────────────────────────────────────────
+    // ── Left tool rail — the selection-context tool catalogue. ──────────────
     if (railW > 0.0f) {
         ImGui::SetNextWindowPos(ImVec2(wp.x, wp.y + topH));
         ImGui::SetNextWindowSize(ImVec2(railW, ws.y - topH));
-        if (ImGui::Begin("##TouchRail", nullptr, kShellWin)) {
+        if (ImGui::Begin("##TouchRail", nullptr,
+                         kShellWin & ~ImGuiWindowFlags_NoScrollbar)) {
             ImGui::SetCursorPosX(10.0f * s);
             touchui::sectionHeader("Tools");
-            if (touchui::railButton("sketch", MZ_ICON_SKETCH, "Sketch",
-                                    m_inSketchMode))
-                handleToolAction(static_cast<int>(ToolAction::StartSketch));
-            if (touchui::railButton("measure", MZ_ICON_MEASURE, "Measure", false))
-                handleToolAction(static_cast<int>(ToolAction::Measure));
+            if (m_toolbar) {
+                for (const auto& tool : m_toolbar->railTools()) {
+                    if (touchui::railButton(tool.label, tool.icon, tool.label,
+                                            tool.active))
+                        handleToolAction(static_cast<int>(tool.action));
+                }
+            }
         }
         ImGui::End();
     }
