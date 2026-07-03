@@ -136,61 +136,6 @@ void Application::renderSettings() {
 
                 // ── General ───────────────────────────────────────────────
                 if (ImGui::BeginTabItem("General")) {
-                    ImGui::SeparatorText("Interaction");
-                    // Touch mode: large UI + touch-gesture input. The whole UI
-                    // scale and input model branch on this, baked at startup, so
-                    // it takes full effect on the next launch.
-                    if (ImGui::Checkbox("Touch mode (large UI + touch gestures)", &m_touchMode)) {
-                        changed = true;
-                    }
-                    ImGui::TextWrapped("On: finger-sized UI, long-press menus, on-screen "
-                                       "toggles, trackpad navigation. Off: the desktop "
-                                       "mouse/keyboard layout — use it with an attached "
-                                       "mouse/keyboard. Takes full effect on restart.");
-                    if (materializr::touchMode() != m_touchMode) {
-                        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
-                            "Restart Materializr to apply the new mode.");
-                    }
-
-                    ImGui::Spacing();
-                    if (ImGui::Checkbox("im-touch UI (modern layout)", &m_imTouchUi)) {
-                        changed = true;
-                    }
-                    ImGui::TextWrapped("Experimental modern shell — tablet and "
-                                       "desktop: a top app bar, tool rail and side "
-                                       "panel replace the classic menus and docked "
-                                       "windows. Switches immediately; your classic "
-                                       "panel layout is kept.");
-                    ImGui::BeginDisabled(!m_imTouchUi);
-                    ImGui::Indent();
-                    if (ImGui::Checkbox("im-touch-lite (near-zero chrome)",
-                                        &m_imTouchLite)) {
-                        changed = true;
-                    }
-                    ImGui::TextWrapped("Full-screen viewport with floating "
-                                       "controls only: contextual tools at the "
-                                       "bottom, project/selection chip, undo and "
-                                       "menu buttons, and a + button to create.");
-                    ImGui::Unindent();
-                    ImGui::EndDisabled();
-
-                    ImGui::Spacing();
-                    ImGui::SeparatorText("Appearance");
-                    // Theme selector (the View menu mirrors this).
-                    if (m_themeManager->renderSelector()) {
-                        m_themeManager->apply();
-                        changed = true;
-                    }
-
-                    ImGui::Spacing();
-                    ImGui::SeparatorText("Toolbar tooltips");
-                    if (ImGui::Checkbox("Show toolbar tooltips", &m_showToolbarTooltips)) {
-                        changed = true;
-                    }
-                    ImGui::TextWrapped("Hover any toolbar button for a short description of what it does. "
-                                       "Turn off if you already know the tools and find the pop-ups distracting.");
-
-                    ImGui::Spacing();
                     ImGui::SeparatorText("Autosave");
                     if (ImGui::Checkbox("Autosave saved projects", &m_autosaveEnabled)) changed = true;
                     ImGui::TextWrapped("Periodically re-saves the project once it has been "
@@ -233,6 +178,104 @@ void Application::renderSettings() {
                                        "pre-release builds (e.g. 1.3.0-beta.1) — early access to "
                                        "the next version's features, which may be rougher. Off "
                                        "keeps you on stable releases only.");
+                    ImGui::EndTabItem();
+                }
+
+                // ── Appearance (layout, theme, visuals) ───────────────────
+                // Everything that changes how the app LOOKS, gathered from the
+                // old General / Sketch / Rendering tabs into one place.
+                if (ImGui::BeginTabItem("Appearance")) {
+                    ImGui::SeparatorText("Layout");
+                    // Touch mode: large UI + touch-gesture input. Baked at
+                    // startup, so it takes full effect on the next launch.
+                    if (ImGui::Checkbox("Touch mode (large UI + touch gestures)", &m_touchMode)) {
+                        changed = true;
+                    }
+                    ImGui::TextWrapped("On: finger-sized UI, long-press menus, on-screen "
+                                       "toggles, trackpad navigation. Off: the desktop "
+                                       "mouse/keyboard layout — use it with an attached "
+                                       "mouse/keyboard. Takes full effect on restart.");
+                    if (materializr::touchMode() != m_touchMode) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
+                            "Restart Materializr to apply the new mode.");
+                    }
+
+                    ImGui::Spacing();
+                    if (ImGui::Checkbox("im-touch UI (modern layout)", &m_imTouchUi)) {
+                        changed = true;
+                    }
+                    ImGui::TextWrapped("Experimental modern shell — tablet and "
+                                       "desktop: a top app bar, tool rail and side "
+                                       "panel replace the classic menus and docked "
+                                       "windows. Switches immediately; your classic "
+                                       "panel layout is kept.");
+                    ImGui::BeginDisabled(!m_imTouchUi);
+                    ImGui::Indent();
+                    if (ImGui::Checkbox("im-touch-lite (near-zero chrome)",
+                                        &m_imTouchLite)) {
+                        changed = true;
+                    }
+                    ImGui::TextWrapped("Full-screen viewport with floating "
+                                       "controls only: contextual tools at the "
+                                       "bottom, project/selection chip, undo and "
+                                       "menu buttons, and a + button to create.");
+                    ImGui::Unindent();
+                    ImGui::EndDisabled();
+
+                    ImGui::Spacing();
+                    ImGui::SeparatorText("Theme");
+                    // Theme selector (the View menu mirrors this).
+                    if (m_themeManager->renderSelector()) {
+                        m_themeManager->apply();
+                        changed = true;
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::SeparatorText("Toolbar tooltips");
+                    if (ImGui::Checkbox("Show toolbar tooltips", &m_showToolbarTooltips)) {
+                        changed = true;
+                    }
+                    ImGui::TextWrapped("Hover any toolbar button for a short description of what it does. "
+                                       "Turn off if you already know the tools and find the pop-ups distracting.");
+
+                    ImGui::Spacing();
+                    ImGui::SeparatorText("Selection");
+                    // Selection line width — how boldly picked edges/bodies are outlined.
+                    if (ImGui::SliderFloat("Selection line width", &m_selectionLineWidth, 1.0f, 10.0f, "%.1f px")) {
+                        if (m_selectionLineWidth < 1.0f) m_selectionLineWidth = 1.0f;
+                        if (m_selectionLineWidth > 10.0f) m_selectionLineWidth = 10.0f;
+                        applyRenderingSettings();
+                        changed = true;
+                    }
+                    ImGui::SetItemTooltip("Thickness of the highlight drawn over selected edges and bodies. "
+                                          "Increase to make selected edges easier to see.");
+
+                    ImGui::Spacing();
+                    ImGui::SeparatorText("Sketch");
+                    // Sketch line width — how boldly sketch geometry reads over the grid.
+                    if (ImGui::SliderFloat("Sketch line width", &m_sketchLineWidth, 1.0f, 6.0f, "%.1f px")) {
+                        if (m_sketchLineWidth < 1.0f) m_sketchLineWidth = 1.0f;
+                        if (m_sketchLineWidth > 6.0f) m_sketchLineWidth = 6.0f;
+                        applyRenderingSettings();
+                        changed = true;
+                    }
+                    ImGui::SetItemTooltip("Thickness of sketch lines, circles and arcs (and the vertex dots). "
+                                          "Increase if sketch geometry is too thin or blends into the grid.");
+                    if (ImGui::SliderFloat("Grid opacity", &m_sketchGridOpacity,
+                                           0.0f, 1.0f, "%.2f")) {
+                        changed = true;
+                    }
+                    ImGui::SetItemTooltip(
+                        "Opacity of the sketch-plane grid. Lower it if the grid "
+                        "competes with your sketch lines; 0 hides it.");
+                    if (ImGui::SliderFloat("Grid thickness", &m_sketchGridThickness,
+                                           0.1f, 2.0f, "%.2fx")) {
+                        changed = true;
+                    }
+                    ImGui::SetItemTooltip(
+                        "Sketch grid line width, as a multiplier of the default "
+                        "(1.0x). Raise it for a bolder grid, lower it for a finer "
+                        "one. Only affects the sketch-plane grid, not the ground.");
                     ImGui::EndTabItem();
                 }
 
@@ -298,25 +341,6 @@ void Application::renderSettings() {
                             "snap rays (15° is the classic CAD default); higher "
                             "= only the cardinal angles; Off = free angles.");
                     }
-
-                    ImGui::Spacing();
-                    ImGui::SeparatorText("Appearance");
-                    if (ImGui::SliderFloat("Grid opacity", &m_sketchGridOpacity,
-                                           0.0f, 1.0f, "%.2f")) {
-                        changed = true;
-                    }
-                    ImGui::SetItemTooltip(
-                        "Opacity of the sketch-plane grid. Lower it if the grid "
-                        "competes with your sketch lines; 0 hides it.");
-
-                    if (ImGui::SliderFloat("Grid thickness", &m_sketchGridThickness,
-                                           0.1f, 2.0f, "%.2fx")) {
-                        changed = true;
-                    }
-                    ImGui::SetItemTooltip(
-                        "Sketch grid line width, as a multiplier of the default "
-                        "(1.0x). Raise it for a bolder grid, lower it for a finer "
-                        "one. Only affects the sketch-plane grid, not the ground.");
 
                     ImGui::Spacing();
                     if (ImGui::Checkbox("Show level toggle in sketch toolbar",
@@ -489,28 +513,6 @@ void Application::renderSettings() {
                     ImGui::SetItemTooltip("Higher quality uses more polygons, smoothing curves and holes.");
 
                     ImGui::Spacing();
-                    ImGui::SeparatorText("Selection");
-                    // Selection line width — how boldly picked edges/bodies are outlined.
-                    if (ImGui::SliderFloat("Selection line width", &m_selectionLineWidth, 1.0f, 10.0f, "%.1f px")) {
-                        if (m_selectionLineWidth < 1.0f) m_selectionLineWidth = 1.0f;
-                        if (m_selectionLineWidth > 10.0f) m_selectionLineWidth = 10.0f;
-                        applyRenderingSettings();
-                        changed = true;
-                    }
-                    ImGui::SetItemTooltip("Thickness of the highlight drawn over selected edges and bodies. "
-                                          "Increase to make selected edges easier to see.");
-
-                    ImGui::SeparatorText("Sketch");
-                    // Sketch line width — how boldly sketch geometry reads over the grid.
-                    if (ImGui::SliderFloat("Sketch line width", &m_sketchLineWidth, 1.0f, 6.0f, "%.1f px")) {
-                        if (m_sketchLineWidth < 1.0f) m_sketchLineWidth = 1.0f;
-                        if (m_sketchLineWidth > 6.0f) m_sketchLineWidth = 6.0f;
-                        applyRenderingSettings();
-                        changed = true;
-                    }
-                    ImGui::SetItemTooltip("Thickness of sketch lines, circles and arcs (and the vertex dots). "
-                                          "Increase if sketch geometry is too thin or blends into the grid.");
-
                     ImGui::SeparatorText("Imported meshes (STL)");
                     // Wireframe of imported mesh bodies — toggling applies live by
                     // re-running just the mesh bodies' edge rebuild.

@@ -967,20 +967,44 @@ void Application::renderTouchShellLite() {
             ImGui::OpenPopup("##LiteCreate");
         tip("Create: a sketch or a primitive solid");
         if (ImGui::BeginPopup("##LiteCreate")) {
-            if (ImGui::MenuItem(MZ_ICON_SKETCH "  New Sketch"))
-                handleToolAction(static_cast<int>(ToolAction::StartSketch));
-            if (m_pluginContext) {
-                ImGui::Separator();
-                if (ImGui::MenuItem(MZ_ICON_EXTRUDE "  Box"))
+            // Mirror the full-shell rail's create logic instead of dumping every
+            // option flat: sketch is contextual (on a picked face/plane if there
+            // is one, else a "New Sketch" submenu of world planes), the five
+            // primitives live under ONE "Primitive" submenu, and construction
+            // geometry derives from the selection — so only the relevant, grouped
+            // create tools show, matching the classic + full im-touch shells.
+            const bool faceOrPlaneSel = m_selection &&
+                (m_selection->hasSelectedFaces() ||
+                 m_selection->primaryType() == SelectionType::Plane);
+            if (faceOrPlaneSel) {
+                if (ImGui::MenuItem(MZ_ICON_SKETCH "  Sketch on selection"))
+                    handleToolAction(static_cast<int>(ToolAction::SketchOnFace));
+            } else if (ImGui::BeginMenu(MZ_ICON_SKETCH "  New Sketch")) {
+                if (ImGui::MenuItem("XY plane"))
+                    handleToolAction(static_cast<int>(ToolAction::StartSketchXY));
+                if (ImGui::MenuItem("XZ plane"))
+                    handleToolAction(static_cast<int>(ToolAction::StartSketchXZ));
+                if (ImGui::MenuItem("YZ plane"))
+                    handleToolAction(static_cast<int>(ToolAction::StartSketchYZ));
+                ImGui::EndMenu();
+            }
+            if (m_pluginContext &&
+                ImGui::BeginMenu(MZ_ICON_PRIMITIVE "  Primitive")) {
+                if (ImGui::MenuItem("Box"))
                     m_pluginContext->requestInteractiveOp("PrimitiveBox");
-                if (ImGui::MenuItem(MZ_ICON_CIRCLE "  Cylinder"))
+                if (ImGui::MenuItem("Cylinder"))
                     m_pluginContext->requestInteractiveOp("PrimitiveCylinder");
-                if (ImGui::MenuItem(MZ_ICON_CIRCLE "  Sphere"))
+                if (ImGui::MenuItem("Sphere"))
                     m_pluginContext->requestInteractiveOp("PrimitiveSphere");
-                if (ImGui::MenuItem(MZ_ICON_POLYGON "  Cone"))
+                if (ImGui::MenuItem("Cone"))
                     m_pluginContext->requestInteractiveOp("PrimitiveCone");
-                if (ImGui::MenuItem(MZ_ICON_CIRCLE "  Torus"))
+                if (ImGui::MenuItem("Torus"))
                     m_pluginContext->requestInteractiveOp("PrimitiveTorus");
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu(MZ_ICON_FOCUS "  Construction")) {
+                renderConstructionMenuItems();
+                ImGui::EndMenu();
             }
             ImGui::EndPopup();
         }
