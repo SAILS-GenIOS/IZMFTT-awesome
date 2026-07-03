@@ -40,6 +40,7 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/MoveFaceOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SubShapeIndex.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/EdgeAnchor.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/FaceAnchor.cpp
     ${CMAKE_SOURCE_DIR}/src/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/io/StlIO.cpp
     ${CMAKE_SOURCE_DIR}/src/io/MeshDecimate.cpp
@@ -143,6 +144,11 @@ target_link_libraries(bench_stl_import PRIVATE materializr_core)
 # fillets against every sketch (experiment/generative-edges, not run by ctest)
 add_executable(probe_anchor_coverage probe_anchor_coverage.cpp)
 target_link_libraries(probe_anchor_coverage PRIVATE materializr_core)
+
+# probe_face_coverage — diagnostic: generative FACE naming coverage of a real
+# project's bodies against every sketch (experiment/face-anchors)
+add_executable(probe_face_coverage probe_face_coverage.cpp)
+target_link_libraries(probe_face_coverage PRIVATE materializr_core)
 
 # test_sketch_regions — multi-loop interior selection (wire-orientation fix)
 add_executable(test_sketch_regions test_sketch_regions.cpp)
