@@ -321,7 +321,10 @@ private:
                                      float vpW, float vpH,
                                      bool buildIfCold = true) const;
     void beginPushPull();
-    void updatePushPull();
+    // applySnap=false bypasses the grid snap for that update — the stepper
+    // buttons are an explicit fine override (a 0.1 nudge under a 1 mm grid must
+    // actually move), so they call updatePushPull(false).
+    void updatePushPull(bool applySnap = true);
     void commitPushPull();
     void cancelPushPull();
     // ── Move Face (face transform → body follows via loft; see MoveFaceOp) ──

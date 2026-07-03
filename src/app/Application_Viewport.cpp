@@ -47,6 +47,7 @@
 #include "ui/ShortcutsPanel.h"
 #include "ui/HelpPanel.h"
 #include "ui/MeasureTool.h"
+#include "ui/StepperRow.h"
 #include "ui/UpdateChecker.h"
 #include "modeling/Sketch.h"
 #include "modeling/SketchSolver.h"
@@ -6235,8 +6236,10 @@ void Application::renderViewport() {
         ImGui::SameLine();
         ImGui::Text("mm");
 
-        // Slider for quick adjustment
-        if (ImGui::SliderFloat("##slider", &m_extrudeDistance, -50.0f, 50.0f, "%.1f mm")) {
+        // Quick-nudge stepper (replaces the slider): ±10/1/0.1, and 0 to
+        // clear the extrusion mid-preview.
+        if (materializr::stepperRow("extrudeStep", &m_extrudeDistance,
+                                    /*allowNegative=*/true, -50.0f, 50.0f)) {
             std::snprintf(m_extrudeInputBuf, sizeof(m_extrudeInputBuf), "%.1f", m_extrudeDistance);
             updateInteractiveExtrude();
         }
@@ -6301,14 +6304,15 @@ void Application::renderViewport() {
         ImGui::SameLine();
         ImGui::Text("mm");
 
-        // Symmetric sweeps both ways, so a negative distance is just the
-        // positive one — clamp the range to positive while ticked.
-        if (ImGui::SliderFloat("##ppslider", &m_pushPullDistance,
-                               m_pushPullSymmetric ? 0.1f : -50.0f, 50.0f,
-                               "%.1f mm")) {
+        // Quick-nudge stepper (replaces the slider). Symmetric sweeps both
+        // ways, so a negative distance is meaningless there — drop the minus
+        // buttons and clamp positive while ticked. 0 clears the change.
+        if (materializr::stepperRow("ppStep", &m_pushPullDistance,
+                                    /*allowNegative=*/!m_pushPullSymmetric,
+                                    m_pushPullSymmetric ? 0.1f : -50.0f, 50.0f)) {
             m_pushPullDistanceRaw = m_pushPullDistance;
             std::snprintf(m_pushPullInputBuf, sizeof(m_pushPullInputBuf), "%.1f", m_pushPullDistance);
-            updatePushPull();
+            updatePushPull(/*applySnap=*/false);   // steppers override the grid
         }
 
         // Symmetric: one prism swept the distance to BOTH sides of the
@@ -6397,7 +6401,12 @@ void Application::renderViewport() {
         ImGui::SameLine();
         ImGui::Text("mm");
 
-        if (ImGui::SliderFloat("##eslider", &m_edgeOpValue, 0.1f, 20.0f, "%.1f mm")) {
+        // Quick-nudge stepper (replaces the slider). Positive-only for a
+        // radius / setback; 0 shows the original body mid-preview (updateInter-
+        // activeEdgeOp restores it at ~0). Confirming at 0 still cancels — zero
+        // fillet = no fillet.
+        if (materializr::stepperRow("edgeStep", &m_edgeOpValue,
+                                    /*allowNegative=*/false, 0.1f, 20.0f)) {
             std::snprintf(m_edgeOpInputBuf, sizeof(m_edgeOpInputBuf), "%.1f", m_edgeOpValue);
             updateInteractiveEdgeOp();
         }
@@ -6435,8 +6444,8 @@ void Application::renderViewport() {
                 }
                 ImGui::SameLine();
                 ImGui::Text("mm");
-                if (ImGui::SliderFloat("##eslider2", &m_edgeOpValue2, 0.1f, 20.0f,
-                                       "%.1f mm")) {
+                if (materializr::stepperRow("edgeStep2", &m_edgeOpValue2,
+                                            /*allowNegative=*/false, 0.1f, 20.0f)) {
                     std::snprintf(m_edgeOpInputBuf2, sizeof(m_edgeOpInputBuf2),
                                   "%.1f", m_edgeOpValue2);
                     updateInteractiveEdgeOp();

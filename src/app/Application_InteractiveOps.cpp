@@ -1514,7 +1514,7 @@ void Application::beginPushPull() {
     updatePushPull();
 }
 
-void Application::updatePushPull() {
+void Application::updatePushPull(bool applySnap) {
     if (!m_pushPullActive) return;
     if (!std::isfinite(m_pushPullDistance)) { m_pushPullDistance = 0.0f; return; }
 
@@ -1525,7 +1525,7 @@ void Application::updatePushPull() {
     // 5.3 in the field, body extrudes to 5.0" discrepancy. Toggling snap off
     // mid-drag immediately frees the distance to fine values on the next
     // updatePushPull frame.
-    if (m_snapToGrid && m_sketchGridStep > 0.0f) {
+    if (applySnap && m_snapToGrid && m_sketchGridStep > 0.0f) {
         const float step = m_sketchGridStep;
         m_pushPullDistance = std::round(m_pushPullDistance / step) * step;
         std::snprintf(m_pushPullInputBuf, sizeof(m_pushPullInputBuf),
