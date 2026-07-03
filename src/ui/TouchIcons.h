@@ -65,6 +65,13 @@
 #define MZ_ICON_LOOK       ICON_IC_EYE
 #define MZ_ICON_COPY       ICON_IC_COPY
 #define MZ_ICON_PATTERN    ICON_IC_DOTS_GRID_3X3
+#define MZ_ICON_TEXT       ICON_IC_TEXT
+#define MZ_ICON_SVG        ICON_IC_SVG_FORMAT
+#define MZ_ICON_UNION      ICON_IC_UNION
+#define MZ_ICON_INTERSECT  ICON_IC_INTERSECT
+#define MZ_ICON_SPLIT      ICON_IC_SPLIT_AREA
+#define MZ_ICON_GUIDES     ICON_IC_MAGNET     // sketch inference level cycle
+#define MZ_ICON_PROJECT    ICON_IC_COMBINE    // project/stamp a sketch onto a face
 // Rail "Primitive" group — sentinel (PUA U+E001): no Iconoir glyph reads as
 // "basic solids", so drawIconCentered (TouchWidgets.cpp) draws a square
 // overlapping a circle (Steve's CAD-sketch reference: square top-left, larger

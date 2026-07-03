@@ -55,18 +55,24 @@ public:
 
     ToolAction render();
 
-    // The im-touch shell's tool rail: the PRIMARY tools of the current
-    // selection context (mirrors render()'s dispatch — keep the two in sync;
-    // the full catalogue unification is tracked in docs/im-touch-ui-plan.md
-    // Phase 3). Icons are MZ_ICON_* strings, labels are short rail captions.
+    // The modern/im-touch tool rail: the tools of the current selection
+    // context (mirrors render()'s dispatch — keep the two in sync). Icons are
+    // MZ_ICON_* strings, labels are short rail captions. Plugin toolbar
+    // contributions are included with pluginIndex >= 0 (an index into
+    // PluginRegistry::toolbarContributions()); the shells fire those through
+    // fireRailPlugin() instead of handleToolAction.
     struct RailTool {
         const char* icon;
         const char* label;
         ToolAction  action;
         bool        active = false;   // highlight (current sketch tool)
         const char* tip = nullptr;    // hover tooltip (im-touch shell)
+        int         pluginIndex = -1; // >= 0: plugin contribution, not a ToolAction
     };
     std::vector<RailTool> railTools() const;
+    // Fire a plugin RailTool (activate its tool / run its action) — the rail
+    // twin of renderPluginButtons' click handling.
+    void fireRailPlugin(int index);
 
     void setSketchMode(bool active);
     bool isSketchMode() const;

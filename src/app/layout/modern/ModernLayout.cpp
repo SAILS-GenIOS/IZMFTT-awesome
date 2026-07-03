@@ -323,14 +323,19 @@ void Application::renderModernLayout() {
             }
 
             if (m_toolbar) {
+                int railIdx = 0;
                 for (const auto& tool : m_toolbar->railTools()) {
+                    ImGui::PushID(railIdx++); // labels can repeat across groups
                     const bool clicked = touchui::railButton(
                         tool.label, tool.icon, tool.label, tool.active);
                     tip(tool.tip);
-                    if (tool.action == ToolAction::Polygon)
+                    if (tool.pluginIndex >= 0) {
+                        if (clicked) m_toolbar->fireRailPlugin(tool.pluginIndex);
+                    } else if (tool.action == ToolAction::Polygon)
                         renderRailPolygonSidesPopup(clicked);
                     else if (clicked)
                         handleToolAction(static_cast<int>(tool.action));
+                    ImGui::PopID();
                 }
             }
 
