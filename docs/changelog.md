@@ -3,6 +3,42 @@
 All notable changes to Materializr are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [1.3.0] — 2026-07-02
+
+The stable rollup of the whole `1.3.0-beta.1 … beta.11` line, plus one fix that
+landed after the last beta. Per-beta detail is in the entries below; the
+headline additions since **1.2.8**:
+
+### Highlights
+
+- **Unfold / flatten to 2D cut patterns.** Lay a 3D body flat into a developable
+  net and export it as **SVG** or **tiled PDF** — with a live page-break preview,
+  magenta **registration crosses** in the overlaps for precise multi-sheet
+  assembly, rotate / auto-fit, and a conformal option for double-curved shells.
+  Straight from solid to laser cutter, vinyl, or paper template.
+- **STL import.** Bring in a mesh (accuracy slider, wireframe toggle) and sketch
+  on its flat faces — reference or rework printed/scanned parts.
+- **Twist Face** and direct face editing — the Rotate gizmo's third ring spins a
+  face about its normal to spiral the walls; alongside taper and scale-face.
+- **Interactive Mirror** — place and rotate a mirror line, snap, and mirror
+  points / lines / circles / arcs / splines with coincident welding.
+- **Navigation that tracks 1:1.** Pan, push/pull, extrude and scale-face drags
+  move exactly with the cursor at any zoom; **orbit spins around the object**
+  (the pivot re-anchors onto the geometry at the view centre).
+- **Crisp UI on scaled Windows displays.** The app is now per-monitor DPI-aware,
+  so at 125–200% scaling it renders at native resolution (sharp) instead of a
+  blurry bitmap-upscale. *(New in stable — landed after beta.11.)*
+- **Smarter sketch snapping** — snaps onto the host body's adjacent-face edges
+  and continuously along in-plane hole rims / fillet arcs; grid-relative snap
+  bands so fine grids draw short segments; post-draw resize of lines, rects and
+  arcs by exact dimension.
+- **Opt-in beta channel** — Settings toggle to receive pre-release builds early.
+- A broad **stability & performance pass**: multi-instance crash-recovery fix,
+  GPU-cached sketch/selection rendering, and a backend audit — smoother on
+  complex models and tablets.
+
+APK versionCode 28.
+
 ## [1.3.0-beta.11] — 2026-07-02 (pre-release)
 
 Feature-complete cut for 1.3.0. APK versionCode 27.
