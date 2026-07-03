@@ -26,11 +26,14 @@
 #include "ui/TouchIcons.h"
 #include "ui/TouchTheme.h"
 #include "ui/TouchWidgets.h"
+#include "ui/LogoTexture.h"
+#include "gl_common.h"
 #include "touch_mode.h"
 #include "ui_scale.h"
 
 #include <cfloat> // FLT_MAX (lite tool bar height constraint)
 #include <imgui.h>
+#include <cstdint>
 #include <set>
 #include <string>
 
@@ -41,6 +44,25 @@ constexpr ImGuiWindowFlags kShellWin =
     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
     ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
     ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar;
+
+// The Materializr logo (embedded RGBA, LogoTexture.h) as a lazily-uploaded
+// GL texture for the top-bar chip. Uploaded once; lives with the GL context.
+ImTextureID logoTexture() {
+    static GLuint tex = 0;
+    if (!tex) {
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, materializr::kLogoTexW,
+                     materializr::kLogoTexH, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                     materializr::kLogoTexRGBA);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    return (ImTextureID)(intptr_t)tex;
+}
 
 } // namespace
 
@@ -90,6 +112,19 @@ void Application::renderTouchShell() {
     const ImVec2 wp = vp->WorkPos;
     const ImVec2 ws = vp->WorkSize;
 
+    // Hover tooltip on the previous item — honours the same "toolbar
+    // tooltips" setting the classic toolbar uses. (Hover exists on desktop
+    // im-touch and on a tablet with a mouse; bare-finger use never sees it.)
+    auto tip = [&](const char* text) {
+        if (!m_showToolbarTooltips || !text) return;
+        if (ImGui::BeginItemTooltip()) {
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 22.0f);
+            ImGui::TextUnformatted(text);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+    };
+
     const float topH   = 60.0f * s;
     const float railW  = m_leftPanelHidden  ? 0.0f : 92.0f * s;
     const float rightW = m_rightPanelHidden ? 0.0f : m_touchRightW * s; // user-resizable
@@ -120,6 +155,7 @@ void Application::renderTouchShell() {
             ImGui::SetCursorPos(ImVec2(pad, (topH - bh0) * 0.5f));
             if (touchui::iconButton("overflow", MZ_ICON_MORE, bh0))
                 ImGui::OpenPopup("##TouchOverflow");
+            tip("Menu: file, edit, view, help and settings");
             renderTouchOverflowPopup();
 
             ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -127,9 +163,10 @@ void Application::renderTouchShell() {
             const float chip = 30.0f * s;
             const float lx = pad + menuW;
             const ImVec2 c0(win.x + lx, win.y + (topH - chip) * 0.5f);
-            dl->AddRectFilled(c0, ImVec2(c0.x + chip, c0.y + chip),
-                              ImGui::GetColorU32(touchui::accentFill()),
-                              9.0f * s);
+            dl->AddImageRounded(logoTexture(), c0,
+                                ImVec2(c0.x + chip, c0.y + chip),
+                                ImVec2(0, 0), ImVec2(1, 1),
+                                IM_COL32_WHITE, 7.0f * s);
             ImGui::SetCursorPos(ImVec2(lx + chip + 10.0f * s,
                                        (topH - ImGui::GetTextLineHeight()) * 0.5f));
             ImGui::TextColored(touchui::textPrimary(), "Materializr");
@@ -181,6 +218,8 @@ void Application::renderTouchShell() {
             if (touchui::pillButton("multi", MZ_ICON_SELECT, "Multi",
                                     m_multiSelectToggle))
                 m_multiSelectToggle = !m_multiSelectToggle;
+            tip("Multi-select: add taps to the current selection\n"
+                "(the touch equivalent of holding Ctrl)");
             ImGui::SameLine(0.0f, sp);
             ImGui::SetCursorPosY(cy);
         }
@@ -192,6 +231,9 @@ void Application::renderTouchShell() {
                 else
                     handleToolAction(static_cast<int>(ToolAction::FinishSketch));
             }
+            tip(toolRunning
+                    ? "Finish the current shape, keeping the points placed"
+                    : "Leave sketch mode, keeping the sketch");
             ImGui::SameLine(0.0f, sp);
             ImGui::SetCursorPosY(cy);
             if (touchui::pillButton("exit", MZ_ICON_DISCARD, exitLbl)) {
@@ -202,6 +244,9 @@ void Application::renderTouchShell() {
                     // misclick can't throw the sketch away.
                     ImGui::OpenPopup("Discard sketch?");
             }
+            tip(toolRunning
+                    ? "Cancel the in-progress shape"
+                    : "Throw the sketch away and leave (asks to confirm)");
             if (ImGui::BeginPopupModal("Discard sketch?", nullptr,
                                        ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::TextUnformatted(
@@ -225,11 +270,13 @@ void Application::renderTouchShell() {
         ImGui::BeginDisabled(histLocked || !touchCanUndo());
         if (touchui::iconButton("undo", MZ_ICON_UNDO, bh)) touchUndo();
         ImGui::EndDisabled();
+        tip("Undo (in a sketch: backs out the in-progress shape first)");
         ImGui::SameLine(0.0f, sp);
         ImGui::SetCursorPosY(cy);
         ImGui::BeginDisabled(histLocked || !m_history->canRedo());
         if (touchui::iconButton("redo", MZ_ICON_REDO, bh)) redoWithCascade();
         ImGui::EndDisabled();
+        tip("Redo");
 
         // Soft-keyboard toggle (the desktop menu bar's right-aligned item;
         // there's no menu bar here). Touch mode only, same flag.
@@ -238,6 +285,7 @@ void Application::renderTouchShell() {
             ImGui::SetCursorPosY(cy);
             if (touchui::iconButton("kb", MZ_ICON_KEYBOARD, bh))
                 m_softKeyboardForced = !m_softKeyboardForced;
+            tip("Toggle the on-screen keyboard");
         }
 
         // Focus: viewport + rail only (right panel hidden).
@@ -248,6 +296,7 @@ void Application::renderTouchShell() {
             m_rightPanelHidden = !m_rightPanelHidden;
             saveAppSettings();
         }
+        tip("Hide the side panel: viewport and tools only");
         // (The ⋯ overflow menu now lives at the top-left of this bar.)
     }
     ImGui::End();
@@ -260,22 +309,12 @@ void Application::renderTouchShell() {
                           kShellWin & ~ImGuiWindowFlags_NoScrollbar)) {
             ImGui::SetCursorPosX(10.0f * s);
             touchui::sectionHeader("Tools");
-            if (m_toolbar) {
-                for (const auto& tool : m_toolbar->railTools()) {
-                    if (touchui::railButton(tool.label, tool.icon, tool.label,
-                                            tool.active))
-                        handleToolAction(static_cast<int>(tool.action));
-                }
-            }
 
-            // Create tools the contextual rail omits — grouped popups so they're
-            // one tap away (not buried in the ⋯ menu). Themed by the surrounding
-            // TouchTheme scope. With nothing selected: primitives + sketch-on-
-            // plane; with a supporting selection: derive a construction plane/axis.
+            // Grouped popups for the create tools the contextual rail omits —
+            // one tap away (not buried in the ⋯ menu). On a touch screen they
+            // get roomier rows (bigger padding + row gap) for finger targets.
             const bool nothingSel = !m_inSketchMode &&
                 (!m_selection || !m_selection->hasSelection());
-            // On a touch screen the group popups get roomier rows (bigger
-            // padding + row gap) so each entry is an easy finger target.
             const bool touchPad = materializr::touchMode();
             auto pushPopupPad = [&] {
                 if (!touchPad) return;
@@ -285,10 +324,42 @@ void Application::renderTouchShell() {
                                     ImVec2(12.0f * s, 14.0f * s));
             };
             auto popPopupPad = [&] { if (touchPad) ImGui::PopStyleVar(2); };
+            auto constructGroup = [&] {
+                if (touchui::railButton("constructGroup", MZ_ICON_FOCUS,
+                                        "Construct", false))
+                    ImGui::OpenPopup("##railConstruct");
+                tip("Create a construction plane or axis derived from the selection");
+                pushPopupPad();
+                if (ImGui::BeginPopup("##railConstruct")) {
+                    renderConstructionMenuItems();
+                    ImGui::EndPopup();
+                }
+                popPopupPad();
+            };
+
+            // With nothing selected the create tools lead (Sketch on… at the
+            // very top) and railTools' Measure lands at the bottom; with a
+            // selection the contextual tools lead and Construct follows.
             if (nothingSel) {
+                if (touchui::railButton("sketchOnGroup", MZ_ICON_SKETCH,
+                                        "Sketch on...", false))
+                    ImGui::OpenPopup("##railSketchOn");
+                tip("Start a sketch on a world plane (XY / XZ / YZ)");
+                pushPopupPad();
+                if (ImGui::BeginPopup("##railSketchOn")) {
+                    if (ImGui::MenuItem("XY plane"))
+                        handleToolAction(static_cast<int>(ToolAction::StartSketchXY));
+                    if (ImGui::MenuItem("XZ plane"))
+                        handleToolAction(static_cast<int>(ToolAction::StartSketchXZ));
+                    if (ImGui::MenuItem("YZ plane"))
+                        handleToolAction(static_cast<int>(ToolAction::StartSketchYZ));
+                    ImGui::EndPopup();
+                }
+                popPopupPad();
                 if (touchui::railButton("primGroup", MZ_ICON_PRIMITIVE,
                                         "Primitive", false))
                     ImGui::OpenPopup("##railPrimitive");
+                tip("Add a primitive solid: box, cylinder, sphere, cone or torus");
                 pushPopupPad();
                 if (ImGui::BeginPopup("##railPrimitive")) {
                     if (m_pluginContext) {
@@ -306,35 +377,22 @@ void Application::renderTouchShell() {
                     ImGui::EndPopup();
                 }
                 popPopupPad();
-                if (touchui::railButton("sketchOnGroup", MZ_ICON_SKETCH,
-                                        "Sketch on...", false))
-                    ImGui::OpenPopup("##railSketchOn");
-                pushPopupPad();
-                if (ImGui::BeginPopup("##railSketchOn")) {
-                    if (ImGui::MenuItem("XY plane"))
-                        handleToolAction(static_cast<int>(ToolAction::StartSketchXY));
-                    if (ImGui::MenuItem("XZ plane"))
-                        handleToolAction(static_cast<int>(ToolAction::StartSketchXZ));
-                    if (ImGui::MenuItem("YZ plane"))
-                        handleToolAction(static_cast<int>(ToolAction::StartSketchYZ));
-                    ImGui::EndPopup();
-                }
-                popPopupPad();
+                constructGroup();
             }
-            // Construction — always reachable in 3D mode. Plane/Axis are
-            // nested inside; options derive from the selection (hints when
-            // nothing supports a derivation yet).
-            if (!m_inSketchMode) {
-                if (touchui::railButton("constructGroup", MZ_ICON_FOCUS,
-                                        "Construct", false))
-                    ImGui::OpenPopup("##railConstruct");
-                pushPopupPad();
-                if (ImGui::BeginPopup("##railConstruct")) {
-                    renderConstructionMenuItems();
-                    ImGui::EndPopup();
+
+            if (m_toolbar) {
+                for (const auto& tool : m_toolbar->railTools()) {
+                    if (touchui::railButton(tool.label, tool.icon, tool.label,
+                                            tool.active))
+                        handleToolAction(static_cast<int>(tool.action));
+                    tip(tool.tip);
                 }
-                popPopupPad();
             }
+
+            // Construction stays reachable with a selection too (its options
+            // derive from the selection) — after the contextual tools.
+            if (!m_inSketchMode && !nothingSel)
+                constructGroup();
         }
         ImGui::End();
     }
@@ -442,6 +500,8 @@ void Application::renderTouchShell() {
                 m_rightPanelHidden = newHidden;
                 saveAppSettings();
             }
+            tip(full ? "Bring the tool rail and side panel back"
+                     : "Hide all panels: viewport only");
         }
         ImGui::End();
     }
@@ -461,6 +521,15 @@ void Application::renderTouchShellLite() {
     touchui::Scope style;
 
     const float s = uiScale();
+    auto tip = [&](const char* text) {   // same policy as the full shell
+        if (!m_showToolbarTooltips || !text) return;
+        if (ImGui::BeginItemTooltip()) {
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 22.0f);
+            ImGui::TextUnformatted(text);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+    };
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const ImVec2 wp = vp->WorkPos;
     const ImVec2 ws = vp->WorkSize;
@@ -482,13 +551,16 @@ void Application::renderTouchShellLite() {
         // ⋯ menu at the far left (moved off the top-right cluster).
         if (touchui::iconButton("menu", MZ_ICON_MENU_BARS, 30.0f * s))
             ImGui::OpenPopup("##TouchOverflow");
+        tip("Menu: file, edit, view, help and settings");
         renderTouchOverflowPopup();
         ImGui::SameLine(0.0f, 8.0f * s);
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const float chip = 18.0f * s;
         const ImVec2 c0 = ImGui::GetCursorScreenPos();
-        dl->AddRectFilled(c0, ImVec2(c0.x + chip, c0.y + chip),
-                          ImGui::GetColorU32(touchui::accentFill()), 5.0f * s);
+        dl->AddImageRounded(logoTexture(), c0,
+                            ImVec2(c0.x + chip, c0.y + chip),
+                            ImVec2(0, 0), ImVec2(1, 1),
+                            IM_COL32_WHITE, 4.0f * s);
         ImGui::Dummy(ImVec2(chip, chip));
         ImGui::SameLine();
 
@@ -537,16 +609,20 @@ void Application::renderTouchShellLite() {
             if (touchui::pillButton("multi", MZ_ICON_SELECT, "Multi",
                                     m_multiSelectToggle))
                 m_multiSelectToggle = !m_multiSelectToggle;
+            tip("Multi-select: add taps to the current selection\n"
+                "(the touch equivalent of holding Ctrl)");
             ImGui::SameLine(0.0f, 8.0f * s);
         }
         const bool histLocked = anyInteractivePreviewActive();
         ImGui::BeginDisabled(histLocked || !touchCanUndo());
         if (touchui::iconButton("undo", MZ_ICON_UNDO, bh)) touchUndo();
         ImGui::EndDisabled();
+        tip("Undo (in a sketch: backs out the in-progress shape first)");
         if (materializr::touchMode()) {
             ImGui::SameLine(0.0f, 8.0f * s);
             if (touchui::iconButton("kb", MZ_ICON_KEYBOARD, bh))
                 m_softKeyboardForced = !m_softKeyboardForced;
+            tip("Toggle the on-screen keyboard");
         }
         // Model-tree toggle (the transparent Bodies/Sketches/Construction
         // overlay on the right edge).
@@ -702,6 +778,7 @@ void Application::renderTouchShellLite() {
                 if (touchui::railButton(tool.label, tool.icon, tool.label,
                                         tool.active, 64.0f * s))
                     handleToolAction(static_cast<int>(tool.action));
+                tip(tool.tip);
             }
             if (m_inSketchMode) {
                 const bool toolRunning = m_sketchTool && m_sketchTool->isPlacing();
@@ -716,12 +793,18 @@ void Application::renderTouchShellLite() {
                     else
                         handleToolAction(static_cast<int>(ToolAction::FinishSketch));
                 }
+                tip(toolRunning
+                        ? "Finish the current shape, keeping the points placed"
+                        : "Leave sketch mode, keeping the sketch");
                 if (touchui::pillButton("exit", MZ_ICON_DISCARD, exitLbl)) {
                     if (toolRunning)
                         m_sketchTool->onCancel();
                     else
                         ImGui::OpenPopup("Discard sketch?"); // confirm — destructive
                 }
+                tip(toolRunning
+                        ? "Cancel the in-progress shape"
+                        : "Throw the sketch away and leave (asks to confirm)");
                 if (ImGui::BeginPopupModal("Discard sketch?", nullptr,
                                            ImGuiWindowFlags_AlwaysAutoResize)) {
                     ImGui::TextUnformatted(
@@ -750,6 +833,7 @@ void Application::renderTouchShellLite() {
     if (ImGui::Begin("##LiteFab", nullptr, kFloat)) {
         if (touchui::fab("create", MZ_ICON_ADD))
             ImGui::OpenPopup("##LiteCreate");
+        tip("Create: a sketch or a primitive solid");
         if (ImGui::BeginPopup("##LiteCreate")) {
             if (ImGui::MenuItem(MZ_ICON_SKETCH "  New Sketch"))
                 handleToolAction(static_cast<int>(ToolAction::StartSketch));

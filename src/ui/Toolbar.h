@@ -64,6 +64,7 @@ public:
         const char* label;
         ToolAction  action;
         bool        active = false;   // highlight (current sketch tool)
+        const char* tip = nullptr;    // hover tooltip (im-touch shell)
     };
     std::vector<RailTool> railTools() const;
 

@@ -183,16 +183,6 @@ void Application::renderSettings() {
                     }
 
                     ImGui::Spacing();
-                    ImGui::SeparatorText("Panels");
-                    ImGui::TextWrapped("Show or hide the docked panels to free up "
-                                       "screen space. Re-enable any of them here.");
-                    if (ImGui::Checkbox("Tools",        &m_showTools))        changed = true;
-                    if (ImGui::Checkbox("Interactions", &m_showInteractions)) changed = true;
-                    if (ImGui::Checkbox("History",      &m_showHistory))      changed = true;
-                    if (ImGui::Checkbox("Items",        &m_showItems))        changed = true;
-                    if (ImGui::Checkbox("Properties",   &m_showProperties))   changed = true;
-
-                    ImGui::Spacing();
                     ImGui::SeparatorText("Toolbar tooltips");
                     if (ImGui::Checkbox("Show toolbar tooltips", &m_showToolbarTooltips)) {
                         changed = true;
@@ -440,6 +430,17 @@ void Application::renderSettings() {
                         if (ImGui::SliderFloat("Pan##touchSens",   &m_touchPanSens,   0.25f, 3.0f, "%.2fx")) changed = true;
                         if (ImGui::SliderFloat("Zoom##touchSens",  &m_touchZoomSens,  0.25f, 3.0f, "%.2fx")) changed = true;
                     }
+
+                    ImGui::Spacing();
+                    ImGui::SeparatorText("Panels (Materializr classic UI)");
+                    ImGui::TextWrapped("Show or hide the classic interface's docked "
+                                       "panels. Applies to the classic UI only — the "
+                                       "im-touch shell arranges its own panels.");
+                    if (ImGui::Checkbox("Tools",        &m_showTools))        changed = true;
+                    if (ImGui::Checkbox("Interactions", &m_showInteractions)) changed = true;
+                    if (ImGui::Checkbox("History",      &m_showHistory))      changed = true;
+                    if (ImGui::Checkbox("Items",        &m_showItems))        changed = true;
+                    if (ImGui::Checkbox("Properties",   &m_showProperties))   changed = true;
                     ImGui::EndTabItem();
                 }
 

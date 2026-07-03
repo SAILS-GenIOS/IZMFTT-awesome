@@ -85,73 +85,120 @@ ToolAction Toolbar::render() {
 std::vector<Toolbar::RailTool> Toolbar::railTools() const {
     std::vector<RailTool> t;
     auto add = [&](const char* icon, const char* label, ToolAction a,
-                   bool active = false) { t.push_back({icon, label, a, active}); };
+                   bool active = false, const char* tip = nullptr) {
+        t.push_back({icon, label, a, active, tip});
+    };
 
     if (m_sketchMode) {
         // SketchToolMode ints per setActiveSketchMode(): 1=Select … 8=Trim.
-        add(MZ_ICON_SELECT,  "Select",  ToolAction::SelectSketch, m_activeSketchMode == 1);
-        add(MZ_ICON_LINE,    "Line",    ToolAction::Line,         m_activeSketchMode == 2);
-        add(MZ_ICON_CIRCLE,  "Circle",  ToolAction::Circle,       m_activeSketchMode == 3);
-        add(MZ_ICON_RECT,    "Rectangle", ToolAction::Rectangle,  m_activeSketchMode == 4);
-        add(MZ_ICON_ARC,     "Arc",     ToolAction::Arc,          m_activeSketchMode == 5);
-        add(MZ_ICON_SPLINE,  "Spline",  ToolAction::Spline,       m_activeSketchMode == 6);
-        add(MZ_ICON_POLYGON, "Polygon", ToolAction::Polygon,      m_activeSketchMode == 7);
-        add(MZ_ICON_TRIM,    "Trim",    ToolAction::Trim,         m_activeSketchMode == 8);
+        add(MZ_ICON_SELECT,  "Select",  ToolAction::SelectSketch, m_activeSketchMode == 1,
+            "Pick sketch elements (points, lines, regions). Drag a selection to move it.");
+        add(MZ_ICON_LINE,    "Line",    ToolAction::Line,         m_activeSketchMode == 2,
+            "Draw straight line segments. Tap to add vertices; Finish ends the chain.");
+        add(MZ_ICON_CIRCLE,  "Circle",  ToolAction::Circle,       m_activeSketchMode == 3,
+            "Draw a circle: press the centre, drag to the radius.");
+        add(MZ_ICON_RECT,    "Rectangle", ToolAction::Rectangle,  m_activeSketchMode == 4,
+            "Draw a rectangle: press one corner, drag to the opposite.");
+        add(MZ_ICON_ARC,     "Arc",     ToolAction::Arc,          m_activeSketchMode == 5,
+            "Three-point arc: tap start, end, then a point on the curve.");
+        add(MZ_ICON_SPLINE,  "Spline",  ToolAction::Spline,       m_activeSketchMode == 6,
+            "Multi-point spline. Tap control points; Finish ends the curve.");
+        add(MZ_ICON_POLYGON, "Polygon", ToolAction::Polygon,      m_activeSketchMode == 7,
+            "Regular polygon: tap the centre, drag to size. Side count in properties.");
+        add(MZ_ICON_TRIM,    "Trim",    ToolAction::Trim,         m_activeSketchMode == 8,
+            "Trim a sketch segment at its nearest intersections.");
     } else if (!m_selection || !m_selection->hasSelection()) {
         // No bare "Sketch" here: with nothing selected it just duplicated
         // "Sketch on… > XY plane". Sketch appears once a face or construction
         // plane is picked (the branches below); world-plane starts live in
         // the rail's "Sketch on…" group.
-        add(MZ_ICON_MEASURE, "Measure", ToolAction::Measure);
+        add(MZ_ICON_MEASURE, "Measure", ToolAction::Measure, false,
+            "Measure distance, length, or angle between picked features.");
     } else if (m_selection->hasSelectedSketchRegions()) {
-        add(MZ_ICON_PUSHPULL, "Push",     ToolAction::PushPull);
-        add(MZ_ICON_EXTRUDE,  "Extrude",  ToolAction::ExtrudeSketch);
-        add(MZ_ICON_SUBTRACT, "Subtract", ToolAction::SubtractSketch);
-        add(MZ_ICON_EDIT,     "Edit",     ToolAction::EditSketch);
-        add(MZ_ICON_MOVE,     "Move",     ToolAction::Move);
-        add(MZ_ICON_ROTATE,   "Rotate",   ToolAction::Rotate);
+        add(MZ_ICON_PUSHPULL, "Push",     ToolAction::PushPull, false,
+            "Push/pull the region into or out of the host body.");
+        add(MZ_ICON_EXTRUDE,  "Extrude",  ToolAction::ExtrudeSketch, false,
+            "Extrude the region into a new solid body.");
+        add(MZ_ICON_SUBTRACT, "Subtract", ToolAction::SubtractSketch, false,
+            "Cut the region's shape out of the body beneath it.");
+        add(MZ_ICON_EDIT,     "Edit",     ToolAction::EditSketch, false,
+            "Reopen the sketch this region belongs to.");
+        add(MZ_ICON_MOVE,     "Move",     ToolAction::Move, false,
+            "Show the translate gizmo: drag axes or planes to move.");
+        add(MZ_ICON_ROTATE,   "Rotate",   ToolAction::Rotate, false,
+            "Show the rotate gizmo: drag rings to rotate around each axis.");
     } else if (m_selection->primaryType() == SelectionType::Plane) {
-        add(MZ_ICON_SKETCH, "Sketch", ToolAction::SketchOnFace);
-        add(MZ_ICON_MOVE,   "Move",   ToolAction::Move);
-        add(MZ_ICON_ROTATE, "Rotate", ToolAction::Rotate);
+        add(MZ_ICON_SKETCH, "Sketch", ToolAction::SketchOnFace, false,
+            "Start a sketch on the selected construction plane.");
+        add(MZ_ICON_MOVE,   "Move",   ToolAction::Move, false,
+            "Move the construction plane along its normal.");
+        add(MZ_ICON_ROTATE, "Rotate", ToolAction::Rotate, false,
+            "Rotate the construction plane.");
     } else if (m_selection->primaryType() == SelectionType::Axis) {
-        add(MZ_ICON_MOVE, "Move", ToolAction::Move);
+        add(MZ_ICON_MOVE, "Move", ToolAction::Move, false,
+            "Move the construction axis.");
     } else if (m_selection->hasSelectedSketches()) {
-        add(MZ_ICON_EDIT,     "Edit",     ToolAction::EditSketch);
-        add(MZ_ICON_EXTRUDE,  "Extrude",  ToolAction::ExtrudeSketch);
-        add(MZ_ICON_SUBTRACT, "Subtract", ToolAction::SubtractSketch);
-        add(MZ_ICON_LATHE,    "Lathe",    ToolAction::Revolve);
-        add(MZ_ICON_MOVE,     "Move",     ToolAction::Move);
-        add(MZ_ICON_ROTATE,   "Rotate",   ToolAction::Rotate);
+        add(MZ_ICON_EDIT,     "Edit",     ToolAction::EditSketch, false,
+            "Reopen the selected sketch for editing.");
+        add(MZ_ICON_EXTRUDE,  "Extrude",  ToolAction::ExtrudeSketch, false,
+            "Extrude the sketch's regions into a solid body.");
+        add(MZ_ICON_SUBTRACT, "Subtract", ToolAction::SubtractSketch, false,
+            "Cut the sketch's shape out of the body beneath it.");
+        add(MZ_ICON_LATHE,    "Lathe",    ToolAction::Revolve, false,
+            "Spin the sketch profile around an axis into a solid.");
+        add(MZ_ICON_MOVE,     "Move",     ToolAction::Move, false,
+            "Show the translate gizmo: drag axes or planes to move.");
+        add(MZ_ICON_ROTATE,   "Rotate",   ToolAction::Rotate, false,
+            "Show the rotate gizmo: drag rings to rotate around each axis.");
     } else if (m_selection->hasSelectedFaces()) {
-        add(MZ_ICON_SKETCH,   "Sketch",  ToolAction::SketchOnFace);
-        add(MZ_ICON_PUSHPULL, "Push",    ToolAction::PushPull);
-        add(MZ_ICON_EXTRUDE,  "Extrude", ToolAction::ExtrudeSketch);
-        add(MZ_ICON_SHELL,    "Shell",   ToolAction::Shell);
-        add(MZ_ICON_REPAIR,   "Repair",  ToolAction::RemoveFace);
+        add(MZ_ICON_SKETCH,   "Sketch",  ToolAction::SketchOnFace, false,
+            "Start a sketch on the selected face.");
+        add(MZ_ICON_PUSHPULL, "Push",    ToolAction::PushPull, false,
+            "Push/pull the face along its normal.");
+        add(MZ_ICON_EXTRUDE,  "Extrude", ToolAction::ExtrudeSketch, false,
+            "Extrude the face into new material.");
+        add(MZ_ICON_SHELL,    "Shell",   ToolAction::Shell, false,
+            "Hollow the body, leaving this face open.");
+        add(MZ_ICON_REPAIR,   "Repair",  ToolAction::RemoveFace, false,
+            "Delete the face and heal the body over it.");
         if (m_canEditDiameter)
-            add(MZ_ICON_CIRCLE, "Diameter", ToolAction::EditDiameter);
-        add(MZ_ICON_MOVE,   "Move",   ToolAction::Move);
-        add(MZ_ICON_ROTATE, "Rotate", ToolAction::Rotate);
-        add(MZ_ICON_SCALE,  "Scale",  ToolAction::Scale);
+            add(MZ_ICON_CIRCLE, "Diameter", ToolAction::EditDiameter, false,
+                "Set the hole or boss to an exact diameter.");
+        add(MZ_ICON_MOVE,   "Move",   ToolAction::Move, false,
+            "Move the face (its feature follows).");
+        add(MZ_ICON_ROTATE, "Rotate", ToolAction::Rotate, false,
+            "Tilt the face — or twist it with the ring about its normal.");
+        add(MZ_ICON_SCALE,  "Scale",  ToolAction::Scale, false,
+            "Scale the face about its centre (uniform or per-axis).");
     } else if (m_selection->hasSelectedBodies()) {
-        add(MZ_ICON_MOVE,   "Move",   ToolAction::Move);
-        add(MZ_ICON_ROTATE, "Rotate", ToolAction::Rotate);
-        add(MZ_ICON_SCALE,  "Scale",  ToolAction::Scale);
-        add(MZ_ICON_MIRROR, "Mirror", ToolAction::Mirror);
-        add(MZ_ICON_LATHE,  "Revolve", ToolAction::Revolve);
+        add(MZ_ICON_MOVE,   "Move",   ToolAction::Move, false,
+            "Show the translate gizmo: drag axes or planes to move.");
+        add(MZ_ICON_ROTATE, "Rotate", ToolAction::Rotate, false,
+            "Show the rotate gizmo: drag rings to rotate around each axis.");
+        add(MZ_ICON_SCALE,  "Scale",  ToolAction::Scale, false,
+            "Scale the body: uniform, or per-axis in properties.");
+        add(MZ_ICON_MIRROR, "Mirror", ToolAction::Mirror, false,
+            "Mirror the body across a plane you'll place next.");
+        add(MZ_ICON_LATHE,  "Revolve", ToolAction::Revolve, false,
+            "Rotate the body around an axis (watch a fan spin or a hinge open).");
         if (m_selection->selectedBodyCount() == 1)
-            add(MZ_ICON_UNFOLD, "Unfold", ToolAction::Unfold);
-        add(MZ_ICON_MEASURE, "Measure", ToolAction::Measure);
+            add(MZ_ICON_UNFOLD, "Unfold", ToolAction::Unfold, false,
+                "Flatten the body into a 2D cut pattern (SVG / tiled PDF).");
+        add(MZ_ICON_MEASURE, "Measure", ToolAction::Measure, false,
+            "Measure distance, length, or angle between picked features.");
     } else if (m_selection->hasSelectedEdges()) {
-        add(MZ_ICON_FILLET,  "Fillet",  ToolAction::Fillet);
-        add(MZ_ICON_CHAMFER, "Chamfer", ToolAction::Chamfer);
+        add(MZ_ICON_FILLET,  "Fillet",  ToolAction::Fillet, false,
+            "Round the selected edges with a radius.");
+        add(MZ_ICON_CHAMFER, "Chamfer", ToolAction::Chamfer, false,
+            "Cut the selected edges to a flat bevel.");
         if (m_canEditDiameter)
-            add(MZ_ICON_CIRCLE, "Diameter", ToolAction::EditDiameter);
+            add(MZ_ICON_CIRCLE, "Diameter", ToolAction::EditDiameter, false,
+                "Set the hole or boss to an exact diameter.");
     } else {
         // Fallback (vertex or other selection): same rule as no-selection —
         // no bare "Sketch" (it duplicated Sketch on… > world plane).
-        add(MZ_ICON_MEASURE, "Measure", ToolAction::Measure);
+        add(MZ_ICON_MEASURE, "Measure", ToolAction::Measure, false,
+            "Measure distance, length, or angle between picked features.");
     }
     return t;
 }
