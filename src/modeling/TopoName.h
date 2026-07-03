@@ -37,6 +37,8 @@ class Document;   // global namespace (see core/Document.h)
 namespace materializr {
 namespace topo {
 
+struct GenerationLedger;   // GenerationLedger.h
+
 // One naming attempt for one sub-shape: a scheme tag + that scheme's opaque
 // payload (meaningful only to the strategy that owns the scheme).
 struct Name {
@@ -70,6 +72,10 @@ struct Context {
     const Document* doc = nullptr;
     TopoDS_Shape    shape;
     TopAbs_ShapeEnum type = TopAbs_FACE;   // FACE or EDGE
+    // The current op execution's generation maps, when available — the "gen"
+    // strategy mints/resolves through this. Null for ops that don't (yet)
+    // publish their derivation; those fall back to the geometric schemes.
+    const GenerationLedger* gen = nullptr;
 };
 
 // A naming scheme. `mint` returns an empty string when it cannot name `sub`;

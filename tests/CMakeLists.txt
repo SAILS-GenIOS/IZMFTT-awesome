@@ -43,6 +43,7 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/EdgeAnchor.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/FaceAnchor.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/TopoName.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/GenerationLedger.cpp
     ${CMAKE_SOURCE_DIR}/src/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/io/StlIO.cpp
     ${CMAKE_SOURCE_DIR}/src/io/MeshDecimate.cpp
@@ -155,6 +156,12 @@ add_test(NAME test_topo_edge COMMAND test_topo_edge)
 add_executable(test_topo_thread test_topo_thread.cpp)
 target_link_libraries(test_topo_thread PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_topo_thread COMMAND test_topo_thread)
+
+# test_topo_gen — generation-map lineage naming: a prism side face named by its
+# generating profile edge resolves correctly after a profile edit (rung 4)
+add_executable(test_topo_gen test_topo_gen.cpp)
+target_link_libraries(test_topo_gen PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_topo_gen COMMAND test_topo_gen)
 
 # bench_stl_import — manual stopwatch for STL import stages (not run by ctest)
 add_executable(bench_stl_import bench_stl_import.cpp)

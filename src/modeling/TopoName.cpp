@@ -1,11 +1,14 @@
 #include "TopoName.h"
 #include "EdgeAnchor.h"
 #include "FaceAnchor.h"
+#include "GenerationLedger.h"
 #include "core/Document.h"
 #include "modeling/Sketch.h"
 
 #include <TopExp.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
+#include <TopTools_ListIteratorOfListOfShape.hxx>
+#include <TopTools_ListOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
@@ -196,6 +199,66 @@ Strategy ordinalStrategy() {
     return s;
 }
 
+// "gen" — generation-map lineage. Names a sub-shape by its DERIVATION: which
+// input sub-shape (itself named, recursively) generated/modified it, and its
+// position in that input's output list. Stable across parameter edits because
+// the derivation structure is invariant. The most robust scheme (priority 100)
+// and the one that will eventually cover blend/boolean/loft faces no sketch
+// scheme can. Requires the current op to publish ctx.gen; null -> unavailable,
+// and the geometric schemes carry the ref instead.
+Strategy genStrategy() {
+    Strategy s;
+    s.scheme = "gen";
+    s.priority = 100;
+    s.mint = [](const TopoDS_Shape& sub, const Context& ctx) -> std::string {
+        if (!ctx.gen) return "";
+        auto search = [&](const TopTools_IndexedDataMapOfShapeListOfShape& map,
+                          char role) -> std::string {
+            for (int i = 1; i <= map.Extent(); ++i) {
+                const TopoDS_Shape& inSub = map.FindKey(i);
+                int idx = 0;
+                for (TopTools_ListIteratorOfListOfShape it(map.FindFromIndex(i));
+                     it.More(); it.Next(), ++idx) {
+                    if (!it.Value().IsSame(sub)) continue;
+                    // Name the INPUT sub-shape (recursively) against the pre-op
+                    // shape — sketch-anchored inputs make this edit-stable.
+                    Context ic;
+                    ic.doc = ctx.doc; ic.shape = ctx.gen->input; ic.type = ctx.gen->inType;
+                    Ref inRef = mint(inSub, ic);
+                    if (inRef.empty()) return "";
+                    return std::string(1, role) + "|" + std::to_string(idx) +
+                           "|" + inRef.serialize();
+                }
+            }
+            return "";
+        };
+        std::string r = search(ctx.gen->generated, 'G');
+        if (r.empty()) r = search(ctx.gen->modified, 'M');
+        return r;
+    };
+    s.resolve = [](const std::string& payload, const Context& ctx) -> TopoDS_Shape {
+        if (!ctx.gen) return {};
+        const size_t p1 = payload.find('|');
+        const size_t p2 = payload.find('|', p1 == std::string::npos ? p1 : p1 + 1);
+        if (p1 == std::string::npos || p2 == std::string::npos) return {};
+        const char role = payload[0];
+        const int idx = std::atoi(payload.substr(p1 + 1, p2 - p1 - 1).c_str());
+        const Ref inRef = Ref::parse(payload.substr(p2 + 1));   // rest = input name
+        Context ic;
+        ic.doc = ctx.doc; ic.shape = ctx.gen->input; ic.type = ctx.gen->inType;
+        TopoDS_Shape inSub;
+        if (!resolve(inRef, ic, inSub)) return {};
+        const auto& map = (role == 'G') ? ctx.gen->generated : ctx.gen->modified;
+        if (!map.Contains(inSub)) return {};
+        int i = 0;
+        for (TopTools_ListIteratorOfListOfShape it(map.FindFromKey(inSub));
+             it.More(); it.Next(), ++i)
+            if (i == idx) return it.Value();
+        return {};
+    };
+    return s;
+}
+
 } // namespace
 
 Registry::Registry() {
@@ -203,8 +266,8 @@ Registry::Registry() {
     add(ordinalStrategy());
     add(sketchFaceStrategy());
     add(sketchEdgeStrategy());
-    // Future: add(genLineageStrategy()), add(importIdStrategy()) — all
-    // strictly additive.
+    add(genStrategy());
+    // Future: add(importIdStrategy()) — strictly additive.
 }
 
 // ── mint / resolve ──────────────────────────────────────────────────────────
