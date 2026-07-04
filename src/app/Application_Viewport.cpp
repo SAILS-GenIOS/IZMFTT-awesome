@@ -6880,7 +6880,10 @@ void Application::renderViewport() {
             float deg = m_moveFaceAngle * 57.2957795f;
             bool ch = false;
             ImGui::SetNextItemWidth(150);
-            if (ImGui::SliderFloat("##tilt", &deg, -90.0f, 90.0f, "%.1f")) ch = true;
+            ImGui::TextDisabled("%.1f deg", deg);
+            if (materializr::stepperRow("tiltStep", &deg,
+                                        /*allowNegative=*/true, -90.0f, 90.0f))
+                ch = true;
             ImGui::SetNextItemWidth(90);
             if (ImGui::InputFloat("deg", &deg, 1.0f, 5.0f, "%.1f")) ch = true;
             ImGui::Checkbox("Snap 1 deg", &m_moveFaceRotSnap);
@@ -6900,7 +6903,10 @@ void Application::renderViewport() {
             float twdeg = m_moveFaceTwist * 57.2957795f;
             bool twch = false;
             ImGui::SetNextItemWidth(150);
-            if (ImGui::SliderFloat("##twist", &twdeg, -180.0f, 180.0f, "%.1f")) twch = true;
+            ImGui::TextDisabled("%.1f deg", twdeg);
+            if (materializr::stepperRow("twistStep", &twdeg,
+                                        /*allowNegative=*/true, -180.0f, 180.0f))
+                twch = true;
             ImGui::SetNextItemWidth(90);
             if (ImGui::InputFloat("deg##tw", &twdeg, 1.0f, 5.0f, "%.1f")) twch = true;
             if (twch) {
@@ -6930,7 +6936,11 @@ void Application::renderViewport() {
             if (m_moveFaceScaleUniform) {
                 float pct = m_moveFaceScale * 100.0f;
                 ImGui::SetNextItemWidth(150);
-                if (ImGui::SliderFloat("##scl", &pct, 10.0f, 400.0f, "%.0f")) ch = true;
+                ImGui::TextDisabled("%.0f %%", pct);
+                if (materializr::stepperRow("sclStep", &pct,
+                                            /*allowNegative=*/true, 10.0f,
+                                            400.0f, /*zeroValue=*/100.0f))
+                    ch = true;
                 ImGui::SetNextItemWidth(90);
                 if (ImGui::InputFloat("%", &pct, 5.0f, 25.0f, "%.0f")) ch = true;
                 if (ch) m_moveFaceScale = std::max(0.1f, pct / 100.0f);
@@ -6938,12 +6948,20 @@ void Application::renderViewport() {
                 float a = m_moveFaceScaleA * 100.0f, b = m_moveFaceScaleB * 100.0f;
                 ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "Axis A (red)");
                 ImGui::SetNextItemWidth(150);
-                if (ImGui::SliderFloat("##sclA", &a, 10.0f, 400.0f, "%.0f")) ch = true;
+                ImGui::TextDisabled("%.0f %%", a);
+                if (materializr::stepperRow("sclAStep", &a,
+                                            /*allowNegative=*/true, 10.0f,
+                                            400.0f, /*zeroValue=*/100.0f))
+                    ch = true;
                 ImGui::SetNextItemWidth(90);
                 if (ImGui::InputFloat("% A", &a, 5.0f, 25.0f, "%.0f")) ch = true;
                 ImGui::TextColored(ImVec4(0.4f, 0.95f, 0.45f, 1.0f), "Axis B (green)");
                 ImGui::SetNextItemWidth(150);
-                if (ImGui::SliderFloat("##sclB", &b, 10.0f, 400.0f, "%.0f")) ch = true;
+                ImGui::TextDisabled("%.0f %%", b);
+                if (materializr::stepperRow("sclBStep", &b,
+                                            /*allowNegative=*/true, 10.0f,
+                                            400.0f, /*zeroValue=*/100.0f))
+                    ch = true;
                 ImGui::SetNextItemWidth(90);
                 if (ImGui::InputFloat("% B", &b, 5.0f, 25.0f, "%.0f")) ch = true;
                 if (ch) {

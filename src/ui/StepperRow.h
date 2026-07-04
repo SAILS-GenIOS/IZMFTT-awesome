@@ -19,7 +19,7 @@
 namespace materializr {
 
 inline bool stepperRow(const char* id, float* value, bool allowNegative,
-                       float minV, float maxV) {
+                       float minV, float maxV, float zeroValue = 0.0f) {
     static const float kMags[] = { 10.0f, 1.0f, 0.1f };
     bool changed = false;
     bool first = true;
@@ -46,7 +46,11 @@ inline bool stepperRow(const char* id, float* value, bool allowNegative,
             std::snprintf(buf, sizeof(buf), "-%g", m);
             step(buf, -m);
         }
-    if (button("0")) { *value = 0.0f; changed = true; }
+    {
+        char zbuf[16];
+        std::snprintf(zbuf, sizeof(zbuf), "%g", zeroValue);
+        if (button(zbuf)) { *value = zeroValue; changed = true; }
+    }
     for (int i = 2; i >= 0; --i) {   // +0.1, +1, +10 (ascending)
         std::snprintf(buf, sizeof(buf), "+%g", kMags[i]);
         step(buf, kMags[i]);
