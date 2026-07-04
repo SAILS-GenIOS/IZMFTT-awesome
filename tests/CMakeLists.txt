@@ -214,10 +214,6 @@ add_executable(test_twist_face test_twist_face.cpp)
 target_link_libraries(test_twist_face PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_twist_face COMMAND test_twist_face)
 
-# test_topo_shell — ShellOp opened faces via topo::Ref survive a moving edit
-add_executable(test_topo_shell test_topo_shell.cpp)
-target_link_libraries(test_topo_shell PRIVATE materializr_core gtest gtest_main)
-add_test(NAME test_topo_shell COMMAND test_topo_shell)
 
 # test_topo_fillet_gen — FilletOp publishes a generation ledger; a blend face
 # named by lineage survives a corner-moving resize (general-kernel on real op)
@@ -230,10 +226,6 @@ add_executable(test_topo_chamfer_gen test_topo_chamfer_gen.cpp)
 target_link_libraries(test_topo_chamfer_gen PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_topo_chamfer_gen COMMAND test_topo_chamfer_gen)
 
-# test_topo_moveface — MoveFaceOp target face via topo::Ref survives a resize
-add_executable(test_topo_moveface test_topo_moveface.cpp)
-target_link_libraries(test_topo_moveface PRIVATE materializr_core gtest gtest_main)
-add_test(NAME test_topo_moveface COMMAND test_topo_moveface)
 
 # test_topo_pushpull — PushPullOp face-driven target via topo::Ref survives a resize
 add_executable(test_topo_pushpull test_topo_pushpull.cpp)

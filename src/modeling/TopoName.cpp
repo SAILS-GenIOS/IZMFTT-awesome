@@ -86,8 +86,17 @@ namespace {
 std::vector<FaceAnchor::SketchRef> sketchRefs(const Document* doc) {
     std::vector<FaceAnchor::SketchRef> refs;
     if (!doc) return refs;
-    for (int sid : doc->getAllSketchIds())
-        if (auto sk = doc->getSketch(sid)) refs.push_back({ sid, sk.get() });
+    for (int sid : doc->getAllSketchIds()) {
+        // During a cascade replay (History::editStep after a sketch edit) the
+        // LIVE sketch is rolled back through its SketchEditOp snapshots, so it
+        // holds a stale mid-replay state; the FINAL state is pinned as an
+        // override. Prefer the override so anchors resolve against the geometry
+        // the body was actually rebuilt from — otherwise a face gets matched
+        // against stale sketch elements (opening vanishes / body skews).
+        // Mirrors FilletOp.cpp:68.
+        if (auto ov = doc->cascadeSketchOverride(sid)) refs.push_back({ sid, ov.get() });
+        else if (auto sk = doc->getSketch(sid)) refs.push_back({ sid, sk.get() });
+    }
     return refs;
 }
 
