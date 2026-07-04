@@ -292,3 +292,78 @@ TEST(TopoBooleanGen, SeamRefsRoundTripThroughParams) {
     // (Resolution correctness is covered by FilletOnSeamSurvivesSketchEdit;
     // here: the ref list round-trips intact with a gen name present.)
 }
+
+#include "io/ProjectIO.h"
+#include <cstdio>
+
+// FULL FILE ROUND-TRIP: the seam fillet's params (incl. edgerefs) go through
+// a real .materializr save+load; the RELOADED op must still follow a sketch
+// edit — the exact flow of: work, save, quit, reopen, edit.
+TEST(TopoBooleanGen, ReloadedSeamFilletFollowsEdit) {
+    Document doc;
+    int pa[4], pb[4];
+    auto skA = makeRect(0, 0, 20, 10, pa);
+    auto skB = makeRect(15, 3, 25, 7, pb);
+    int sidA = doc.addSketch(skA), sidB = doc.addSketch(skB);
+    ExtrudeOp extA; extA.setSketchSource(sidA); extA.setDistance(10.0);
+    ASSERT_TRUE(extA.rebuildProfileFromSketch(doc) && extA.execute(doc));
+    int bodyA = doc.getAllBodyIds().front();
+    ExtrudeOp extB; extB.setSketchSource(sidB); extB.setDistance(15.0);
+    ASSERT_TRUE(extB.rebuildProfileFromSketch(doc) && extB.execute(doc));
+    int bodyB = -1;
+    for (int id : doc.getAllBodyIds()) if (id != bodyA) bodyB = id;
+    BooleanOp fuse;
+    fuse.setTargetBodyId(bodyA); fuse.setToolBodyId(bodyB);
+    fuse.setMode(BooleanMode::Union);
+    ASSERT_TRUE(fuse.execute(doc));
+    const TopoDS_Shape fusedBefore = doc.getBody(bodyA);
+
+    TopoDS_Edge seam = edgeNear(doc.getBody(bodyA), gp_Pnt(20, 3, 5), 0.6);
+    FilletOp fil;
+    fil.setBody(bodyA); fil.setEdges({seam}); fil.setRadius(1.0);
+    ASSERT_TRUE(fil.execute(doc));
+
+    // Save the fillet step's params through a real project file.
+    using materializr::ProjectIO;
+    ProjectHistory hist;
+    hist.present = true;
+    hist.initialState = {{bodyA, fusedBefore}};
+    ProjectHistoryStep st;
+    st.typeId = fil.typeId();
+    st.params = fil.serializeParams();
+    st.changed = {{bodyA, doc.getBody(bodyA)}};
+    hist.steps = {st};
+    const std::string path = "/tmp/mtz_seam_roundtrip.materializr";
+    ASSERT_TRUE(ProjectIO::save(path, doc, &hist).success);
+    Document scratch;
+    ProjectHistory loaded;
+    ASSERT_TRUE(ProjectIO::load(path, scratch, &loaded).success);
+    std::remove(path.c_str());
+    ASSERT_EQ(loaded.steps.size(), 1u);
+    ASSERT_NE(loaded.steps[0].params.find("edgerefs="), std::string::npos)
+        << "edge refs must survive the FILE";
+
+    // "Reopen": a fresh FilletOp from the FILE params, working in the live
+    // doc (sketch ids match — same project).
+    FilletOp reloaded;
+    ASSERT_TRUE(reloaded.deserializeParams(loaded.steps[0].params));
+    // The app rehydrates at load: ordinal indices -> edges of the LOADED
+    // (stale-TShape) shapes. The later edit then invalidates exactly those.
+    Operation::ReloadState rs;
+    rs.modifiedBefore = {{bodyA, loaded.initialState[0].second}};
+    rs.modifiedAfter  = {{bodyA, loaded.steps[0].changed[0].second}};
+    ASSERT_TRUE(reloaded.rehydrateFromReload(rs, scratch));
+
+    // The edit after reopening: undo to pre-fillet, move the post, rebuild,
+    // re-fuse (republishes the ledger), then the RELOADED fillet re-executes.
+    ASSERT_TRUE(fil.undo(doc));
+    ASSERT_TRUE(fuse.undo(doc));
+    skB->movePoint(pb[0], {15.0f, 2.0f});
+    skB->movePoint(pb[1], {25.0f, 2.0f});
+    skB->movePoint(pb[2], {25.0f, 6.0f});
+    skB->movePoint(pb[3], {15.0f, 6.0f});
+    ASSERT_TRUE(extB.rebuildProfileFromSketch(doc) && extB.execute(doc));
+    ASSERT_TRUE(fuse.execute(doc));
+    ASSERT_TRUE(reloaded.execute(doc))
+        << "the FILE-reloaded seam fillet must re-find the moved seam";
+}
