@@ -248,3 +248,7 @@ target_link_libraries(probe_moveface_shell PRIVATE materializr_core)
 add_executable(test_moveface_hollow test_moveface_hollow.cpp)
 target_link_libraries(test_moveface_hollow PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_moveface_hollow COMMAND test_moveface_hollow)
+
+# probe_thread_loft — diagnostic: native twist-loft thread build timing/quality
+add_executable(probe_thread_loft probe_thread_loft.cpp)
+target_link_libraries(probe_thread_loft PRIVATE materializr_core)
