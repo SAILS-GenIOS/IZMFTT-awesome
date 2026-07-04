@@ -224,3 +224,8 @@ add_test(NAME test_topo_shell COMMAND test_topo_shell)
 add_executable(test_topo_fillet_gen test_topo_fillet_gen.cpp)
 target_link_libraries(test_topo_fillet_gen PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_topo_fillet_gen COMMAND test_topo_fillet_gen)
+
+# test_topo_chamfer_gen — ChamferOp generation ledger; bevel face named by lineage
+add_executable(test_topo_chamfer_gen test_topo_chamfer_gen.cpp)
+target_link_libraries(test_topo_chamfer_gen PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_topo_chamfer_gen COMMAND test_topo_chamfer_gen)
