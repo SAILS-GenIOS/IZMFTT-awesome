@@ -106,7 +106,7 @@ void Application::renderImTouchLayout() {
     const ImGuiWindowFlags kFloat =
         (layoutui::kShellWindowFlags & ~ImGuiWindowFlags_NoBringToFrontOnFocus) |
         ImGuiWindowFlags_AlwaysAutoResize;
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 14.0f * s);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, touchui::radius(14.0f * s));
     // No window borders on any of the floating overlays — the 1px frame reads
     // as a faint "ghost" rectangle around transparent windows (the +, the
     // chip, the buttons). Their rounded fill is the only chrome we want.
@@ -373,118 +373,246 @@ void Application::renderImTouchLayout() {
     if (ImGui::Begin("##LiteToolBar", nullptr,
                      kFloat & ~ImGuiWindowFlags_NoScrollbar)) {
         if (m_toolbar) {
-            int railIdx = 0;
-            for (const auto& tool : m_toolbar->railTools()) {
-                ImGui::PushID(railIdx++); // labels can repeat across groups
+            const auto tools = m_toolbar->railTools();
+            // Fire one catalogue entry; `inPopup` closes the hosting group
+            // popup after one-shot actions (the inference cycle stays open so
+            // repeated taps can walk the levels, and Polygon opens its own
+            // nested sides popup which closes the whole stack on pick).
+            auto fire = [&](const Toolbar::RailTool& tool, bool clicked,
+                            bool inPopup) {
+                if (tool.pluginIndex >= 0) {
+                    if (clicked) {
+                        m_toolbar->fireRailPlugin(tool.pluginIndex);
+                        if (inPopup) ImGui::CloseCurrentPopup();
+                    }
+                } else if (tool.action == ToolAction::Polygon) {
+                    renderRailPolygonSidesPopup(clicked);
+                } else if (clicked) {
+                    handleToolAction(static_cast<int>(tool.action));
+                    if (inPopup &&
+                        tool.action != ToolAction::SketchCycleInference)
+                        ImGui::CloseCurrentPopup();
+                }
+            };
+            auto flatButton = [&](const Toolbar::RailTool& tool, int id) {
+                ImGui::PushID(id); // labels can repeat across groups
                 const bool clicked = touchui::railButton(
                     tool.label, tool.icon, tool.label, tool.active, 64.0f * s);
                 tip(tool.tip);
-                if (tool.pluginIndex >= 0) {
-                    if (clicked) m_toolbar->fireRailPlugin(tool.pluginIndex);
-                } else if (tool.action == ToolAction::Polygon)
-                    renderRailPolygonSidesPopup(clicked);
-                else if (clicked)
-                    handleToolAction(static_cast<int>(tool.action));
+                fire(tool, clicked, /*inPopup=*/false);
                 ImGui::PopID();
-            }
-            if (m_inSketchMode) {
-                const bool toolRunning = m_sketchTool && m_sketchTool->isPlacing();
-                const char* finishLbl = toolRunning ? "Finish" : "Finish Sketch";
-                const char* exitLbl   = toolRunning ? "Cancel" : "Discard Sketch";
-                ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
-                ImGui::Separator();
-                ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
-                if (touchui::pillButton("finish", MZ_ICON_FINISH, finishLbl, true)) {
-                    if (toolRunning)
-                        recordSketchMutation([&]{ m_sketchTool->onConfirm(); });
-                    else
-                        handleToolAction(static_cast<int>(ToolAction::FinishSketch));
-                }
-                tip(toolRunning
-                        ? "Finish the current shape, keeping the points placed"
-                        : "Leave sketch mode, keeping the sketch");
-                if (touchui::pillButton("exit", MZ_ICON_DISCARD, exitLbl)) {
-                    if (toolRunning)
-                        m_sketchTool->onCancel();
-                    else
-                        ImGui::OpenPopup("Discard sketch?"); // confirm — destructive
-                }
-                tip(toolRunning
-                        ? "Cancel the in-progress shape"
-                        : "Throw the sketch away and leave (asks to confirm)");
-                if (ImGui::BeginPopupModal("Discard sketch?", nullptr,
-                                           ImGuiWindowFlags_AlwaysAutoResize)) {
-                    ImGui::TextUnformatted(
-                        "Leave the sketch and throw away its changes?");
-                    ImGui::Spacing();
-                    const float bw = 150.0f * s;
-                    if (ImGui::Button("Discard Sketch", ImVec2(bw, 44.0f * s))) {
-                        ImGui::CloseCurrentPopup();
-                        handleToolAction(static_cast<int>(ToolAction::ExitSketchDiscard));
+            };
+            // Group button + flyout: the button wears the group's ACTIVE
+            // tool (icon, label, accent fill) so the current mode stays
+            // readable while collapsed; tapping opens a grid of the members.
+            auto group = [&](const char* id, const char* popupId,
+                             const char* groupIcon, const char* groupLabel,
+                             const char* groupTip,
+                             const std::vector<const Toolbar::RailTool*>& members) {
+                if (members.empty()) return;
+                const Toolbar::RailTool* activeTool = nullptr;
+                for (const auto* t : members)
+                    if (t->active) { activeTool = t; break; }
+                if (touchui::railButton(id,
+                                        activeTool ? activeTool->icon : groupIcon,
+                                        activeTool ? activeTool->label : groupLabel,
+                                        activeTool != nullptr, 64.0f * s))
+                    ImGui::OpenPopup(popupId);
+                tip(groupTip);
+                if (ImGui::BeginPopup(popupId)) {
+                    int idx = 0;
+                    for (const auto* t : members) {
+                        if (idx % 4 != 0) ImGui::SameLine(0.0f, 6.0f * s);
+                        ImGui::PushID(idx++);
+                        const bool clicked = touchui::railButton(
+                            t->label, t->icon, t->label, t->active, 64.0f * s);
+                        tip(t->tip);
+                        fire(*t, clicked, /*inPopup=*/true);
+                        ImGui::PopID();
                     }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Keep Editing", ImVec2(bw, 44.0f * s)))
-                        ImGui::CloseCurrentPopup();
                     ImGui::EndPopup();
                 }
+            };
+
+            if (!m_inSketchMode) {
+                int railIdx = 0;
+                for (const auto& tool : tools) flatButton(tool, railIdx++);
+            } else {
+                // Sketch mode: the flat catalogue is ~19 buttons — a screen
+                // and a half of scrolling. The DRAWING tools stay flat (they're
+                // the constantly-switched core of sketching, and Steve wants
+                // them one tap away); the occasional tools collapse into two
+                // Fusion-style groups — Modify (trim/copy/mirror/patterns +
+                // sketch plugins) and More (guides/measure/look-at). Select,
+                // the draw tools and the active tool's origin toggle render
+                // in catalogue order, so anything unrecognised (future tools)
+                // also lands flat and can't silently vanish from the rail.
+                std::vector<const Toolbar::RailTool*> modify, aids;
+                int railIdx = 0;
+                for (const auto& t : tools) {
+                    if (t.pluginIndex >= 0) { modify.push_back(&t); continue; }
+                    switch (t.action) {
+                    case ToolAction::Trim:
+                    case ToolAction::SketchCopy:
+                    case ToolAction::SketchMirror:
+                    case ToolAction::SketchLinearPattern:
+                    case ToolAction::SketchRadialPattern:
+                        modify.push_back(&t); break;
+                    case ToolAction::SketchCycleInference:
+                    case ToolAction::Measure:
+                    case ToolAction::LookAtSketch:
+                        aids.push_back(&t); break;
+                    default:
+                        flatButton(t, railIdx++); break;
+                    }
+                }
+                group("modifyGroup", "##sketchModify", MZ_ICON_TRIM, "Modify",
+                      "Modify tools: trim, copy, mirror, linear and circular "
+                      "patterns",
+                      modify);
+                group("aidsGroup", "##sketchAids", MZ_ICON_MORE, "More",
+                      "Drawing guides level, measure, look at the sketch plane",
+                      aids);
             }
         }
     }
     ImGui::End();
     ImGui::PopStyleColor();
 
-    // ── "+" create FAB (bottom-right) ───────────────────────────────────────
+    // ── Bottom-right corner: in a sketch, the commit actions — an accent
+    //    ✓ Finish FAB with a smaller ✗ Discard beside it (gap so a Finish tap
+    //    can't stray onto Discard). During a live ACTION (push/pull, extrude,
+    //    fillet, shell, pattern, …) the same pair reads Apply/Cancel and
+    //    drives the action — the op panels hide their own Confirm/Cancel
+    //    rows while this corner hosts them (imTouchActionCorner()).
+    //    Everywhere else, the "+" create FAB. Commit actions used to live at
+    //    the bottom of the left tool bar, which coupled "done sketching" to
+    //    transient tool picking and put the throw-it-away button 8 px under
+    //    the tools; the corner FAB spot is the tablet thumb zone, and the +
+    //    menu is dead weight mid-sketch anyway.
     ImGui::SetNextWindowPos(ImVec2(wp.x + ws.x - m, wp.y + ws.y - m),
                             ImGuiCond_Always, ImVec2(1.0f, 1.0f));
     ImGui::SetNextWindowBgAlpha(0.0f);
-    if (ImGui::Begin("##LiteFab", nullptr, kFloat)) {
-        if (touchui::fab("create", MZ_ICON_ADD))
-            ImGui::OpenPopup("##LiteCreate");
-        tip("Create: a sketch or a primitive solid");
-        if (ImGui::BeginPopup("##LiteCreate")) {
-            // Mirror the modern rail's create logic instead of dumping every
-            // option flat: sketch is contextual (on a picked face/plane if there
-            // is one, else a "New Sketch" submenu of world planes), the five
-            // primitives live under ONE "Primitive" submenu, and construction
-            // geometry derives from the selection — so only the relevant, grouped
-            // create tools show, matching the classic + modern layouts.
-            const bool faceOrPlaneSel = m_selection &&
-                (m_selection->hasSelectedFaces() ||
-                 m_selection->primaryType() == SelectionType::Plane);
-            if (faceOrPlaneSel) {
-                if (ImGui::MenuItem(MZ_ICON_SKETCH "  Sketch on selection"))
-                    handleToolAction(static_cast<int>(ToolAction::SketchOnFace));
-            } else if (ImGui::BeginMenu(MZ_ICON_SKETCH "  New Sketch")) {
-                if (ImGui::MenuItem("XY plane"))
-                    handleToolAction(static_cast<int>(ToolAction::StartSketchXY));
-                if (ImGui::MenuItem("XZ plane"))
-                    handleToolAction(static_cast<int>(ToolAction::StartSketchXZ));
-                if (ImGui::MenuItem("YZ plane"))
-                    handleToolAction(static_cast<int>(ToolAction::StartSketchYZ));
-                ImGui::EndMenu();
+    if (m_inSketchMode) {
+        if (ImGui::Begin("##LiteFab", nullptr, kFloat)) {
+            const bool toolRunning = m_sketchTool && m_sketchTool->isPlacing();
+            const float fabD = 56.0f * s;
+            const float side = 44.0f * s;
+            // ✗ first (left), vertically centred on the FAB.
+            const float topY = ImGui::GetCursorPosY();
+            ImGui::SetCursorPosY(topY + (fabD - side) * 0.5f);
+            if (touchui::iconButton("exitSk", MZ_ICON_DISCARD, side)) {
+                if (toolRunning)
+                    m_sketchTool->onCancel();
+                else
+                    ImGui::OpenPopup("Discard sketch?"); // confirm — destructive
             }
-            if (m_pluginContext &&
-                ImGui::BeginMenu(MZ_ICON_PRIMITIVE "  Primitive")) {
-                if (ImGui::MenuItem("Box"))
-                    m_pluginContext->requestInteractiveOp("PrimitiveBox");
-                if (ImGui::MenuItem("Cylinder"))
-                    m_pluginContext->requestInteractiveOp("PrimitiveCylinder");
-                if (ImGui::MenuItem("Sphere"))
-                    m_pluginContext->requestInteractiveOp("PrimitiveSphere");
-                if (ImGui::MenuItem("Cone"))
-                    m_pluginContext->requestInteractiveOp("PrimitiveCone");
-                if (ImGui::MenuItem("Torus"))
-                    m_pluginContext->requestInteractiveOp("PrimitiveTorus");
-                ImGui::EndMenu();
+            tip(toolRunning
+                    ? "Cancel the in-progress shape"
+                    : "Throw the sketch away and leave (asks to confirm)");
+            ImGui::SameLine(0.0f, 18.0f * s); // deliberate gap: no stray discards
+            ImGui::SetCursorPosY(topY);
+            if (touchui::fab("finishSk", MZ_ICON_FINISH, fabD)) {
+                if (m_sketchShapeConfirmPending && toolRunning) {
+                    // A circle held for its ✗/✓ bubble: commit it as-released.
+                    // (onConfirm would RESET the in-flight placement instead.)
+                    recordSketchMutation([&]{
+                        m_sketchTool->onMouseDown(m_sketchShapePendingPos,
+                                                  false); });
+                    m_sketchShapeConfirmPending = false;
+                } else if (toolRunning)
+                    recordSketchMutation([&]{ m_sketchTool->onConfirm(); });
+                else
+                    handleToolAction(static_cast<int>(ToolAction::FinishSketch));
             }
-            if (ImGui::BeginMenu(MZ_ICON_FOCUS "  Construction")) {
-                renderConstructionMenuItems();
-                ImGui::EndMenu();
+            tip(toolRunning
+                    ? "Finish the current shape, keeping the points placed"
+                    : "Finish the sketch and leave sketch mode");
+            if (ImGui::BeginPopupModal("Discard sketch?", nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextUnformatted(
+                    "Leave the sketch and throw away its changes?");
+                ImGui::Spacing();
+                const float bw = 150.0f * s;
+                if (ImGui::Button("Discard Sketch", ImVec2(bw, 44.0f * s))) {
+                    ImGui::CloseCurrentPopup();
+                    handleToolAction(static_cast<int>(ToolAction::ExitSketchDiscard));
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Keep Editing", ImVec2(bw, 44.0f * s)))
+                    ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
             }
-            ImGui::EndPopup();
         }
+        ImGui::End();
+    } else if (imTouchActionCorner()) {
+        if (ImGui::Begin("##LiteFab", nullptr, kFloat)) {
+            const float fabD = 56.0f * s;
+            const float side = 44.0f * s;
+            // ✗ first (left), vertically centred on the ✓ FAB — mirrors the
+            // sketch pair so the corner always means confirm/discard.
+            const float topY = ImGui::GetCursorPosY();
+            ImGui::SetCursorPosY(topY + (fabD - side) * 0.5f);
+            if (touchui::iconButton("cancelAct", MZ_ICON_DISCARD, side))
+                cancelActiveAction();
+            tip("Cancel the action and discard its preview");
+            ImGui::SameLine(0.0f, 18.0f * s); // deliberate gap: no stray cancels
+            ImGui::SetCursorPosY(topY);
+            if (touchui::fab("applyAct", MZ_ICON_FINISH, fabD))
+                confirmActiveAction();
+            tip("Apply the action");
+        }
+        ImGui::End();
+    } else {
+        if (ImGui::Begin("##LiteFab", nullptr, kFloat)) {
+            if (touchui::fab("create", MZ_ICON_ADD))
+                ImGui::OpenPopup("##LiteCreate");
+            tip("Create: a sketch or a primitive solid");
+            if (ImGui::BeginPopup("##LiteCreate")) {
+                // Mirror the modern rail's create logic instead of dumping every
+                // option flat: sketch is contextual (on a picked face/plane if there
+                // is one, else a "New Sketch" submenu of world planes), the five
+                // primitives live under ONE "Primitive" submenu, and construction
+                // geometry derives from the selection — so only the relevant, grouped
+                // create tools show, matching the classic + modern layouts.
+                const bool faceOrPlaneSel = m_selection &&
+                    (m_selection->hasSelectedFaces() ||
+                     m_selection->primaryType() == SelectionType::Plane);
+                if (faceOrPlaneSel) {
+                    if (ImGui::MenuItem(MZ_ICON_SKETCH "  Sketch on selection"))
+                        handleToolAction(static_cast<int>(ToolAction::SketchOnFace));
+                } else if (ImGui::BeginMenu(MZ_ICON_SKETCH "  New Sketch")) {
+                    if (ImGui::MenuItem("XY plane"))
+                        handleToolAction(static_cast<int>(ToolAction::StartSketchXY));
+                    if (ImGui::MenuItem("XZ plane"))
+                        handleToolAction(static_cast<int>(ToolAction::StartSketchXZ));
+                    if (ImGui::MenuItem("YZ plane"))
+                        handleToolAction(static_cast<int>(ToolAction::StartSketchYZ));
+                    ImGui::EndMenu();
+                }
+                if (m_pluginContext &&
+                    ImGui::BeginMenu(MZ_ICON_PRIMITIVE "  Primitive")) {
+                    if (ImGui::MenuItem("Box"))
+                        m_pluginContext->requestInteractiveOp("PrimitiveBox");
+                    if (ImGui::MenuItem("Cylinder"))
+                        m_pluginContext->requestInteractiveOp("PrimitiveCylinder");
+                    if (ImGui::MenuItem("Sphere"))
+                        m_pluginContext->requestInteractiveOp("PrimitiveSphere");
+                    if (ImGui::MenuItem("Cone"))
+                        m_pluginContext->requestInteractiveOp("PrimitiveCone");
+                    if (ImGui::MenuItem("Torus"))
+                        m_pluginContext->requestInteractiveOp("PrimitiveTorus");
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu(MZ_ICON_FOCUS "  Construction")) {
+                    renderConstructionMenuItems();
+                    ImGui::EndMenu();
+                }
+                ImGui::EndPopup();
+            }
+        }
+        ImGui::End();
     }
-    ImGui::End();
 
     // ── History: a bottom toggle whose REOPEN button sits exactly where its
     //    minimize chevron is (not up on the Items rail). The toggle is a fixed

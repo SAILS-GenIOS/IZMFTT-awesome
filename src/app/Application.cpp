@@ -735,7 +735,10 @@ materializr::IopContext Application::iopContext() {
         *m_document, *m_history, *m_selection,
         [this] { m_meshesDirty = true; },
         [this](float f, const char* l) { return renderProgressFrame(f, l); },
-        [this](std::function<void()> t) { m_deferredHeavyTask = std::move(t); }};
+        [this](std::function<void()> t) { m_deferredHeavyTask = std::move(t); },
+        // im-touch hosts the Confirm/Cancel as corner FABs — the scaffold
+        // then skips its in-panel buttons (Enter/Esc still work).
+        imTouchLayout() && !m_inSketchMode};
 }
 
 // Seed the placement rotation (shared by the Text and SVG tools) so the
@@ -788,6 +791,51 @@ void Application::cancelAllInteractivePreviews() {
     // never committed gets a weird half-cancel I can't undo".)
     if (m_edgeOpActive) cancelInteractiveEdgeOp();
     if (m_moveFaceActive) cancelMoveFace();
+}
+
+// im-touch corner-hosted action commit UI — see Application.h. EdgeOp and
+// MoveFace previews aren't in anyInteractivePreviewActive(), so they're
+// listed explicitly here (same set cancelAllInteractivePreviews covers).
+bool Application::imTouchActionCorner() const {
+    return imTouchLayout() && !m_inSketchMode &&
+           (anyInteractivePreviewActive() || m_edgeOpActive || m_moveFaceActive);
+}
+
+void Application::confirmActiveAction() {
+    if (m_extruding)       { commitInteractiveExtrude(); return; }
+    if (m_pushPullActive)  { commitPushPull(); return; }
+    if (m_patternActive)   { commitPattern(); return; }
+    if (m_resizeCylActive) {
+        // Same gate as the panel's disabled Confirm: a failed preview
+        // means there's nothing valid to commit.
+        if (!m_resizeCylPreviewFailed) commitResizeCylindrical();
+        return;
+    }
+    if (m_threadActive) {
+        // Same guard as the thread panel's Apply: refuse absurd turn counts
+        // (the compute would run for minutes) instead of bypassing it.
+        if (m_threadLength / std::max(0.1f, m_threadPitch) <= 300.0)
+            commitThread();
+        return;
+    }
+    if (m_edgeOpActive)    { commitInteractiveEdgeOp(); return; }
+    if (m_moveFaceActive)  { commitMoveFace(); return; }
+    auto ctx = iopContext();
+    for (auto* c : m_iops)
+        if (c->active()) { c->commit(ctx); return; }
+}
+
+void Application::cancelActiveAction() {
+    if (m_extruding)       { cancelInteractiveExtrude(); return; }
+    if (m_pushPullActive)  { cancelPushPull(); return; }
+    if (m_patternActive)   { cancelPattern(); return; }
+    if (m_resizeCylActive) { cancelResizeCylindrical(); return; }
+    if (m_threadActive)    { cancelThread(); return; }
+    if (m_edgeOpActive)    { cancelInteractiveEdgeOp(); return; }
+    if (m_moveFaceActive)  { cancelMoveFace(); return; }
+    auto ctx = iopContext();
+    for (auto* c : m_iops)
+        if (c->active()) { c->cancel(ctx); return; }
 }
 
 void Application::beginIop(materializr::InteractiveOpController& ctl) {
@@ -5074,6 +5122,9 @@ void Application::run() {
         // so the modern/im-touch layouts have a live light mode like classic.
         touchui::setLightMode(m_themeManager &&
                               m_themeManager->getTheme() == Theme::Light);
+        // im-touch wears crisp 4 px corners kit-wide; the modern layout keeps
+        // the soft rounded look (each widget's own default).
+        touchui::setCornerRadius(imTouchLayout() ? 4.0f : -1.0f);
         if (frameTouchTheme) touchui::pushChrome();
         // Always submit the dockspace host — under every layout. ImGui only
         // keeps a dock node alive while its DockSpace() is submitted each frame;
