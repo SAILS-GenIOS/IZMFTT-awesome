@@ -4,8 +4,9 @@
 # cross-build completes (and re-run if OCCT is rebuilt).
 set -euo pipefail
 
-PREFIX="${MATERIALIZR_OCCT_PREFIX:-$HOME/Android/prefix/arm64-v8a}"
-DEST="$(cd "$(dirname "$0")" && pwd)/app/src/main/jniLibs/arm64-v8a"
+ABI="${1:-arm64-v8a}"
+PREFIX="${MATERIALIZR_OCCT_PREFIX:-$HOME/Android/prefix/$ABI}"
+DEST="$(cd "$(dirname "$0")" && pwd)/app/src/main/jniLibs/$ABI"
 
 mkdir -p "$DEST"
 shopt -s nullglob
