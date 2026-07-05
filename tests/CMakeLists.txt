@@ -40,6 +40,8 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/MoveFaceOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/ThreadOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SubShapeIndex.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/PlaneTransformOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/AxisTransformOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/EdgeAnchor.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/FaceAnchor.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/TopoName.cpp

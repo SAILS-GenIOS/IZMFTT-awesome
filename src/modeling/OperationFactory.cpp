@@ -1,4 +1,6 @@
 #include "OperationFactory.h"
+#include "PlaneTransformOp.h"
+#include "AxisTransformOp.h"
 #include "../core/Operation.h"
 
 #include "PatternOp.h"
@@ -47,6 +49,11 @@ std::unique_ptr<Operation> create(const std::string& typeId) {
     if (typeId == "revolve")  return std::make_unique<RevolveOp>();
     if (typeId == "construction_plane") return std::make_unique<ConstructionPlaneOp>();
     if (typeId == "construction_axis")  return std::make_unique<ConstructionAxisOp>();
+    //   - plane/axis gizmo transforms: pure pose snapshots, fully in the blob.
+    //     Without these a brand-new file containing one plane move reloaded
+    //     with frozen steps and the misleading "older save" amber banner.
+    if (typeId == "plane_transform") return std::make_unique<PlaneTransformOp>();
+    if (typeId == "axis_transform")  return std::make_unique<AxisTransformOp>();
     //   - Tier 2b (persistent sub-shape identity, see SubShapeIndex.h):
     //     edges/faces persist as ordinal indices into the step's input shape.
     if (typeId == "fillet")  return std::make_unique<FilletOp>();
