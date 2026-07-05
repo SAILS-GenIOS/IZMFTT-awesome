@@ -367,3 +367,46 @@ TEST(TopoBooleanGen, ReloadedSeamFilletFollowsEdit) {
     ASSERT_TRUE(reloaded.execute(doc))
         << "the FILE-reloaded seam fillet must re-find the moved seam";
 }
+
+#include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <TopExp.hxx>
+#include <TopTools_IndexedMapOfShape.hxx>
+
+// ownsFace (click-to-edit) must claim ONLY blend faces — a planar neighbour
+// (the big slab top the blends were carved from) must never open the fillet
+// editor (Steve: "most faces of the base box showed the fillet properties").
+TEST(TopoBooleanGen, OwnsFaceClaimsOnlyBlends) {
+    Document doc;
+    int body = doc.addBody(BRepPrimAPI_MakeBox(gp_Pnt(0, 0, 0), 20, 10, 10).Shape(),
+                           "box");
+    // Fillet all four vertical edges.
+    std::vector<TopoDS_Edge> edges;
+    TopTools_IndexedMapOfShape emap;
+    TopExp::MapShapes(doc.getBody(body), TopAbs_EDGE, emap);
+    for (int i = 1; i <= emap.Extent(); ++i) {
+        BRepAdaptor_Curve c(TopoDS::Edge(emap(i)));
+        if (c.GetType() == GeomAbs_Line &&
+            std::abs(c.Line().Direction().Z()) > 0.999)
+            edges.push_back(TopoDS::Edge(emap(i)));
+    }
+    ASSERT_EQ(edges.size(), 4u);
+    FilletOp fil;
+    fil.setBody(body);
+    fil.setEdges(edges);
+    fil.setRadius(2.0);
+    ASSERT_TRUE(fil.execute(doc));
+
+    int planarClaims = 0, blendClaims = 0, planes = 0, cyls = 0;
+    for (TopExp_Explorer ex(doc.getBody(body), TopAbs_FACE); ex.More(); ex.Next()) {
+        TopoDS_Face f = TopoDS::Face(ex.Current());
+        BRepAdaptor_Surface s(f);
+        const bool claims = fil.ownsFace(f);
+        if (s.GetType() == GeomAbs_Plane) { ++planes; if (claims) ++planarClaims; }
+        else if (s.GetType() == GeomAbs_Cylinder) { ++cyls; if (claims) ++blendClaims; }
+    }
+    EXPECT_EQ(planes, 6);
+    EXPECT_EQ(cyls, 4);
+    EXPECT_EQ(planarClaims, 0) << "a plane is never a fillet blend";
+    EXPECT_EQ(blendClaims, 4) << "every real blend stays click-to-editable";
+}

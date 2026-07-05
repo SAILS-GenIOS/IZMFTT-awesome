@@ -266,3 +266,7 @@ target_link_libraries(probe_thread_hole PRIVATE materializr_core)
 add_executable(test_topo_boolean_gen test_topo_boolean_gen.cpp)
 target_link_libraries(test_topo_boolean_gen PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_topo_boolean_gen COMMAND test_topo_boolean_gen)
+
+# probe_owns_face — diagnostic: which faces fillet/chamfer steps claim on reload
+add_executable(probe_owns_face probe_owns_face.cpp)
+target_link_libraries(probe_owns_face PRIVATE materializr_core)
