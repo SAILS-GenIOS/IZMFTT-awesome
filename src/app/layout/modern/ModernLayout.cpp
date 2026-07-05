@@ -499,9 +499,12 @@ void Application::renderModernLayout() {
                     // History the full height instead and skip the section.
                     const bool stepEditing =
                         m_historyPanel && m_historyPanel->getEditingStep() >= 0;
+                    // History gets the SMALLER share so IT scrolls (long step
+                    // lists) while Properties keeps enough room to show a
+                    // selection's fields without its own scrollbar (Steve).
                     const float histH = stepEditing
                         ? 0.0f
-                        : ImGui::GetContentRegionAvail().y * 0.667f;
+                        : ImGui::GetContentRegionAvail().y * 0.52f;
                     if (ImGui::BeginChild("##histHalf", ImVec2(0, histH), false)) {
                         if (m_historyPanel) {
                             // Undo/redo live in the shell's top bar; the panel
