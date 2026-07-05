@@ -573,7 +573,20 @@ void Application::renderModernEdgeTabs() {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1, 1));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        if (ImGui::Begin(id, nullptr, layoutui::kShellWindowFlags)) {
+        // NOT kShellWindowFlags: those carry NoBringToFrontOnFocus, which (with
+        // the Viewport window, also NoBringToFrontOnFocus, sharing this rect)
+        // left the tab BURIED under the viewport in ImGui's persistent z-order
+        // until an unrelated focus event surfaced it — "no chevrons on cold
+        // start". Without the flag the tiny input window rises to the front on
+        // creation and stays there (the viewport can't climb above it). The
+        // VISUAL is drawn into the foreground draw list below, so it's on top
+        // regardless of any window ordering.
+        const ImGuiWindowFlags tabFlags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoFocusOnAppearing;
+        if (ImGui::Begin(id, nullptr, tabFlags)) {
             const ImVec2 p(winLeft, midY - tabH * 0.5f); // our exact rect
             ImGui::SetCursorScreenPos(p);
             ImGui::InvisibleButton("##grip", ImVec2(tabW, tabH));
@@ -601,7 +614,10 @@ void Application::renderModernEdgeTabs() {
                 *dragged = false;
             }
 
-            ImDrawList* dl = ImGui::GetWindowDrawList();
+            // Foreground draw list: always renders on top of ALL windows
+            // (incl. the viewport), so the chevron can never be hidden behind
+            // a window even if the z-order is off.
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
             const float cx = side < 0 ? p.x : p.x + tabW;
             const ImVec2 c(cx, p.y + tabH * 0.5f);
             const float pi = 3.1415926f;
