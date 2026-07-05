@@ -44,6 +44,7 @@ void SketchTool::setMode(SketchToolMode mode) {
     m_isDragging = false;
     m_dragPointId = -1;
     m_splinePoints.clear();
+    m_activeSplineId = -1; // a partial spline stays committed (>=2 points)
     m_stampStack.clear(); // stamp-undo history is per tool session
     m_hasPrevLineDir = false;
     m_activeInferences.clear();
@@ -234,9 +235,10 @@ void SketchTool::onMouseUp(glm::vec2 /*pos*/) {
 
 void SketchTool::onConfirm() {
     // Finalize spline if in spline mode with enough points
-    if (m_mode == SketchToolMode::Spline && m_splinePoints.size() >= 2 && m_sketch) {
-        m_sketch->addSpline(m_splinePoints);
+    if (m_mode == SketchToolMode::Spline && m_sketch) {
+        // The spline is committed and grown per click; just reset the tool.
         m_splinePoints.clear();
+        m_activeSplineId = -1;
     }
 
     // Finish the current chain (e.g., stop line chaining)
@@ -1967,17 +1969,22 @@ void SketchTool::handleSplineTool(glm::vec2 pos) {
     // - clicking the LAST placed point again commits the open spline
     if (!m_splinePoints.empty() && ptId >= 0) {
         if (ptId == m_splinePoints.front() && m_splinePoints.size() >= 3) {
-            m_splinePoints.push_back(ptId); // front==back marks it closed
-            m_sketch->addSpline(m_splinePoints);
+            // Close the loop: append the front id (front==back marks closed)
+            // on the ALREADY-COMMITTED spline and end placement.
+            if (m_activeSplineId >= 0)
+                m_sketch->appendSplineControlPoint(m_activeSplineId, ptId);
             m_splinePoints.clear();
+            m_activeSplineId = -1;
             m_isPlacing = false;
             m_clickCount = 0;
             return;
         }
         if (ptId == m_splinePoints.back()) {
-            if (m_splinePoints.size() >= 2)
-                m_sketch->addSpline(m_splinePoints);
+            // Clicking the last point again ends placement — the spline has
+            // been committed and growing since the 2nd point, so there is
+            // nothing left to do but reset the tool.
             m_splinePoints.clear();
+            m_activeSplineId = -1;
             m_isPlacing = false;
             m_clickCount = 0;
             return;
@@ -1989,6 +1996,14 @@ void SketchTool::handleSplineTool(glm::vec2 pos) {
     }
 
     m_splinePoints.push_back(ptId);
+    // COMMIT EARLY, GROW PER CLICK: the spline element exists from the 2nd
+    // point on, so every undo snapshot holds the spline-so-far — undo then
+    // shrinks it one control point at a time ("as though it was committed
+    // earlier") instead of deleting the curve and stranding orphan dots.
+    if (m_splinePoints.size() == 2)
+        m_activeSplineId = m_sketch->addSpline(m_splinePoints);
+    else if (m_splinePoints.size() > 2 && m_activeSplineId >= 0)
+        m_sketch->appendSplineControlPoint(m_activeSplineId, ptId);
 
     if (!m_isPlacing) {
         m_firstClick = pos;
@@ -2003,6 +2018,15 @@ void SketchTool::removeLastSplinePoint() {
     if (!m_sketch || m_splinePoints.empty()) return;
     int id = m_splinePoints.back();
     m_splinePoints.pop_back();
+
+    // Shrink the committed-and-growing spline too; below 2 points it stops
+    // being a curve — remove the element entirely.
+    if (m_activeSplineId >= 0) {
+        if (!m_sketch->popSplineControlPoint(m_activeSplineId)) {
+            m_sketch->removeElement(m_activeSplineId);
+            m_activeSplineId = -1;
+        }
+    }
 
     // Only delete the sketch point if nothing references it: not this
     // spline-in-progress (duplicate snaps), not any committed element.

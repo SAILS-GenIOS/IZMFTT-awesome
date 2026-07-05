@@ -404,6 +404,25 @@ int Sketch::addSpline(const std::vector<int>& controlPointIds) {
     return spline.id;
 }
 
+bool Sketch::appendSplineControlPoint(int splineId, int pointId) {
+    for (auto& sp : m_splines)
+        if (sp.id == splineId) {
+            sp.controlPointIds.push_back(pointId);
+            return true;
+        }
+    return false;
+}
+
+bool Sketch::popSplineControlPoint(int splineId) {
+    for (auto& sp : m_splines)
+        if (sp.id == splineId) {
+            if (sp.controlPointIds.size() <= 2) return false;
+            sp.controlPointIds.pop_back();
+            return true;
+        }
+    return false;
+}
+
 int Sketch::addPolygon(int centerPtId, double radius, int sides, double rotationRad) {
     SketchPolygon polygon;
     polygon.id = nextId();
