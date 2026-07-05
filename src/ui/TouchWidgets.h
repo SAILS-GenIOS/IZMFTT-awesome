@@ -26,6 +26,14 @@ bool fab(const char* id, const char* icon, float diameter = 0.0f);
 // true on press. `accent` fills it with the accent color (primary action).
 bool pillButton(const char* id, const char* icon, const char* label = nullptr,
                 bool accent = false);
+// A compact TWO-ROW toggle: a small dim caption stacked over a bold value
+// (e.g. "Inference" / "Full"). Cycles/acts on click like a pill, but stays
+// narrow because the two short rows sit vertically instead of side by side.
+// Width = widest of the two rows + padding. Returns true when clicked.
+bool twoRowButton(const char* id, const char* caption, const char* value,
+                  bool accent = false);
+float twoRowButtonWidth(const char* caption, const char* value);
+
 // Exact width pillButton(icon, label) will occupy — for right-aligned layout
 // math (the top bar). Shares the sizing code so the two can't drift.
 float pillButtonWidth(const char* icon, const char* label = nullptr);

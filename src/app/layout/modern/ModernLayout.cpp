@@ -132,6 +132,18 @@ void Application::renderModernLayout() {
                                  m_sketchTool->isPlacing();
         const char* finishLbl = toolRunning ? "Finish" : "Finish Sketch";
         const char* exitLbl   = toolRunning ? "Cancel" : "Discard Sketch";
+        // Inference-level toggle (sketch mode only): a compact two-row button
+        // just left of Finish, click-cycles Max->Full->Reduced->Off like the
+        // classic toolbar's guides button.
+        const char* infLbl = "Full";
+        if (m_inSketchMode && m_sketchTool) {
+            switch (m_sketchTool->getInferenceLevel()) {
+                case SketchTool::InferenceLevel::Full:    infLbl = "Full"; break;
+                case SketchTool::InferenceLevel::Reduced: infLbl = "Reduced"; break;
+                case SketchTool::InferenceLevel::Off:     infLbl = "Off"; break;
+                case SketchTool::InferenceLevel::Max:     infLbl = "Max"; break;
+            }
+        }
         // Right-align the cluster with EXACT widths (touchui::pillButtonWidth
         // shares pillButton's sizing) — the previous estimate overshot per
         // pill, leaving an awkward gap against the right edge.
@@ -144,7 +156,8 @@ void Application::renderModernLayout() {
         float total = bh * nSquare + sp * nSquare +
                       touchui::pillButtonWidth(focusIcon, focusLbl);
         if (m_inSketchMode)
-            total += touchui::pillButtonWidth(MZ_ICON_FINISH, finishLbl) +
+            total += touchui::twoRowButtonWidth("Inference level", infLbl) + sp +
+                     touchui::pillButtonWidth(MZ_ICON_FINISH, finishLbl) +
                      touchui::pillButtonWidth(MZ_ICON_DISCARD, exitLbl) + sp * 2;
         if (showMulti)
             total += touchui::pillButtonWidth(MZ_ICON_SELECT, "Multi") + sp;
@@ -162,6 +175,14 @@ void Application::renderModernLayout() {
         }
 
         if (m_inSketchMode) {
+            // Inference level — just left of Finish; click cycles the level.
+            if (touchui::twoRowButton("inflvl", "Inference level", infLbl)) {
+                handleToolAction(static_cast<int>(ToolAction::SketchCycleInference));
+            }
+            tip("Sketch inference level (snapping / guides)\n"
+                "Click to cycle: Full \xE2\x86\x92 Reduced \xE2\x86\x92 Off \xE2\x86\x92 Max");
+            ImGui::SameLine(0.0f, sp);
+            ImGui::SetCursorPosY(cy);
             if (touchui::pillButton("finish", MZ_ICON_FINISH, finishLbl, true)) {
                 if (toolRunning)
                     recordSketchMutation([&]{ m_sketchTool->onConfirm(); });

@@ -185,6 +185,51 @@ bool pillButton(const char* id, const char* icon, const char* label, bool accent
     return pressed;
 }
 
+float twoRowButtonWidth(const char* caption, const char* value) {
+    const float s = uiScale();
+    ImFont* font = ImGui::GetFont();
+    const float capSz = std::max(11.0f * s, ImGui::GetFontSize() * 0.72f);
+    const float w1 = font->CalcTextSizeA(capSz, FLT_MAX, 0.0f, caption).x;
+    const float w2 = ImGui::CalcTextSize(value).x;
+    return std::max(w1, w2) + 20.0f * s;   // horizontal padding total
+}
+
+bool twoRowButton(const char* id, const char* caption, const char* value,
+                  bool accent) {
+    const float s = uiScale();
+    const float h = std::max(ImGui::GetFrameHeight(), 44.0f * s);
+    const float w = twoRowButtonWidth(caption, value);
+    ImFont* font = ImGui::GetFont();
+    const float capSz = std::max(11.0f * s, ImGui::GetFontSize() * 0.72f);
+
+    ImGui::PushID(id);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton("##two", ImVec2(w, h));
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    ImVec4 bg = accent ? accentFill() : rowBg();
+    if (hovered && !accent) bg = hoverBg();
+    if (ImGui::IsItemActive()) bg = accent ? accentDeep() : pressBg();
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), ImGui::GetColorU32(bg),
+                      radius(h * 0.32f));
+
+    // Two stacked, horizontally-centred rows: dim caption over bold value.
+    const ImU32 fgCap = ImGui::GetColorU32(accent ? onAccent() : textDim());
+    const ImU32 fgVal = ImGui::GetColorU32(accent ? onAccent() : textPrimary());
+    const ImVec2 capTs = font->CalcTextSizeA(capSz, FLT_MAX, 0.0f, caption);
+    const ImVec2 valTs = ImGui::CalcTextSize(value);
+    const float gap = 2.0f * s;
+    const float blockH = capTs.y + gap + valTs.y;
+    float y = p.y + (h - blockH) * 0.5f;
+    dl->AddText(font, capSz, ImVec2(p.x + (w - capTs.x) * 0.5f, y), fgCap, caption);
+    y += capTs.y + gap;
+    dl->AddText(ImVec2(p.x + (w - valTs.x) * 0.5f, y), fgVal, value);
+
+    ImGui::PopID();
+    return pressed;
+}
+
 bool iconButton(const char* id, const char* icon, float side) {
     const float s = uiScale();
     if (side <= 0.0f) side = std::max(ImGui::GetFrameHeight(), 44.0f * s);
