@@ -1718,22 +1718,35 @@ void Application::renderViewport() {
                     // Undo / cancel / tool switch dissolved the hold.
                     m_sketchShapeConfirmPending = false;
                 } else {
-                    const gp_Ax3& bax = m_activeSketch->getPlane().Position();
-                    glm::vec3 bO(bax.Location().X(), bax.Location().Y(), bax.Location().Z());
-                    glm::vec3 bX(bax.XDirection().X(), bax.XDirection().Y(), bax.XDirection().Z());
-                    glm::vec3 bY(bax.YDirection().X(), bax.YDirection().Y(), bax.YDirection().Z());
                     // FROZEN endpoints from the lift — not the live preview:
                     // stray motion twitching the held preview must not move
                     // the input box (or flip the commit direction) mid-edit.
                     const glm::vec2 ps = m_sketchShapeAnchorPs;
                     const glm::vec2 pe = m_sketchShapeAnchorPe;
                     const float diaNow = 2.0f * glm::length(pe - ps);
-                    ImVec2 at;
-                    if (toImg(bO + pe.x * bX + pe.y * bY, at)) {
+                    {
                         const float sc = uiScale();
-                        ImGui::SetNextWindowPos(
-                            ImVec2(at.x + 16.0f * sc, at.y + 12.0f * sc),
-                            ImGuiCond_Always);
+                        // Keep the confirm bubble OFF the drawing area (Steve).
+                        // Layout-aware: Modern centres it over the right-hand
+                        // panel band; im-touch (no persistent panel) and
+                        // Classic (docked column already at the right edge) hug
+                        // the far-right edge. Vertically centred in all three.
+                        const ImGuiViewport* vpb = ImGui::GetMainViewport();
+                        const float bmargin = 16.0f * sc;
+                        const float rightEdge = vpb->WorkPos.x + vpb->WorkSize.x;
+                        const float cy = vpb->WorkPos.y + vpb->WorkSize.y * 0.5f;
+                        float anchorX = rightEdge - bmargin;
+                        float pivotX  = 1.0f;
+                        if (m_uiLayout == UiLayout::Modern &&
+                            m_touchVpW > 0.0f && !m_rightPanelHidden) {
+                            // m_touchVpX + m_touchVpW is the right panel's left
+                            // edge; centre the popup across that panel.
+                            anchorX = 0.5f * ((m_touchVpX + m_touchVpW) + rightEdge);
+                            pivotX  = 0.5f;
+                        }
+                        ImGui::SetNextWindowPos(ImVec2(anchorX, cy),
+                                                ImGuiCond_Always,
+                                                ImVec2(pivotX, 0.5f));
                         ImGui::SetNextWindowBgAlpha(0.95f);
                         ImGui::Begin("##CircleConfirm", nullptr,
                             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -1772,8 +1785,11 @@ void Application::renderViewport() {
                             // fine: the pad opens on a later frame's tap.)
                             const ImVec2 bwin = ImGui::GetWindowPos();
                             const ImVec2 bsz  = ImGui::GetWindowSize();
-                            const ImVec2 padAnchor(bwin.x + bsz.x + 8.0f * sc,
-                                                   bwin.y);
+                            // Bubble sits on the right; open the pad to its
+                            // LEFT (toward the viewport) so it stays on screen.
+                            // ImGui clamps to the viewport on a narrow display.
+                            const ImVec2 padAnchor(bwin.x - 232.0f * sc, bwin.y);
+                            (void)bsz;
                             touchui::amountField("bubbleW", "Width",
                                                  &m_sketchShapeDimW, "mm", 1,
                                                  /*allowSign=*/false,
@@ -7060,12 +7076,15 @@ void Application::renderViewport() {
             // width wants the window width, window width wants the content width)
             // — so some steps (the rectangle's 2nd "Height" entry, the line)
             // came out too narrow and clipped the typed digits off the left.
-            // Anchor it just inside the viewport's right edge, clamped so a
-            // narrow viewport can't shove it off the left.
+            // Anchor to the SCREEN's right edge, not the viewport window's: in
+            // Modern/Classic the viewport ends where the right panel begins, so
+            // the old anchor parked this popup mid-screen ON TOP of the shape
+            // being drawn (Steve). Screen-right puts it over the right-hand
+            // panel in Modern/Classic and at the far right edge in im-touch.
             const float winW = uiW(230.0f);
-            const float parentX = ImGui::GetWindowPos().x;
-            float winX = parentX + ImGui::GetWindowWidth() - winW - uiW(10.0f);
-            if (winX < parentX + 6.0f) winX = parentX + 6.0f;
+            const ImGuiViewport* mvp = ImGui::GetMainViewport();
+            float winX = mvp->WorkPos.x + mvp->WorkSize.x - winW - uiW(10.0f);
+            if (winX < mvp->WorkPos.x + 6.0f) winX = mvp->WorkPos.x + 6.0f;
             ImGui::SetNextWindowPos(ImVec2(winX, ImGui::GetWindowPos().y + 50.0f));
             ImGui::SetNextWindowSize(ImVec2(winW, 0.0f)); // fixed width, auto height
             ImGui::Begin("##SketchDimInput", nullptr,
