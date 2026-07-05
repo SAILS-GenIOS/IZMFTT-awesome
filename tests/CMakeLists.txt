@@ -42,6 +42,26 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/SubShapeIndex.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/PlaneTransformOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/AxisTransformOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/CopyOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/AlignOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/MirrorOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/SplitBodyOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/SketchTransformOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/LoftOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/SweepOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/ConstructionPlaneOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/ConstructionAxisOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/OperationFactory.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/PatternOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/RevolveOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/TaperOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/ScaleFaceOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/DefeatureOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/ResizeCylindricalOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/CombineSketchesOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/PrimitiveOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/ReplayOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/ProjectSketchOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/EdgeAnchor.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/FaceAnchor.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/TopoName.cpp
@@ -272,3 +292,9 @@ add_test(NAME test_topo_boolean_gen COMMAND test_topo_boolean_gen)
 # probe_owns_face — diagnostic: which faces fillet/chamfer steps claim on reload
 add_executable(probe_owns_face probe_owns_face.cpp)
 target_link_libraries(probe_owns_face PRIVATE materializr_core)
+
+# test_full_replay — THE contract: every op type reloads editable through the
+# real ProjectIO and the whole chain replays from step 0 after a sketch edit
+add_executable(test_full_replay test_full_replay.cpp)
+target_link_libraries(test_full_replay PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_full_replay COMMAND test_full_replay)

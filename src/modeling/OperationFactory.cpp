@@ -1,5 +1,12 @@
 #include "OperationFactory.h"
 #include "PlaneTransformOp.h"
+#include "SweepOp.h"
+#include "LoftOp.h"
+#include "SketchTransformOp.h"
+#include "SplitBodyOp.h"
+#include "MirrorOp.h"
+#include "CopyOp.h"
+#include "AlignOp.h"
 #include "AxisTransformOp.h"
 #include "../core/Operation.h"
 
@@ -54,6 +61,17 @@ std::unique_ptr<Operation> create(const std::string& typeId) {
     //     with frozen steps and the misleading "older save" amber banner.
     if (typeId == "plane_transform") return std::make_unique<PlaneTransformOp>();
     if (typeId == "axis_transform")  return std::make_unique<AxisTransformOp>();
+    //   - full-history-replay coverage: every remaining op type. align/mirror/
+    //     split are body-id + numeric params; copy re-copies its live source;
+    //     sketchtransform is a pure sketch-plane pose; loft/sweep persist
+    //     their picked profile geometry as BREP compounds in the blob.
+    if (typeId == "align")           return std::make_unique<AlignOp>();
+    if (typeId == "copy")            return std::make_unique<CopyOp>();
+    if (typeId == "mirror")          return std::make_unique<MirrorOp>();
+    if (typeId == "split_body")      return std::make_unique<SplitBodyOp>();
+    if (typeId == "sketchtransform") return std::make_unique<materializr::SketchTransformOp>();
+    if (typeId == "loft")            return std::make_unique<LoftOp>();
+    if (typeId == "sweep")           return std::make_unique<SweepOp>();
     //   - Tier 2b (persistent sub-shape identity, see SubShapeIndex.h):
     //     edges/faces persist as ordinal indices into the step's input shape.
     if (typeId == "fillet")  return std::make_unique<FilletOp>();
