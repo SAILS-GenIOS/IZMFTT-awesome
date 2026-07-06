@@ -83,6 +83,17 @@ target_include_directories(materializr_core SYSTEM PUBLIC
     ${OpenCASCADE_INCLUDE_DIR}
 )
 
+# OCCT 7.8 renamed the data-exchange toolkits (TKSTL -> TKDESTL). The app target
+# version-gates this (see the top-level CMakeLists); the test lib must too, or it
+# won't link on the pre-refactor OCCT that distros like Ubuntu 24.04 ship (7.6.3,
+# where the STL toolkit is still TKSTL). Gate on MAJOR/MINOR — the config sets
+# those even when it leaves the combined OpenCASCADE_VERSION string empty.
+if(OpenCASCADE_MAJOR_VERSION EQUAL 7 AND OpenCASCADE_MINOR_VERSION LESS 8)
+    set(OCCT_STL_LIB TKSTL)
+else()
+    set(OCCT_STL_LIB TKDESTL)
+endif()
+
 target_link_libraries(materializr_core PUBLIC
     imgui_lib
     glm::glm
@@ -98,7 +109,7 @@ target_link_libraries(materializr_core PUBLIC
     TKOffset
     TKBO
     TKBin
-    TKDESTL      # RWStl (STL read) for StlIO
+    ${OCCT_STL_LIB}  # RWStl (STL read) for StlIO — TKSTL (<7.8) / TKDESTL (>=7.8)
     TKShHealing  # ShapeUpgrade_UnifySameDomain for StlIO
     TKMesh       # BRepMesh_IncrementalMesh for Unfold (curved faces)
     ZLIB::ZLIB
@@ -145,6 +156,11 @@ add_test(NAME test_move_hole COMMAND test_move_hole)
 add_executable(test_pushpull_normal test_pushpull_normal.cpp)
 target_link_libraries(test_pushpull_normal PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_pushpull_normal COMMAND test_pushpull_normal)
+
+# test_pushpull_through — a cut consuming the whole body must be refused
+add_executable(test_pushpull_through test_pushpull_through.cpp)
+target_link_libraries(test_pushpull_through PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_pushpull_through COMMAND test_pushpull_through)
 
 # test_stl_import — STL triangle soup sews into a clean 6-face solid (parked feature)
 add_executable(test_stl_import test_stl_import.cpp)
@@ -304,5 +320,10 @@ add_test(NAME test_full_replay COMMAND test_full_replay)
 add_executable(test_svg_roundtrip test_svg_roundtrip.cpp
     ${CMAKE_SOURCE_DIR}/src/io/SvgExport.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SvgImport.cpp)
-target_link_libraries(test_svg_roundtrip PRIVATE materializr_core gtest gtest_main)
+# SvgImport renders SVG text to outline wires via StdPrs_BRepFont /
+# StdPrs_BRepTextBuilder (TKV3d) on Font_* base classes (TKService) — the same
+# font toolkits the app target links. materializr_core doesn't carry them, so
+# this target must add them itself or it won't link.
+target_link_libraries(test_svg_roundtrip PRIVATE materializr_core gtest gtest_main
+    TKV3d TKService)
 add_test(NAME test_svg_roundtrip COMMAND test_svg_roundtrip)
