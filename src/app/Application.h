@@ -744,6 +744,23 @@ private:
     bool m_imTouchTreeOpenBodies = true;
     bool m_imTouchTreeOpenSketches = true;
     bool m_imTouchTreeOpenConstruction = true;
+    // im-touch Items overlay: hovered this frame (feeds the long-press gate in
+    // Application_Viewport so press-and-hold synthesizes a right-click over the
+    // tree, opening a row's context menu just like the classic/modern panels).
+    bool m_imTouchTreeHovered = false;
+    // im-touch rename: a namespaced key (body=id, sketch=1000000+id,
+    // folder=2000000+id, plane=4000000+id, axis=5000000+id) whose name is being
+    // edited in the rename modal; -1 = idle. The buffer holds the edited text.
+    int  m_imTouchRenameKey = -1;
+    bool m_imTouchRenameOpen = false;   // raise the modal next frame
+    bool m_imTouchRenameFocus = false;  // grab the keyboard on first modal frame
+    char m_imTouchRenameBuf[128] = {};
+    // im-touch new-folder modal (reached from a body's Move-to-folder menu or
+    // the Bodies header). The pending bodies drop into the folder on create.
+    bool m_imTouchNewFolderOpen = false;
+    bool m_imTouchNewFolderFocus = false;
+    char m_imTouchNewFolderName[128] = {};
+    std::vector<int> m_imTouchNewFolderBodies;
     // im-touch only: the Fusion-style history timeline along the bottom edge.
     bool m_imTouchTimeline = true;
     // im-touch timeline: step whose properties popup is open (-1 = none).

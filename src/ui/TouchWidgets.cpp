@@ -521,18 +521,51 @@ bool amountField(const char* id, const char* label, float* v,
     return changed;
 }
 
-bool treeGroup(const char* id, const char* label, int count, bool open) {
+bool treeGroup(const char* id, const char* label, int count, bool open,
+               bool* rightClicked, const char* trailingLabel,
+               bool* trailingClicked) {
     const float s = uiScale();
     const float h = 40.0f * s;
     const float w = ImGui::GetContentRegionAvail().x;
 
     ImGui::PushID(id);
     const ImVec2 p = ImGui::GetCursorScreenPos();
-    const bool pressed = ImGui::InvisibleButton("##grp", ImVec2(w, h));
-    const bool hovered = ImGui::IsItemHovered();
     ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // Trailing action pill (e.g. "+ Folder") — its own exclusive hit area on
+    // the right, submitted BEFORE the group toggle so the toggle (which then
+    // covers only the remaining width) can't swallow its taps. Same lesson as
+    // treeLeaf's eye button.
+    float trailW = 0.0f;
+    if (trailingLabel && *trailingLabel) {
+        const ImVec2 tts = ImGui::CalcTextSize(trailingLabel);
+        trailW = tts.x + 20.0f * s;
+        const float bx = p.x + w - trailW;
+        ImGui::SetCursorScreenPos(ImVec2(bx, p.y));
+        if (ImGui::InvisibleButton("##trail", ImVec2(trailW, h)) &&
+            trailingClicked)
+            *trailingClicked = true;
+        const bool thov = ImGui::IsItemHovered();
+        ImVec4 fill = accentFill();
+        fill.w = thov ? 0.60f : 0.35f;
+        dl->AddRectFilled(ImVec2(bx, p.y + 4.0f * s),
+                          ImVec2(bx + trailW, p.y + h - 4.0f * s),
+                          ImGui::GetColorU32(fill), radius(6.0f * s));
+        dl->AddText(ImVec2(bx + 10.0f * s, p.y + (h - tts.y) * 0.5f),
+                    ImGui::GetColorU32(textPrimary()), trailingLabel);
+        ImGui::SetCursorScreenPos(p);   // rewind so the toggle starts at p
+    }
+
+    // Toggle covers everything left of the trailing pill (or the full width
+    // when there's no pill), so the two never overlap.
+    const float grpW =
+        std::max(1.0f, w - (trailW > 0.0f ? trailW + 6.0f * s : 0.0f));
+    const bool pressed = ImGui::InvisibleButton("##grp", ImVec2(grpW, h));
+    if (rightClicked && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+        *rightClicked = true;
+    const bool hovered = ImGui::IsItemHovered();
     if (hovered)
-        dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h),
+        dl->AddRectFilled(p, ImVec2(p.x + grpW, p.y + h),
                           ImGui::GetColorU32(rowHoverBg()), radius(6.0f * s));
 
     // Disclosure triangle, drawn (font glyphs for ▶/▼ look mismatched at
@@ -582,6 +615,7 @@ TreeLeafAction treeLeaf(const char* id, const char* icon, const char* label,
     ImGui::SetCursorScreenPos(ImVec2(p.x + indent + eyeW, p.y));
     act.clicked = ImGui::InvisibleButton(
         "##row", ImVec2(std::max(1.0f, w - indent - eyeW), h));
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) act.rightClicked = true;
     const bool rowHov = ImGui::IsItemHovered();
 
     if (selected) {

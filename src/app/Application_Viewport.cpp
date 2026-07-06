@@ -2580,7 +2580,11 @@ void Application::renderViewport() {
             // renders after the viewport — but a stationary long-press is stable
             // across frames, so the lag is harmless.
             bool allowLongPress = viewportHovered ||
-                                  (m_itemsPanel && m_itemsPanel->isHovered());
+                                  (m_itemsPanel && m_itemsPanel->isHovered()) ||
+                                  // im-touch has no ItemsPanel; its own tree
+                                  // overlay reports hover the same way so a
+                                  // press-and-hold on a row opens its menu.
+                                  m_imTouchTreeHovered;
             if (m_inSketchMode && m_sketchTool &&
                 m_sketchTool->getMode() != SketchToolMode::Select)
                 allowLongPress = false;

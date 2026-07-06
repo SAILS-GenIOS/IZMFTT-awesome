@@ -96,14 +96,23 @@ bool amountField(const char* id, const char* label, float* v,
 
 // Fusion-style browser tree rows (the im-touch transparent Items overlay).
 // Group header: disclosure triangle + label + count. Returns true on tap —
-// the caller flips its open flag.
-bool treeGroup(const char* id, const char* label, int count, bool open);
+// the caller flips its open flag. When rightClicked is non-null it reports a
+// right-click / long-press on the header. trailingLabel, when set, draws a
+// visible action pill (e.g. "+ Folder") on the right with its own hit area;
+// trailingClicked reports a tap on it.
+bool treeGroup(const char* id, const char* label, int count, bool open,
+               bool* rightClicked = nullptr,
+               const char* trailingLabel = nullptr,
+               bool* trailingClicked = nullptr);
 // Leaf under a group: eye visibility toggle (own hit area) + type icon +
 // name, indented. Row tap = select; selected rows get a soft accent fill;
-// hidden items render dimmed.
+// hidden items render dimmed. rightClicked reports a right-click / long-press
+// on the row body (the touch layer synthesizes right-clicks on press-and-hold)
+// so the caller can open a per-row context menu.
 struct TreeLeafAction {
-    bool eyeToggled = false;  // *visible already flipped
-    bool clicked    = false;  // row body tapped (select)
+    bool eyeToggled   = false;  // *visible already flipped
+    bool clicked      = false;  // row body tapped (select)
+    bool rightClicked = false;  // row body long-pressed (open context menu)
 };
 TreeLeafAction treeLeaf(const char* id, const char* icon, const char* label,
                         bool* visible, bool selected);

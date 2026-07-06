@@ -14,6 +14,7 @@
 #include "core/History.h"
 #include "core/Operation.h"
 #include "core/SelectionManager.h"
+#include "modeling/DeleteOp.h"          // Items tree: body delete via History
 #include "modeling/SketchEditOp.h"      // timeline: Apply cascade targets
 #include "modeling/SketchTransformOp.h"
 #include "modeling/SketchTool.h"   // SketchToolMode for the select-mode gate
@@ -27,7 +28,9 @@
 #include "ui_scale.h"
 
 #include <cfloat> // FLT_MAX (tool bar height constraint)
+#include <cstring> // strncpy (rename buffers)
 #include <imgui.h>
+#include <memory>  // make_unique (DeleteOp)
 #include <set>
 #include <string>
 
@@ -244,9 +247,10 @@ void Application::renderImTouchLayout() {
     const float railBtnW = 60.0f * s;
 
     // ── Transparent model tree (right edge) — the structure the modern
-    //    layout's Items panel shows, display-focused: visibility eye + name
-    //    + tap-to-select. Deep actions (rename, folders, export) live in
-    //    the other layouts; this stays an im-touch-only overlay.
+    //    layout's Items panel shows: visibility eye + name + tap-to-select,
+    //    plus press-and-hold context menus (rename / delete / move-to-folder)
+    //    and folder grouping, mirroring ItemsPanel but touch-native.
+    m_imTouchTreeHovered = false;   // fed to the long-press gate every frame
     if (m_imTouchTree && m_document) {
         // Flush to the right edge, below the top cluster's reach.
         ImGui::SetNextWindowPos(
@@ -258,12 +262,14 @@ void Application::renderImTouchLayout() {
         ImGui::SetNextWindowBgAlpha(0.25f);   // Fusion-browser translucency
         if (ImGui::Begin("##LiteTree", nullptr,
                          kFloat & ~ImGuiWindowFlags_NoScrollbar)) {
-            // Root node: the document name, like Fusion's browser top row.
-            // No in-panel minimize control — the right-edge Items button
-            // (which opened it) toggles it closed again.
-            std::string docName = projectDisplayName();
-            ImGui::TextColored(touchui::textPrimary(), "%s", docName.c_str());
-            ImGui::Separator();
+            // Report hover (incl. while a row is the active item) so a
+            // stationary long-press over the tree arms a synthetic right-click.
+            m_imTouchTreeHovered = ImGui::IsWindowHovered(
+                ImGuiHoveredFlags_RootAndChildWindows |
+                ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            // (Project name intentionally omitted here — the top-left chip
+            // already shows it; dropping the browser's root row reclaims space.)
+
             // Selected ids per kind, collected once.
             std::set<int> selB, selS, selP, selA;
             if (m_selection)
@@ -284,36 +290,139 @@ void Application::renderImTouchLayout() {
                 if (entry.type == SelectionType::Body)
                     m_selection->setNavigationOnly(true);
             };
+            // Rename is a native-keyboard modal (raised after the tree). The
+            // key is namespaced so kinds never collide (see Application.h).
+            auto startRename = [&](int key, const std::string& cur) {
+                m_imTouchRenameKey = key;
+                std::strncpy(m_imTouchRenameBuf, cur.c_str(),
+                             sizeof(m_imTouchRenameBuf) - 1);
+                m_imTouchRenameBuf[sizeof(m_imTouchRenameBuf) - 1] = '\0';
+                m_imTouchRenameOpen = true;
+            };
+
+            // One body row + its long-press context menu. Returns false when a
+            // Delete made the surrounding id list stale (caller stops looping).
+            auto renderBody = [&](int id) -> bool {
+                bool gone = false;
+                ImGui::PushID(id);
+                bool visible = m_document->isBodyVisible(id);
+                auto act = touchui::treeLeaf(
+                    "body", MZ_ICON_BODY,
+                    m_document->getBodyName(id).c_str(), &visible,
+                    selB.count(id) > 0);
+                if (act.eyeToggled) m_document->setBodyVisible(id, visible);
+                if (act.clicked) {
+                    SelectionEntry e;
+                    e.type = SelectionType::Body;
+                    e.bodyId = id;
+                    // Parity with ItemsPanel::makeEntry — downstream code
+                    // (highlight outline, ops) expects the shape on the entry.
+                    try { e.shape = m_document->getBody(id); } catch (...) {}
+                    pick(e, /*multiOk=*/true);
+                }
+                if (act.rightClicked) ImGui::OpenPopup("bodyCtx");
+                if (ImGui::BeginPopup("bodyCtx")) {
+                    if (ImGui::MenuItem("Rename"))
+                        startRename(id, m_document->getBodyName(id));
+                    if (ImGui::MenuItem("Delete")) {
+                        if (m_history) {
+                            auto op = std::make_unique<DeleteOp>();
+                            op->setBodyId(id);
+                            m_history->pushOperation(std::move(op), *m_document);
+                        } else {
+                            m_document->removeBody(id);
+                        }
+                        if (m_selection) m_selection->clear();
+                        gone = true;
+                    }
+                    if (!gone && ImGui::BeginMenu("Move to folder")) {
+                        if (m_document->getBodyFolder(id) >= 0 &&
+                            ImGui::MenuItem("(root — no folder)")) {
+                            m_document->setBodyFolder(id, -1);
+                            markDirty();
+                        }
+                        for (int fid : m_document->getAllFolderIds())
+                            if (ImGui::MenuItem(m_document->getFolderName(fid).c_str())) {
+                                m_document->setBodyFolder(id, fid);
+                                markDirty();
+                            }
+                        ImGui::Separator();
+                        if (ImGui::MenuItem("New folder…")) {
+                            m_imTouchNewFolderBodies = { id };
+                            m_imTouchNewFolderName[0] = '\0';
+                            m_imTouchNewFolderOpen = true;
+                        }
+                        ImGui::EndMenu();
+                    }
+                    ImGui::EndPopup();
+                }
+                ImGui::PopID();
+                return !gone;
+            };
 
             bool any = false;
-            const auto bodyIds = m_document->getAllBodyIds();
-            if (!bodyIds.empty()) {
+            const auto bodyIds   = m_document->getAllBodyIds();
+            const auto folderIds = m_document->getAllFolderIds();
+            if (!bodyIds.empty() || !folderIds.empty()) {
                 any = true;
+                // Visible "+ Folder" pill on the header (its own hit area) —
+                // the obvious way to make an empty folder; bodies join via a
+                // row's Move-to-folder menu.
+                bool addFolderClick = false;
                 if (touchui::treeGroup("grpBodies", "Bodies",
                                        static_cast<int>(bodyIds.size()),
-                                       m_imTouchTreeOpenBodies))
+                                       m_imTouchTreeOpenBodies, nullptr,
+                                       "+ Folder", &addFolderClick))
                     m_imTouchTreeOpenBodies = !m_imTouchTreeOpenBodies;
-                if (m_imTouchTreeOpenBodies)
-                    for (int id : bodyIds) {
-                        ImGui::PushID(id);
-                        bool visible = m_document->isBodyVisible(id);
-                        auto act = touchui::treeLeaf(
-                            "body", MZ_ICON_BODY,
-                            m_document->getBodyName(id).c_str(), &visible,
-                            selB.count(id) > 0);
-                        if (act.eyeToggled) m_document->setBodyVisible(id, visible);
-                        if (act.clicked) {
-                            SelectionEntry e;
-                            e.type = SelectionType::Body;
-                            e.bodyId = id;
-                            // Parity with ItemsPanel::makeEntry — downstream
-                            // code (highlight outline, ops) expects body
-                            // entries to carry the shape.
-                            try { e.shape = m_document->getBody(id); } catch (...) {}
-                            pick(e, /*multiOk=*/true);
+                if (addFolderClick) {
+                    m_imTouchNewFolderBodies.clear();
+                    m_imTouchNewFolderName[0] = '\0';
+                    m_imTouchNewFolderOpen = true;
+                }
+                if (m_imTouchTreeOpenBodies) {
+                    // 1) Folders, each with their member bodies indented.
+                    bool bodiesStale = false;
+                    for (int fid : folderIds) {
+                        ImGui::PushID(2000000 + fid); // namespace off body ids
+                        bool fvis = m_document->isFolderVisible(fid);
+                        bool fexp = m_document->isFolderExpanded(fid);
+                        auto fact = touchui::treeLeaf(
+                            "folder", MZ_ICON_OPEN,
+                            m_document->getFolderName(fid).c_str(), &fvis,
+                            /*selected=*/false);
+                        if (fact.eyeToggled) {
+                            m_document->setFolderVisible(fid, fvis);
+                            markDirty();
+                        }
+                        if (fact.clicked)
+                            m_document->setFolderExpanded(fid, !fexp);
+                        if (fact.rightClicked) ImGui::OpenPopup("folderCtx");
+                        bool folderGone = false;
+                        if (ImGui::BeginPopup("folderCtx")) {
+                            if (ImGui::MenuItem("Rename"))
+                                startRename(2000000 + fid,
+                                            m_document->getFolderName(fid));
+                            if (ImGui::MenuItem("Delete folder (keeps bodies)")) {
+                                m_document->removeFolder(fid);
+                                markDirty();
+                                folderGone = true;
+                            }
+                            ImGui::EndPopup();
+                        }
+                        if (!folderGone && fexp) {
+                            ImGui::Indent();
+                            for (int bid : m_document->getBodiesInFolder(fid))
+                                if (!renderBody(bid)) { bodiesStale = true; break; }
+                            ImGui::Unindent();
                         }
                         ImGui::PopID();
+                        if (folderGone || bodiesStale) break;
                     }
+                    // 2) Root-level bodies (folderId == -1).
+                    if (!bodiesStale)
+                        for (int id : m_document->getBodiesInFolder(-1))
+                            if (!renderBody(id)) break;
+                }
             }
             const auto sketchIds = m_document->getAllSketchIds();
             if (!sketchIds.empty()) {
@@ -337,7 +446,21 @@ void Application::renderImTouchLayout() {
                             e.sketchId = id;
                             pick(e, /*multiOk=*/false);
                         }
+                        bool sgone = false;
+                        if (act.rightClicked) ImGui::OpenPopup("sketchCtx");
+                        if (ImGui::BeginPopup("sketchCtx")) {
+                            if (ImGui::MenuItem("Rename"))
+                                startRename(1000000 + id,
+                                            m_document->getSketchName(id));
+                            if (ImGui::MenuItem("Delete")) {
+                                m_document->removeSketch(id);
+                                if (m_selection) m_selection->clear();
+                                sgone = true;
+                            }
+                            ImGui::EndPopup();
+                        }
                         ImGui::PopID();
+                        if (sgone) break;   // sketchIds now stale
                     }
             }
             const auto planeIds = m_document->getAllPlaneIds();
@@ -350,6 +473,7 @@ void Application::renderImTouchLayout() {
                         m_imTouchTreeOpenConstruction))
                     m_imTouchTreeOpenConstruction = !m_imTouchTreeOpenConstruction;
                 if (m_imTouchTreeOpenConstruction) {
+                    bool cgone = false;
                     for (int id : planeIds) {
                         ImGui::PushID(id + 100000); // avoid plane/axis id collisions
                         const auto* p = m_document->getPlane(id);
@@ -366,9 +490,22 @@ void Application::renderImTouchLayout() {
                             e.planeId = id;
                             pick(e, /*multiOk=*/false);
                         }
+                        if (act.rightClicked) ImGui::OpenPopup("planeCtx");
+                        if (ImGui::BeginPopup("planeCtx")) {
+                            if (ImGui::MenuItem("Rename"))
+                                startRename(4000000 + id, label);
+                            if (ImGui::MenuItem("Delete")) {
+                                m_document->removePlane(id);
+                                if (m_selection) m_selection->clear();
+                                cgone = true;
+                            }
+                            ImGui::EndPopup();
+                        }
                         ImGui::PopID();
+                        if (cgone) break;   // planeIds now stale
                     }
                     for (int id : axisIds) {
+                        if (cgone) break;
                         ImGui::PushID(id + 200000);
                         const auto* a = m_document->getAxis(id);
                         std::string label = a ? a->name
@@ -384,7 +521,19 @@ void Application::renderImTouchLayout() {
                             e.axisId = id;
                             pick(e, /*multiOk=*/false);
                         }
+                        if (act.rightClicked) ImGui::OpenPopup("axisCtx");
+                        if (ImGui::BeginPopup("axisCtx")) {
+                            if (ImGui::MenuItem("Rename"))
+                                startRename(5000000 + id, label);
+                            if (ImGui::MenuItem("Delete")) {
+                                m_document->removeAxis(id);
+                                if (m_selection) m_selection->clear();
+                                cgone = true;
+                            }
+                            ImGui::EndPopup();
+                        }
                         ImGui::PopID();
+                        if (cgone) break;   // axisIds now stale
                     }
                 }
             }
@@ -392,6 +541,86 @@ void Application::renderImTouchLayout() {
                 ImGui::TextColored(touchui::textDim(), "Nothing here yet");
         }
         ImGui::End();
+
+        // ── Rename modal (native keyboard) — raised from any context "Rename".
+        //    Decodes the namespaced key to route the committed name back.
+        if (m_imTouchRenameOpen) {
+            ImGui::OpenPopup("Rename##imtouch");
+            m_imTouchRenameOpen = false;
+            m_imTouchRenameFocus = true;
+        }
+        if (ImGui::BeginPopupModal("Rename##imtouch", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextUnformatted("Name:");
+            if (m_imTouchRenameFocus) {
+                ImGui::SetKeyboardFocusHere();
+                m_imTouchRenameFocus = false;
+            }
+            ImGui::SetNextItemWidth(uiSz(240, 0).x);
+            bool committed = ImGui::InputText(
+                "##rnbuf", m_imTouchRenameBuf, sizeof(m_imTouchRenameBuf),
+                ImGuiInputTextFlags_EnterReturnsTrue |
+                ImGuiInputTextFlags_AutoSelectAll);
+            bool ok     = ImGui::Button("Rename", uiSz(110, 44));
+            ImGui::SameLine();
+            bool cancel = ImGui::Button("Cancel", uiSz(110, 44));
+            if (committed || ok) {
+                const int key = m_imTouchRenameKey;
+                if (m_imTouchRenameBuf[0] != '\0' && key >= 0) {
+                    // Key ranges mirror Application.h / ItemsPanel.
+                    if (key >= 5000000)      m_document->setAxisName(key - 5000000, m_imTouchRenameBuf);
+                    else if (key >= 4000000) m_document->setPlaneName(key - 4000000, m_imTouchRenameBuf);
+                    else if (key >= 2000000) m_document->setFolderName(key - 2000000, m_imTouchRenameBuf);
+                    else if (key >= 1000000) m_document->setSketchName(key - 1000000, m_imTouchRenameBuf);
+                    else                     m_document->setBodyName(key, m_imTouchRenameBuf);
+                    markDirty();
+                }
+                m_imTouchRenameKey = -1;
+                ImGui::CloseCurrentPopup();
+            } else if (cancel || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                m_imTouchRenameKey = -1;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        // ── New-folder modal — raised from a body's Move-to-folder menu or the
+        //    Bodies header. Creates the folder and drops the pending bodies in.
+        if (m_imTouchNewFolderOpen) {
+            ImGui::OpenPopup("New Folder##imtouch");
+            m_imTouchNewFolderOpen = false;
+            m_imTouchNewFolderFocus = true;
+        }
+        if (ImGui::BeginPopupModal("New Folder##imtouch", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextUnformatted("Folder name:");
+            if (m_imTouchNewFolderFocus) {
+                ImGui::SetKeyboardFocusHere();
+                m_imTouchNewFolderFocus = false;
+            }
+            ImGui::SetNextItemWidth(uiSz(240, 0).x);
+            bool committed = ImGui::InputText(
+                "##nfname", m_imTouchNewFolderName,
+                sizeof(m_imTouchNewFolderName),
+                ImGuiInputTextFlags_EnterReturnsTrue);
+            bool create = ImGui::Button("Create", uiSz(110, 44));
+            ImGui::SameLine();
+            bool cancel = ImGui::Button("Cancel", uiSz(110, 44));
+            if (committed || create) {
+                if (m_imTouchNewFolderName[0] != '\0') {
+                    int newId = m_document->addFolder(m_imTouchNewFolderName);
+                    for (int bid : m_imTouchNewFolderBodies)
+                        m_document->setBodyFolder(bid, newId);
+                    markDirty();
+                }
+                m_imTouchNewFolderBodies.clear();
+                ImGui::CloseCurrentPopup();
+            } else if (cancel || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                m_imTouchNewFolderBodies.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
     }
 
     // ── Contextual tool bar — the same catalogue the modern layout's rail
