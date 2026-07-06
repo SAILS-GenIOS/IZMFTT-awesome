@@ -106,14 +106,14 @@ void Application::renderModernLayout() {
             ImGui::TextColored(touchui::textDim(), "/ %s", pn.c_str());
         }
 
-        // Right-aligned controls: [Finish, Discard,] Undo, Redo, [Keyboard,]
+        // Right-aligned controls: [Finish, Discard,] Undo, Redo,
         // Focus, ⋯. Finish/Discard appear in sketch mode — the two actions
         // that must never be hunted for.
         const float sp = 8.0f * s;
-        const bool showKb = materializr::touchMode();
-        // Square icon buttons in the right cluster: undo, redo, [keyboard].
-        // (The ⋯ overflow moved to the top-left.)
-        const int nSquare = showKb ? 3 : 2;
+        // Square icon buttons in the right cluster: undo, redo.
+        // (The ⋯ overflow moved to the top-left; the soft-keyboard toggle is
+        // gone — numeric fields raise the native keyboard on focus now.)
+        const int nSquare = 2;
         // Multi-Select toggle (the touch Ctrl stand-in): shown for 3D selection
         // and in sketch Select/move mode, hidden in the sketch draw tools where
         // adding to a selection is meaningless. Its old home was the bottom-left
@@ -231,16 +231,6 @@ void Application::renderModernLayout() {
         if (touchui::iconButton("redo", MZ_ICON_REDO, bh)) redoWithCascade();
         ImGui::EndDisabled();
         tip("Redo");
-
-        // Soft-keyboard toggle (the desktop menu bar's right-aligned item;
-        // there's no menu bar here). Touch mode only, same flag.
-        if (showKb) {
-            ImGui::SameLine(0.0f, sp);
-            ImGui::SetCursorPosY(cy);
-            if (touchui::iconButton("kb", MZ_ICON_KEYBOARD, bh))
-                m_softKeyboardForced = !m_softKeyboardForced;
-            tip("Toggle the on-screen keyboard");
-        }
 
         // Focus cycle: 0 = everything, 1 = side panel hidden, 2 = viewport
         // only (rail hidden too). One button, three positions.

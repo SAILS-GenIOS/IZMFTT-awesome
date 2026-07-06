@@ -19,20 +19,8 @@ void Application::renderMenuBar() {
         if (ImGui::BeginMenu("Edit")) { renderEditMenuItems(); ImGui::EndMenu(); }
         if (ImGui::BeginMenu("View")) { renderViewMenuItems(); ImGui::EndMenu(); }
         if (ImGui::BeginMenu("Help")) { renderHelpMenuItems(); ImGui::EndMenu(); }
-        // Touch: soft-keyboard toggle, right-aligned. Forces the system keyboard
-        // up so you can type into the focused field (rename, save, dimensions);
-        // tap again to dismiss. Check mark shows when it's forced on. (Window mode
-        // — immersive vs. windowed in a desktop dock — is automatic; see
-        // MaterializrActivity, so there's no toggle here.)
-        if (materializr::touchMode()) {
-            const char* kb = "Keyboard";
-            float btnW = ImGui::CalcTextSize(kb).x + ImGui::GetFrameHeight() +
-                         ImGui::GetStyle().ItemSpacing.x * 2.0f;
-            float x = ImGui::GetWindowWidth() - btnW;
-            if (x > ImGui::GetCursorPosX()) ImGui::SameLine(x);
-            if (ImGui::MenuItem(kb, nullptr, m_softKeyboardForced))
-                m_softKeyboardForced = !m_softKeyboardForced;
-        }
+        // (No soft-keyboard toggle: the numeric fields now raise the native
+        // keyboard on focus, so the manual force-toggle is redundant here.)
         ImGui::EndMainMenuBar();
     }
 }
