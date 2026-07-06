@@ -1,5 +1,6 @@
 #include "gl_common.h"
 #include "SectionView.h"
+#include "SectionCap.h"
 #include "../core/Document.h"
 
 #include <glm/gtc/type_ptr.hpp>
@@ -13,6 +14,7 @@
 #include <BRep_Tool.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Dir.hxx>
+#include <gp_Vec.hxx>
 #include <gp_Ax3.hxx>
 
 #include <cstdio>
@@ -37,12 +39,38 @@ void main() {
 }
 )";
 
+// Cap fill: the cross-section is planar (one normal for the whole cap), so a
+// flat shade off that normal is enough to read as solid cut material.
+static const char* s_capVertSource = R"(
+#version 330 core
+layout(location = 0) in vec3 a_position;
+uniform mat4 u_mvp;
+void main() {
+    gl_Position = u_mvp * vec4(a_position, 1.0);
+}
+)";
+
+static const char* s_capFragSource = R"(
+#version 330 core
+uniform vec3 u_color;
+uniform vec3 u_normal; // cut-plane normal (world)
+out vec4 fragColor;
+void main() {
+    vec3 L = normalize(vec3(0.4, 0.7, 0.6));
+    float d = 0.45 + 0.55 * abs(dot(normalize(u_normal), L));
+    fragColor = vec4(u_color * d, 1.0);
+}
+)";
+
 SectionView::SectionView() {}
 
 SectionView::~SectionView() {
     if (m_program) glDeleteProgram(m_program);
     if (m_vao) glDeleteVertexArrays(1, &m_vao);
     if (m_vbo) glDeleteBuffers(1, &m_vbo);
+    if (m_capProgram) glDeleteProgram(m_capProgram);
+    if (m_capVao) glDeleteVertexArrays(1, &m_capVao);
+    if (m_capVbo) glDeleteBuffers(1, &m_capVbo);
 }
 
 bool SectionView::initialize() {
@@ -77,6 +105,38 @@ bool SectionView::initialize() {
     glGenVertexArrays(1, &m_vao);
     glGenBuffers(1, &m_vbo);
 
+    // Cap fill program
+    unsigned int cvert = 0, cfrag = 0;
+    if (!compileShader(cvert, GL_VERTEX_SHADER, s_capVertSource)) return false;
+    if (!compileShader(cfrag, GL_FRAGMENT_SHADER, s_capFragSource)) {
+        glDeleteShader(cvert);
+        return false;
+    }
+    m_capProgram = glCreateProgram();
+    glAttachShader(m_capProgram, cvert);
+    glAttachShader(m_capProgram, cfrag);
+    glLinkProgram(m_capProgram);
+    glDeleteShader(cvert);
+    glDeleteShader(cfrag);
+
+    int capOk = 0;
+    glGetProgramiv(m_capProgram, GL_LINK_STATUS, &capOk);
+    if (!capOk) {
+        char log[512];
+        glGetProgramInfoLog(m_capProgram, 512, nullptr, log);
+        std::fprintf(stderr, "SectionView cap link error: %s\n", log);
+        glDeleteProgram(m_capProgram);
+        m_capProgram = 0;
+        return false;
+    }
+
+    m_capLocMVP = glGetUniformLocation(m_capProgram, "u_mvp");
+    m_capLocColor = glGetUniformLocation(m_capProgram, "u_color");
+    m_capLocNormal = glGetUniformLocation(m_capProgram, "u_normal");
+
+    glGenVertexArrays(1, &m_capVao);
+    glGenBuffers(1, &m_capVbo);
+
     return true;
 }
 
@@ -102,6 +162,7 @@ bool SectionView::isEnabled() const {
 
 void SectionView::update() {
     m_lines.clear();
+    m_caps.clear();
 
     if (!m_enabled || !m_document) return;
 
@@ -112,6 +173,13 @@ void SectionView::update() {
         gp_Dir normal = cuttingPlane.Axis().Direction();
         origin.Translate(gp_Vec(normal) * static_cast<double>(m_offset));
         cuttingPlane.SetLocation(origin);
+    }
+
+    {
+        gp_Dir cn = cuttingPlane.Axis().Direction();
+        m_capNormal = glm::vec3(static_cast<float>(cn.X()),
+                                static_cast<float>(cn.Y()),
+                                static_cast<float>(cn.Z()));
     }
 
     // Iterate all bodies and compute section curves
@@ -160,6 +228,13 @@ void SectionView::update() {
                     continue;
                 }
             }
+
+            // --- Cross-section cap ---
+            // Without a filled cap the clipped solid reads as a hollow shell.
+            CapMesh cap;
+            cap.color = m_document->getBodyColor(id);
+            if (computeSectionCap(shape, cuttingPlane, cap.positions))
+                m_caps.push_back(std::move(cap));
         } catch (...) {
             continue;
         }
@@ -167,7 +242,38 @@ void SectionView::update() {
 }
 
 void SectionView::render(const glm::mat4& view, const glm::mat4& projection) {
-    if (!m_enabled || m_lines.empty() || !m_program) return;
+    if (!m_enabled) return;
+
+    glm::mat4 mvpCap = projection * view;
+
+    // --- Filled caps first (depth-tested so walls in front still occlude) ---
+    if (m_capProgram && !m_caps.empty()) {
+        glUseProgram(m_capProgram);
+        glUniformMatrix4fv(m_capLocMVP, 1, GL_FALSE, glm::value_ptr(mvpCap));
+        glUniform3fv(m_capLocNormal, 1, glm::value_ptr(m_capNormal));
+
+        glEnable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE); // cap winding is not guaranteed toward camera
+
+        glBindVertexArray(m_capVao);
+        glBindBuffer(GL_ARRAY_BUFFER, m_capVbo);
+        for (const auto& cap : m_caps) {
+            glBufferData(GL_ARRAY_BUFFER,
+                         static_cast<GLsizeiptr>(cap.positions.size() * sizeof(float)),
+                         cap.positions.data(), GL_DYNAMIC_DRAW);
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+            glEnableVertexAttribArray(0);
+            glUniform3fv(m_capLocColor, 1, glm::value_ptr(cap.color));
+            glDrawArrays(GL_TRIANGLES, 0,
+                         static_cast<GLsizei>(cap.positions.size() / 3));
+        }
+        glBindVertexArray(0);
+    }
+
+    if (m_lines.empty() || !m_program) {
+        glUseProgram(0);
+        return;
+    }
 
     // Upload line data to VBO
     std::vector<float> vertices;

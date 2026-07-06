@@ -72,6 +72,7 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/io/ProjectRecovery.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Verbose.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/Unfold.cpp
+    ${CMAKE_SOURCE_DIR}/src/viewport/SectionCap.cpp
 )
 
 target_include_directories(materializr_core PUBLIC
@@ -121,6 +122,11 @@ target_link_libraries(materializr_core PUBLIC
 add_executable(test_document test_document.cpp)
 target_link_libraries(test_document PRIVATE materializr_core gtest gtest_main)
 add_test(NAME test_document COMMAND test_document)
+
+# test_section_cap — section-view cross-section cap geometry (issue #15)
+add_executable(test_section_cap test_section_cap.cpp)
+target_link_libraries(test_section_cap PRIVATE materializr_core gtest gtest_main)
+add_test(NAME test_section_cap COMMAND test_section_cap)
 
 # test_history
 add_executable(test_history test_history.cpp)

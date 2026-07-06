@@ -40,11 +40,28 @@ private:
     };
     std::vector<SectionLine> m_lines;
 
+    // Filled cross-section caps: without a cap a clipped solid looks hollow.
+    // One entry per intersected body, carrying its material colour.
+    struct CapMesh {
+        std::vector<float> positions; // x,y,z per vertex, TRIANGLES
+        glm::vec3 color;
+    };
+    std::vector<CapMesh> m_caps;
+    glm::vec3 m_capNormal = glm::vec3(0.0f, 0.0f, 1.0f); // cut-plane normal (world)
+
     unsigned int m_program = 0;
     unsigned int m_vao = 0;
     unsigned int m_vbo = 0;
     int m_locMVP = -1;
     int m_locColor = -1;
+
+    // Cap fill program (flat-shaded so the cut reads as solid material).
+    unsigned int m_capProgram = 0;
+    unsigned int m_capVao = 0;
+    unsigned int m_capVbo = 0;
+    int m_capLocMVP = -1;
+    int m_capLocColor = -1;
+    int m_capLocNormal = -1;
 
     bool compileShader(unsigned int& shader, unsigned int type, const char* source);
 };
