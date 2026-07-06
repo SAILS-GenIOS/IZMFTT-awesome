@@ -45,3 +45,9 @@ packaging/playstore/
 *.keystore
 keystore.properties
 android/keystore.properties
+# Build artifacts — never commit binaries; releases carry them as assets
+*.apk
+*.aab
+*.appimage
+dist-apk-*
+/dist/
