@@ -48,6 +48,21 @@ jobs:
       - name: Install dependencies
         run: brew install opencascade sdl2 dylibbundler
 
+      # Kernel-version guard. Every platform is pinned to OCCT 7.9.x (Android/
+      # Linux/Windows do it explicitly; macOS rides Homebrew's stable, which is
+      # 7.9.3 today). OCCT 8.0 hangs long-rod thread generation, so if Homebrew
+      # ever bumps opencascade to 8.x, FAIL LOUDLY here rather than silently
+      # shipping the broken kernel — the fix at that point is to source-build
+      # 7.9.3 on macOS like the other platforms do.
+      - name: Guard OpenCASCADE version (must stay 7.9.x)
+        run: |
+          OCCT_VER="$(brew list --versions opencascade | awk '{print $2}')"
+          echo "Homebrew opencascade: $OCCT_VER"
+          case "$OCCT_VER" in
+            7.9.*) echo "OK — on the pinned 7.9.x line" ;;
+            *) echo "::error::opencascade drifted to $OCCT_VER (expected 7.9.x). OCCT 8.0 hangs threads — source-build 7.9.3 instead of trusting brew latest."; exit 1 ;;
+          esac
+
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix)"
 

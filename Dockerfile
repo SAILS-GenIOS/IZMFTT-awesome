@@ -2,31 +2,55 @@ FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Build deps. OCCT is NOT taken from apt (Ubuntu 24.04 ships 7.6.3) — it is
+# compiled from source below so every platform runs the SAME kernel (7.9.3):
+# matching Android/macOS and pulling Windows off vcpkg's 8.0 (which hangs long-
+# rod thread generation). fontconfig + the X11 dev headers are OCCT build-deps
+# (Font_FontMgr includes fontconfig unconditionally).
 RUN apt-get update && apt-get install -y \
-    build-essential cmake git \
-    libocct-data-exchange-dev \
-    libocct-draw-dev \
-    libocct-foundation-dev \
-    libocct-modeling-algorithms-dev \
-    libocct-modeling-data-dev \
-    libocct-visualization-dev \
-    libgl-dev libxrandr-dev libxinerama-dev \
-    libxcursor-dev libxi-dev libxkbcommon-dev \
-    libwayland-dev pkg-config \
+    build-essential cmake git wget ca-certificates \
+    libfreetype-dev libfontconfig1-dev \
+    libgl-dev libglu1-mesa-dev \
+    libx11-dev libxext-dev libxmu-dev libxt-dev \
+    libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+    libxkbcommon-dev libwayland-dev pkg-config \
     libsdl2-dev \
     libcurl4-openssl-dev \
     zlib1g-dev \
-    file patchelf wget fuse libfuse2 \
+    file patchelf fuse libfuse2 \
     imagemagick \
     zsync \
     && rm -rf /var/lib/apt/lists/*
 
+# ─── OpenCASCADE 7.9.3 from source (shared) -> /usr/local ────────────────────
+# Pinned tag + sha256 (identical to android/scripts/setup-deps.sh) for supply-
+# chain integrity. Modules mirror the old apt set minus Draw (Tcl/Tk); FreeType
+# ON for the Text tool's Font_BRepFont; heavy optional 3rd-parties OFF to stay
+# lean. Adds ~30 min to a cold Linux build (no distro OCCT anymore).
+ARG OCCT_TAG=V7_9_3
+ARG OCCT_SHA256=5ecf094ec6b12d5413dfb851d8c3590c354058aee556e32e408bdfbf8c357d57
+RUN wget -q "https://github.com/Open-Cascade-SAS/OCCT/archive/refs/tags/${OCCT_TAG}.tar.gz" -O /tmp/occt.tar.gz \
+    && echo "${OCCT_SHA256}  /tmp/occt.tar.gz" | sha256sum -c - \
+    && mkdir -p /tmp/occt && tar -xzf /tmp/occt.tar.gz -C /tmp/occt --strip-components=1 \
+    && cmake -S /tmp/occt -B /tmp/occt-build \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DBUILD_LIBRARY_TYPE=Shared \
+        -DBUILD_MODULE_Draw=OFF -DBUILD_DOC_Overview=OFF -DBUILD_SAMPLES_QT=OFF \
+        -DUSE_FREETYPE=ON -DUSE_TK=OFF -DUSE_TCL=OFF \
+        -DUSE_FREEIMAGE=OFF -DUSE_TBB=OFF -DUSE_VTK=OFF -DUSE_RAPIDJSON=OFF \
+        -DUSE_OPENVR=OFF -DUSE_DRACO=OFF -DUSE_FFMPEG=OFF \
+    && cmake --build /tmp/occt-build --target install -j"$(nproc)" \
+    && ldconfig \
+    && rm -rf /tmp/occt /tmp/occt-build /tmp/occt.tar.gz
+
 WORKDIR /src
 COPY . .
 
-# Build the project
+# Build the project against the source-built OCCT in /usr/local (MZR_OCCT_PREFIX
+# routes CMake to the clean from-source config, skipping the Debian apt path).
 RUN mkdir -p build && cd build \
     && cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
+        -DMZR_OCCT_PREFIX=/usr/local \
     && make -j$(nproc)
 
 # Download appimagetool
@@ -50,8 +74,9 @@ RUN cp /src/build/materializr /AppDir/usr/bin/materializr
 # runtime via the `<exe>/../share/materializr/fonts/` candidate. ~1.4 MB.
 RUN cp /src/assets/fonts/*.ttf /AppDir/usr/share/materializr/fonts/ 2>/dev/null || true
 
-# Copy OCCT + TBB + Freetype shared libs (follow symlinks, any arch)
-RUN find /usr/lib -name "libTK*.so*" -o -name "libtbb*.so*" -o -name "libfreetype.so*" \
+# Copy OCCT + TBB + Freetype shared libs (follow symlinks, any arch). OCCT now
+# lives in /usr/local/lib (source build); freetype/fontconfig stay in /usr/lib.
+RUN find /usr/lib /usr/local/lib -name "libTK*.so*" -o -name "libtbb*.so*" -o -name "libfreetype.so*" \
     | while read lib; do cp -L "$lib" /AppDir/usr/lib/ 2>/dev/null || true; done
 
 # Bundle the binary's FULL shared-lib closure, minus the system layer that

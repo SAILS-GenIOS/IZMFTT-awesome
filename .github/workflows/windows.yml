@@ -55,11 +55,15 @@ jobs:
             -Password "${{ secrets.GITHUB_TOKEN }}"
           & $nuget setapikey "${{ secrets.GITHUB_TOKEN }}" -Source "$env:NUGET_FEED_URL"
 
-      - name: Install dependencies (OpenCASCADE + GLEW + SDL2) via vcpkg
+      - name: Install dependencies (OpenCASCADE 7.9.3 pinned + GLEW + SDL2) via vcpkg
         shell: pwsh
         run: |
-          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install `
-            opencascade:x64-windows glew:x64-windows curl:x64-windows sdl2:x64-windows
+          # Manifest mode (vcpkg.json at the repo root) pins opencascade to
+          # 7.9.3. Refresh the manifest baseline to THIS runner's vcpkg checkout
+          # so the override resolves regardless of how the pre-installed vcpkg
+          # tracks upstream, then install into ./vcpkg_installed.
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" x-update-baseline
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install --triplet x64-windows
 
       - name: Configure
         shell: pwsh
@@ -67,6 +71,7 @@ jobs:
           cmake -B build -S . `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DVCPKG_MANIFEST_MODE=ON `
             -DBUILD_TESTS=OFF
 
       - name: Build
@@ -84,7 +89,8 @@ jobs:
           # Runtime DLLs: vcpkg copies most next to the exe; also pull the full
           # set from the vcpkg install tree to be safe (a few extras don't hurt).
           Copy-Item "$($exe.Directory.FullName)/*.dll" $stage/ -ErrorAction SilentlyContinue
-          Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*.dll" $stage/ -ErrorAction SilentlyContinue
+          # Manifest mode installs into ./vcpkg_installed (not the global tree).
+          Copy-Item "vcpkg_installed/x64-windows/bin/*.dll" $stage/ -ErrorAction SilentlyContinue
           # Bundled fonts (UI font + the sketch Text tool's picker) — the app
           # resolves `<exe>/assets/fonts/` in its candidate list.
           Copy-Item -Recurse assets $stage/assets

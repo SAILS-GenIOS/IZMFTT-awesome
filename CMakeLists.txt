@@ -95,8 +95,18 @@ if(WIN32 OR APPLE)
     # packages handled in the else branch). The Homebrew config lives under the brew
     # prefix; pass -DCMAKE_PREFIX_PATH="$(brew --prefix)" if CMake doesn't find it.
     find_package(OpenCASCADE CONFIG REQUIRED)
+elseif(DEFINED MZR_OCCT_PREFIX)
+# Linux, source-built OCCT at a custom prefix (the release AppImage path — the
+# Dockerfile compiles OCCT 7.9.3 from source so every platform runs the same
+# kernel version, rather than whatever the distro's apt ships). A from-source
+# build exports a clean CMake config with correct paths and no broken libtbb
+# symlinks, so it uses the same clean find_package the Windows/macOS branch
+# does — none of the Debian path-patching below applies.
+find_package(OpenCASCADE CONFIG REQUIRED
+    PATHS "${MZR_OCCT_PREFIX}/lib/cmake/opencascade" NO_DEFAULT_PATH)
 else()
-# Linux: work around missing libtbb-dev symlinks by patching cmake files locally.
+# Linux (distro apt OCCT — local dev convenience): work around missing
+# libtbb-dev symlinks by patching cmake files locally.
 # Auto-detect the OCCT cmake directory (differs between aarch64/x86_64).
 file(GLOB_RECURSE _occt_config_search "/usr/lib/*/cmake/opencascade/OpenCASCADEConfig.cmake")
 if(_occt_config_search)
