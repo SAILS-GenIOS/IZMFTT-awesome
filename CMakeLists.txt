@@ -283,7 +283,6 @@ add_executable(materializr
     src/ui/PropertiesPanel.cpp
     src/ui/MeasureTool.cpp
     src/ui/VariablePanel.cpp
-    src/ui/DimensionInput.cpp
     src/ui/MaterialPanel.cpp
     src/ui/DrawingView.cpp
     src/ui/VersionPanel.cpp
