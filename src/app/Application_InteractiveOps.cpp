@@ -1456,6 +1456,32 @@ void Application::beginPushPull() {
             t.profile = TopoDS::Face(e.shape);
             if (t.profile.IsNull()) continue;
             m_pushPullTargets.push_back(t);
+        } else if (e.type == SelectionType::Sketch && e.sketchId >= 0) {
+            // Whole-sketch push/pull (selected from the Items panel, no specific
+            // region): push/pull EVERY region of the sketch. Mirrors the
+            // SketchRegion branch above, per region — so a body-attached sketch
+            // picked from the panel edits its host body, matching Extrude's
+            // whole-sketch behaviour. The rail only offers Push here for an
+            // attached sketch, so sourceBodyId resolves to the real host.
+            ensureSketchSourceFace(e.sketchId);
+            auto sketch = m_document->getSketch(e.sketchId);
+            if (!sketch) continue;
+            auto regions = sketch->buildRegions();
+            for (int ri = 0; ri < static_cast<int>(regions.size()); ++ri) {
+                if (regions[ri].face.IsNull()) continue;
+                PushPullTarget t;
+                t.sketchId = e.sketchId;
+                t.regionIndex = ri;
+                t.sourceBodyId = sketch->isDetachedFromBody()
+                                     ? -1
+                                     : sketch->getSourceBody();
+                t.profile = regions[ri].face;
+                if (t.sourceBodyId < 0 && !sketch->isDetachedFromBody()) {
+                    int host = findBodyUnderRegion(t.profile, sketch->getPlane());
+                    if (host >= 0) t.sourceBodyId = host;
+                }
+                m_pushPullTargets.push_back(t);
+            }
         }
     }
 

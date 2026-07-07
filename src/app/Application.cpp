@@ -5443,6 +5443,7 @@ void Application::run() {
                 static bool s_resizeActive = false;
                 static bool s_canEditDiameter = false;
                 static bool s_frozenRound = false;
+                static bool s_selSketchAttached = false;
                 const unsigned selRev  = m_selection->revision();
                 const unsigned histRev = m_history->revision();
                 if (selRev != s_selRev || histRev != s_histRev ||
@@ -5490,9 +5491,28 @@ void Application::run() {
                             }
                         } catch (...) {}
                     }
+                    // Sketch attachment gate: is any selected sketch / region
+                    // still driving a body? Push/Pull is offered for those (it
+                    // edits the host body); a standalone sketch offers Extrude
+                    // instead (a new body). A detached sketch counts as
+                    // standalone — it was deliberately unlinked (issue #21).
+                    s_selSketchAttached = false;
+                    for (const auto& e : m_selection->getSelection()) {
+                        if ((e.type == SelectionType::Sketch ||
+                             e.type == SelectionType::SketchRegion) &&
+                            e.sketchId >= 0) {
+                            auto sk = m_document->getSketch(e.sketchId);
+                            if (sk && sk->getSourceBody() >= 0 &&
+                                !sk->isDetachedFromBody()) {
+                                s_selSketchAttached = true;
+                                break;
+                            }
+                        }
+                    }
                 }
                 m_toolbar->setCanEditDiameter(s_canEditDiameter);
                 m_toolbar->setSelectedFaceFrozenRound(s_frozenRound);
+                m_toolbar->setSelectedSketchAttached(s_selSketchAttached);
             }
             m_toolbar->setShowTooltips(m_showToolbarTooltips);
             // Mirror the live inference level (Full/Reduced/Off) so the sketch
