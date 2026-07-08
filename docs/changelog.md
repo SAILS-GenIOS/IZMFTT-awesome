@@ -3,6 +3,39 @@
 All notable changes to Materializr are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow SemVer.
 
+## [1.4.3] — 2026-07-07
+
+Rolls up the whole `1.4.0 … 1.4.3` line (the intermediate patch releases shipped
+version-only bumps). Headline changes since **1.3.0**:
+
+### Highlights
+
+- **One OpenCASCADE kernel everywhere — 7.9.3.** Desktop, Windows, macOS and
+  Android now all build against the same OCCT 7.9.3 (Windows was pulled off a
+  broken 8.0.0 that hung long-rod thread generation). More consistent
+  boolean/fillet behaviour across platforms.
+- **Section View gets a real cross-section cap.** Clipped bodies render solid at
+  the cut plane instead of hollow (#15).
+- **Per-ABI Android packaging.** Separate arm64-v8a and x86_64 APKs so Intel
+  tablets/Chromebooks get a native build.
+- **Touch (im-touch) polish.** The operation popups (Push/Pull, Extrude,
+  Fillet/Chamfer, Move Face, sketch dimensions) are unified into one **movable**
+  dialog you can drag by a slim grip, the on-screen keyboard now rises when you
+  **tap** a value field, and the rail shows **Push/Pull vs Extrude** based on
+  whether the selected sketch drives a body.
+
+### Fixed
+
+- **Duplicated sketches are now independent** of the original's body — editing,
+  push/pull or extrude on a copy builds a new body instead of retro-modifying
+  the source, and the stray selection fill is gone (#21).
+- **Soft keyboard on touch** now appears when you tap Push/Pull, Extrude and
+  Fillet/Chamfer value fields (#22).
+- **Snap to grid** is honored by Extrude, Push/Pull and Move Face (the distance
+  and in-plane slide snap to the grid step); Fillet/Chamfer stay free (#24).
+- macOS "no file-dialog program found" on Import/Export; overlapping bodies
+  z-fighting; assorted sketch/history reload fixes.
+
 ## [1.3.0] — 2026-07-02
 
 The stable rollup of the whole `1.3.0-beta.1 … beta.11` line, plus one fix that
