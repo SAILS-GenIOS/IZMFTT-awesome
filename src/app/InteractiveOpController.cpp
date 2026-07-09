@@ -109,22 +109,28 @@ void InteractiveOpController::cleanup() {
 void InteractiveOpController::renderPanel(const IopContext& ctx) {
     if (!m_active) return;
 
-    // Pin the panel's RIGHT edge a fixed margin inside the viewport (pivot 1,0)
+    // Seed the panel's RIGHT edge a fixed margin inside the viewport (pivot 1,0)
     // and let it grow leftward. The panel is AlwaysAutoResize and, on touch, its
     // padded content is wider than panelWidth() — anchoring the LEFT edge by a
     // fixed offset (winWidth - w - 20) let that extra width run off the right
     // edge on the tablet. Right-anchoring keeps it on-screen at any scale.
+    //
+    // ImGuiCond_Appearing + no NoMove flag: same as the Pattern / Edit-Diameter
+    // popups — seed the position on first appearance, then let the user drag the
+    // panel somewhere convenient (it otherwise landed over the top-left menu in
+    // im-touch with no way to move it — issue #29). Dragging the panel body
+    // (there's no title bar) moves it.
     const float w = panelWidth();
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x +
                                        ImGui::GetWindowWidth() - 20.0f,
                                    ImGui::GetWindowPos().y + 50.0f),
-                            ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-    ImGui::SetNextWindowSize(ImVec2(w, 0));
+                            ImGuiCond_Appearing, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(w, 0), ImGuiCond_Appearing);
     char id[64];
     std::snprintf(id, sizeof(id), "##iop_%s", title());
     ImGui::Begin(id, nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoSavedSettings |
                  ImGuiWindowFlags_AlwaysAutoResize);
 
     ImGui::TextColored(materializr::accentText(), "%s", title());
