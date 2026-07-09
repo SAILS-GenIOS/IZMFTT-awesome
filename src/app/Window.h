@@ -47,6 +47,11 @@ public:
     // from the display DPI so fonts and widgets are finger-sized on a tablet.
     float uiScale() const;
 
+    // Explicit desktop UI-scale preference (Settings → Appearance, Linux only).
+    // > 0 overrides the platform default on Linux desktop; 0 = follow default.
+    // Set before the font atlas is built (a change takes effect on restart).
+    void setUiScaleOverride(float s) { m_uiScaleOverride = (s > 0.0f ? s : 0.0f); }
+
     // Raise/lower the soft keyboard to match ImGui's WantTextInput. The
     // SDL2 backend no longer calls SDL_StartTextInput itself, which is what shows
     // the keyboard on Android — so we drive it each frame. No-op on desktop.
@@ -103,6 +108,7 @@ public:
 
 private:
     SDL_Window* m_window = nullptr;
+    float m_uiScaleOverride = 0.0f;  // desktop UI-scale pref (Linux); 0 = default
     void* m_glContext = nullptr;
     bool m_shouldClose = false;
     int m_width;

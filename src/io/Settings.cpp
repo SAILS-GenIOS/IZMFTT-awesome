@@ -63,6 +63,7 @@ const char* uiLayoutName(UiLayout l) {
 // rules (unknown keys ignored, missing keys keep their defaults).
 void applyKv(const std::map<std::string, std::string>& kv, AppSettings& s) {
     readInt (kv, "theme",                s.theme);
+    readFloat(kv, "desktopUiScale",      s.desktopUiScale);
     readBool(kv, "touchMode",            s.touchMode);
     // Interface layout. Legacy first (older builds wrote the coupled bool
     // pair imTouchUi/imTouchLite, where "im-touch on + lite" is today's
@@ -304,6 +305,7 @@ bool SettingsIO::save(const std::string& path, const AppSettings& s) {
     ofs << "# Materializr settings. Unknown keys are ignored; missing keys use\n"
            "# defaults. Safe to edit by hand or to carry across versions.\n";
     ofs << "theme = "               << s.theme               << "\n";
+    ofs << "desktopUiScale = "      << s.desktopUiScale      << "\n";
     ofs << "touchMode = "           << (s.touchMode ? "true" : "false") << "\n";
     ofs << "uiLayout = "            << uiLayoutName(s.uiLayout) << "\n";
     ofs << "imTouchTree = "         << (s.imTouchTree ? "true" : "false") << "\n";
@@ -400,6 +402,7 @@ bool SettingsIO::exportJson(const std::string& path, const AppSettings& s) {
     // loader and applyKv, so files round-trip through either path.
     ofs << "{\n";
     ofs << "  \"theme\": "                   << s.theme                 << ",\n";
+    ofs << "  \"desktopUiScale\": "          << s.desktopUiScale        << ",\n";
     ofs << "  \"touchMode\": "               << (s.touchMode ? "true" : "false") << ",\n";
     ofs << "  \"uiLayout\": \""              << uiLayoutName(s.uiLayout) << "\",\n";
     ofs << "  \"orbitButton\": "             << s.orbitButton           << ",\n";

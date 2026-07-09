@@ -83,7 +83,7 @@ public:
     // known-safe defaults (MSAA off, mesh quality Low, default lights,
     // autosave off, auto-open-last-project off) and writing them out, so the
     // *next* normal launch is recovered without further action.
-    explicit Application(bool safeMode = false);
+    explicit Application(bool safeMode = false, float uiScaleOverride = 0.0f);
     ~Application();
 
     void run();
@@ -91,6 +91,8 @@ public:
 private:
     void initImGui();
     void shutdownImGui();
+    // Restore the default panel/dock layout live (Settings → Appearance).
+    void resetLayout();
     // Locate a TTF from assets/fonts across AppImage / dev / Windows-zip
     // layouts; "" when missing. Used by the UI font load + the Text tool.
     std::string resolveBundledFont(const std::string& fname) const;
@@ -741,6 +743,14 @@ private:
 #else
     bool m_touchMode = false;
 #endif
+    // Desktop UI scale preference (Linux HiDPI; Settings → Appearance). Staged
+    // value for the Settings dialog + persistence; applied at startup via
+    // Window::setUiScaleOverride (a change takes effect on restart). 1.0 = Low.
+    float m_desktopUiScale = 1.0f;
+    // --ui-scale / --hidpi command-line override (0 = none). Wins over the
+    // saved setting for this launch — an escape hatch when the UI is too small
+    // to read to change it in Settings.
+    float m_cliUiScale = 0.0f;
 
     // Interface layout (see UiLayout in io/Settings.h and src/app/layout/).
     // Live-switchable: read every frame by run()/renderViewport(); persisted

@@ -21,6 +21,13 @@ enum class UiLayout { Classic = 0, Modern = 1, ImTouch = 2 };
 // key is missing or unreadable in the settings file.
 struct AppSettings {
     int  theme              = 0;    // 0 = Dark, 1 = Light
+    // Desktop interface scale on Linux (Settings → Appearance → Interface
+    // scale). Linux/Xwayland X11 clients get no compositor-side HiDPI scaling,
+    // so on a high-DPI panel the UI renders tiny; this lets the user pick.
+    // 1.0 = Low DPI (default, unchanged), 2.0 = High DPI. Applied at startup
+    // (fonts bake at 15×scale), so a change needs a restart. Ignored on
+    // Windows/macOS (they scale via DPI-awareness / Retina framebuffer).
+    float desktopUiScale    = 1.0f;
     // Touch mode: large UI + touch-gesture interaction. Defaults on for Android,
     // off elsewhere; a saved setting so a tablet with a mouse/keyboard can run
     // the desktop model. Drives materializr::setTouchMode() at startup.

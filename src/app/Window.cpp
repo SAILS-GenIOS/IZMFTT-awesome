@@ -703,9 +703,17 @@ float Window::uiScale() const {
     if (s < 1.0f) s = 1.0f;     // never shrink below 100%
     if (s > 3.0f) s = 3.0f;     // 300% cap (Windows tops out ~250% on laptops)
     return s;
+#elif defined(__linux__)
+    // Linux desktop: the app is always an X11/Xwayland client (SDL forced to
+    // x11), and no compositor-side scaling reaches it, so on a HiDPI panel the
+    // native-pixel framebuffer renders the UI tiny. Auto-detection is
+    // unreliable across X11/Xwayland/GNOME/KDE (see issue #26), so the user
+    // picks the scale in Settings → Appearance. 0 = Low DPI (unchanged 1.0).
+    if (m_uiScaleOverride > 0.0f) return m_uiScaleOverride;
+    return 1.0f;
 #else
-    // Linux / macOS handle HiDPI through the drawable-size / DisplayFramebufferScale
-    // path (Retina, Wayland fractional scaling), so the UI is already right at 1.0.
+    // macOS handles HiDPI through the drawable-size / DisplayFramebufferScale
+    // path (Retina), so the UI is already right at 1.0.
     return 1.0f;
 #endif
 }

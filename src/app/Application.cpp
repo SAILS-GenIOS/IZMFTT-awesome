@@ -168,7 +168,8 @@ namespace materializr { namespace force_link { void linkAll(); } }
 
 namespace materializr {
 
-Application::Application(bool safeMode) : m_safeMode(safeMode) {
+Application::Application(bool safeMode, float uiScaleOverride)
+    : m_safeMode(safeMode), m_cliUiScale(uiScaleOverride > 0.0f ? uiScaleOverride : 0.0f) {
     m_window = std::make_unique<Window>(1600, 900, "Materializr");
     m_viewport = std::make_unique<Viewport>();
     m_grid = std::make_unique<Grid>();
@@ -263,6 +264,15 @@ Application::Application(bool safeMode) : m_safeMode(safeMode) {
     {
         AppSettings early = SettingsIO::load(SettingsIO::defaultPath());
         materializr::setTouchMode(early.touchMode);
+        // Desktop UI scale (Linux HiDPI, Settings → Appearance) must be known
+        // before the font atlas is baked in initImGui() below — it's applied at
+        // the window level so uiScale() (which fonts + style read) returns it.
+        // A --ui-scale / --hidpi command-line value wins over the saved setting
+        // (the escape hatch for "UI too small to read to change it in Settings").
+        if (m_window) {
+            float scale = m_cliUiScale > 0.0f ? m_cliUiScale : early.desktopUiScale;
+            m_window->setUiScaleOverride(scale);
+        }
     }
     // Scale the Tools-panel button heights to match the HiDPI font (touch mode),
     // otherwise 30px buttons under a 2x font overlap. 1.0 in desktop mode.
@@ -415,6 +425,60 @@ DockSpace       ID=0x08BD597D Window=0x1BBC0F80 Pos=0,19 Size=1600,881 Split=X
       DockNode  ID=0x00000006 Parent=0x00000002 SizeRef=148,370 Selected=0x8C72BEA8
 )";
 
+// Build the default dock layout, scaling the side-panel WIDTHS by the desktop
+// UI scale so on HiDPI (issue #26) the Tools column and right panels stay wide
+// enough for the enlarged text instead of truncating it. Only the horizontal
+// splits grow (the central viewport shrinks to compensate); heights and the
+// 1600×881 canvas are unchanged. At scale ≤ 1 this returns s_defaultLayout
+// verbatim. Panel growth is capped at 2× so an extreme --ui-scale can't squash
+// the viewport. Note: only applied when writing a FRESH layout (no imgui.ini) —
+// an existing saved layout keeps its widths.
+static std::string defaultLayoutScaled(float scale) {
+    if (scale <= 1.01f) return s_defaultLayout;
+    const float ps = scale > 2.0f ? 2.0f : scale;   // cap panel growth
+    const int toolsW  = static_cast<int>(std::lround(175.0f * ps));
+    const int rightW  = static_cast<int>(std::lround(299.0f * ps));
+    const int central = 1600 - toolsW - rightW;      // viewport (≥652 at 2×)
+    const int restW   = 1600 - toolsW;               // central + right column
+    const int rightX  = 1600 - rightW;               // right column start x
+    const int vpX     = toolsW + 2;                  // viewport start x
+    char buf[2200];
+    std::snprintf(buf, sizeof(buf),
+"[Window][WindowOverViewport_11111111]\nPos=0,19\nSize=1600,881\nCollapsed=0\n\n"
+"[Window][Debug##Default]\nPos=60,60\nSize=400,400\nCollapsed=0\n\n"
+"[Window][Viewport]\nPos=%d,19\nSize=%d,881\nCollapsed=0\nDockId=0x00000001,0\n\n"
+"[Window][Tools]\nPos=0,19\nSize=%d,881\nCollapsed=0\nDockId=0x00000003,0\n\n"
+"[Window][Interactions]\nPos=%d,19\nSize=%d,175\nCollapsed=0\nDockId=0x00000007,0\n\n"
+"[Window][Items]\nPos=%d,197\nSize=%d,339\nCollapsed=0\nDockId=0x00000008,0\n\n"
+"[Window][History]\nPos=%d,538\nSize=%d,362\nCollapsed=0\nDockId=0x00000006,1\n\n"
+"[Window][Properties]\nPos=%d,538\nSize=%d,362\nCollapsed=0\nDockId=0x00000006,0\n\n"
+"[Docking][Data]\n"
+"DockSpace       ID=0x08BD597D Window=0x1BBC0F80 Pos=0,19 Size=1600,881 Split=X\n"
+"  DockNode      ID=0x00000003 Parent=0x08BD597D SizeRef=%d,900 Selected=0x18A5FDB9\n"
+"  DockNode      ID=0x00000004 Parent=0x08BD597D SizeRef=%d,900 Split=X\n"
+"    DockNode    ID=0x00000001 Parent=0x00000004 SizeRef=%d,900 CentralNode=1 Selected=0xC450F867\n"
+"    DockNode    ID=0x00000002 Parent=0x00000004 SizeRef=%d,900 Split=Y Selected=0x933ECD57\n"
+"      DockNode  ID=0x00000005 Parent=0x00000002 SizeRef=148,528 Split=Y Selected=0x933ECD57\n"
+"        DockNode ID=0x00000007 Parent=0x00000005 SizeRef=148,175 HiddenTabBar=1\n"
+"        DockNode ID=0x00000008 Parent=0x00000005 SizeRef=148,348 Selected=0x933ECD57\n"
+"      DockNode  ID=0x00000006 Parent=0x00000002 SizeRef=148,370 Selected=0x8C72BEA8\n",
+        vpX, central, toolsW, rightX, rightW, rightX, rightW, rightX, rightW,
+        rightX, rightW, toolsW, restW, central, rightW);
+    return std::string(buf);
+}
+
+void Application::resetLayout() {
+    // Restore the default panel arrangement live (no restart) — the recovery
+    // for a panel dragged off-screen or a docking mess, and it re-applies the
+    // DPI-scaled widths so a scale change takes proper effect too. Loading a
+    // full ini string into ImGui rebuilds every window's dock assignment; we
+    // also flush it to disk so it survives a crash.
+    std::string layout = defaultLayoutScaled(m_window ? m_window->uiScale() : 1.0f);
+    ImGui::LoadIniSettingsFromMemory(layout.c_str(), layout.size());
+    if (const char* p = ImGui::GetIO().IniFilename)
+        ImGui::SaveIniSettingsToDisk(p);
+}
+
 // Where to read/write imgui.ini. On Linux we keep the relative "imgui.ini" path
 // (the AppImage runs from a user-writable cwd, which is the existing behaviour
 // the user prefers). On Windows the exe usually launches from Program Files,
@@ -527,7 +591,11 @@ void Application::initImGui() {
         }
         if (needDefault) {
             if (std::FILE* f = std::fopen(iniPath, "w")) {
-                std::fputs(s_defaultLayout, f);
+                // Scale the side-panel widths to the desktop UI scale so HiDPI
+                // panels aren't too narrow for the enlarged text (issue #26).
+                std::string layout = defaultLayoutScaled(
+                    m_window ? m_window->uiScale() : 1.0f);
+                std::fputs(layout.c_str(), f);
                 std::fclose(f);
             }
         }
@@ -1252,6 +1320,11 @@ void Application::loadAppSettings() {
             m_uiLayout = static_cast<UiLayout>(idx);
             saveAppSettings();
         });
+    // Same bridge for the desktop UI scale, so the first-run picker can set it
+    // (restart-to-apply — it only bakes into the fonts at startup).
+    materializr::bindUiScaleBridge(
+        [this]() { return m_desktopUiScale; },
+        [this](float s) { m_desktopUiScale = s; saveAppSettings(); });
 
     // Welcome screen: every launch until the user becomes a Supporter.
     // Suppressed by --safe-mode — no asking for coffee while the user is
@@ -1297,6 +1370,7 @@ void Application::meshQualityParams(float& deflection, float& angularDeflection)
 AppSettings Application::currentSettings() const {
     AppSettings s;
     s.theme = (m_themeManager->getTheme() == Theme::Light) ? 1 : 0;
+    s.desktopUiScale = m_desktopUiScale;
     s.touchMode = m_touchMode;
     s.uiLayout = m_uiLayout;
     s.imTouchTree = m_imTouchTree;
@@ -1367,6 +1441,7 @@ void Application::applyAppSettings(const AppSettings& s) {
     // reads a consistent value within the run.
     materializr::setTouchMode(s.touchMode);
     m_touchMode = s.touchMode;   // staged value for the Settings dialog
+    m_desktopUiScale = s.desktopUiScale;  // staged; applied at next startup
     m_uiLayout = s.uiLayout;     // interface layout — live, no restart needed
     m_imTouchTree = s.imTouchTree;
     m_imTouchTimeline = s.imTouchTimeline;

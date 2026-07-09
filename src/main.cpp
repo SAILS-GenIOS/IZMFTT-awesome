@@ -4,6 +4,7 @@
 #include <OSD.hxx>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 
@@ -49,6 +50,7 @@ struct CliOptions {
     bool wantHelp = false;
     bool verbose  = false;
     const char* logPath = "/tmp/materializr.log";
+    float uiScale = 0.0f;   // desktop UI scale override; 0 = use the saved setting
 };
 
 CliOptions parseArgs(int argc, char* argv[]) {
@@ -66,6 +68,11 @@ CliOptions parseArgs(int argc, char* argv[]) {
         } else if (std::strcmp(a, "--log") == 0 && i + 1 < argc) {
             o.verbose = true;
             o.logPath = argv[++i];
+        } else if ((std::strcmp(a, "--ui-scale") == 0 ||
+                    std::strcmp(a, "--scale") == 0) && i + 1 < argc) {
+            o.uiScale = static_cast<float>(std::atof(argv[++i]));
+        } else if (std::strcmp(a, "--hidpi") == 0) {
+            o.uiScale = 2.0f;   // shortcut for the common high-DPI case
         }
     }
     return o;
@@ -94,6 +101,14 @@ void printHelp() {
         "  --log <path>\n"
         "      Implies --verbose and writes the log to <path> instead of the\n"
         "      default /tmp/materializr.log.\n"
+        "\n"
+        "  --ui-scale <n> | --scale <n>\n"
+        "      Desktop interface scale (Linux HiDPI): 1.0 = normal, 2.0 = 2x.\n"
+        "      An escape hatch when the UI is too small to read to change it in\n"
+        "      Settings. Overrides the saved Appearance setting for this launch.\n"
+        "\n"
+        "  --hidpi\n"
+        "      Shortcut for --ui-scale 2.0.\n"
         "\n"
         "  -h, --help\n"
         "      Print this help and exit.\n";
@@ -135,7 +150,7 @@ int main(int argc, char* argv[]) {
 #endif
 
     try {
-        materializr::Application app(opts.safeMode);
+        materializr::Application app(opts.safeMode, opts.uiScale);
         app.run();
     } catch (const std::exception& e) {
         std::cerr << "Fatal error: " << e.what() << std::endl;
