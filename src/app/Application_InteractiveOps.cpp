@@ -34,6 +34,8 @@
 #include <future>
 #include "modeling/PatternOp.h"
 #include "modeling/LoftOp.h"
+#include "modeling/GuidedLoftOp.h"
+#include "modeling/BoundaryFillOp.h"
 #include "modeling/ConstructionPlaneOp.h"
 #include "modeling/ConstructionAxisOp.h"
 #include <Geom_Plane.hxx>
@@ -2534,15 +2536,52 @@ void Application::cancelPattern() {
 //
 // LoftPlugin walks the selection and, when 2+ distinct sketches are present,
 // fires requestInteractiveOp("Loft"). The main frame loop dispatches that to
-// beginLoft(), which snapshots the two profile wires (the outer wire of each
-// sketch's first region) and opens the popup. updateLoft re-pushes a preview
-// LoftOp each frame the user changes a toggle, commitLoft leaves the final
-// op on history, cancelLoft undoes the preview.
+// beginLoft(), which snapshots one profile section per selected sketch (the
+// outer wire of each sketch's outermost region, in click order — that order
+// is the skinning order) and opens the popup. updateLoft re-pushes a preview
+// LoftOp each frame the user changes a toggle / flips / reorders a section,
+// commitLoft leaves the final op on history, cancelLoft undoes the preview.
+
+// The outermost closed region of a sketch (largest outer-wire bbox) plus its
+// hole wires — shared by Loft and Boundary Fill. Concentric profiles decompose
+// into multiple regions; taking the outermost keeps the holes as channels
+// instead of grabbing the inner disk.
+static TopoDS_Wire outermostRegionWire(materializr::Sketch* sk,
+                                       std::vector<TopoDS_Wire>& holesOut,
+                                       bool* fromRegionOut = nullptr) {
+    holesOut.clear();
+    if (fromRegionOut) *fromRegionOut = false;
+    if (!sk) return {};
+    auto regions = sk->buildRegions();
+    if (!regions.empty()) {
+        size_t best = 0;
+        double bestDiag = -1.0;
+        for (size_t i = 0; i < regions.size(); ++i) {
+            if (regions[i].outerWire.IsNull()) continue;
+            Bnd_Box bb;
+            BRepBndLib::Add(regions[i].outerWire, bb);
+            if (bb.IsVoid()) continue;
+            double x0, y0, z0, x1, y1, z1;
+            bb.Get(x0, y0, z0, x1, y1, z1);
+            double dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+            double diag = dx * dx + dy * dy + dz * dz;
+            if (diag > bestDiag) { bestDiag = diag; best = i; }
+        }
+        holesOut = regions[best].holeWires;
+        if (fromRegionOut) *fromRegionOut = true;   // regions are closed loops
+        return regions[best].outerWire;
+    }
+    auto wires = sk->buildWires();
+    if (!wires.empty()) return wires[0];
+    return {};
+}
 
 void Application::beginLoft() {
     if (!m_selection || !m_document) return;
 
-    // Snapshot the first two distinct sketches in click order.
+    // Snapshot every distinct selected sketch, in click order — with three
+    // ribs the loft runs first→last, so the order the user picked them in IS
+    // the loft order (reorderable later in the panel).
     std::vector<int> sketchIds;
     auto addId = [&](int id) {
         if (id < 0) return;
@@ -2557,49 +2596,78 @@ void Application::beginLoft() {
     }
     if (sketchIds.size() < 2) return;
 
-    auto wireFromSketch = [&](int id, std::vector<TopoDS_Wire>& holesOut) -> TopoDS_Wire {
-        holesOut.clear();
-        auto sk = m_document->getSketch(id);
-        if (!sk) return {};
-        auto regions = sk->buildRegions();
-        if (!regions.empty()) {
-            // Concentric profiles decompose into MULTIPLE regions (the ring
-            // AND the inner disk). Loft the outermost one — largest outer
-            // bbox — so its holes become the tube channel; blindly taking
-            // regions[0] could grab the inner disk and loft a solid cone.
-            size_t best = 0;
-            double bestDiag = -1.0;
-            for (size_t i = 0; i < regions.size(); ++i) {
-                if (regions[i].outerWire.IsNull()) continue;
-                Bnd_Box bb;
-                BRepBndLib::Add(regions[i].outerWire, bb);
-                if (bb.IsVoid()) continue;
-                double x0, y0, z0, x1, y1, z1;
-                bb.Get(x0, y0, z0, x1, y1, z1);
-                double dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
-                double diag = dx * dx + dy * dy + dz * dz;
-                if (diag > bestDiag) { bestDiag = diag; best = i; }
-            }
-            holesOut = regions[best].holeWires; // inner boundaries → tube channels
-            return regions[best].outerWire;
-        }
-        auto wires = sk->buildWires();
-        if (!wires.empty()) return wires[0];
-        return {};
-    };
 
-    m_loftWireA = wireFromSketch(sketchIds[0], m_loftHolesA);
-    m_loftWireB = wireFromSketch(sketchIds[1], m_loftHolesB);
-    if (m_loftWireA.IsNull() || m_loftWireB.IsNull()) {
-        std::fprintf(stderr,
-            "[Loft] could not derive a closed wire from one of the "
-            "selected sketches (need a closed region in each).\n");
+    // Classify each sketch: a closed region = a SECTION; no closed region but
+    // an open wire = a RAIL candidate (a side-silhouette curve). One section +
+    // 1–2 rails = guided loft (base swept along the rails — the "pyramid with
+    // rounded sides" shape a section stack can't express). Anything else =
+    // plain N-section loft.
+    m_loftSections.clear();
+    m_loftRails.clear();
+    m_loftRailsMode = false;
+    int unusable = 0;
+    for (int id : sketchIds) {
+        LoftSection sec;
+        sec.sketchId = id;
+        bool fromRegion = false;
+        {
+            auto sk = m_document->getSketch(id);
+            sec.outer = outermostRegionWire(sk.get(), sec.holes, &fromRegion);
+        }
+        // "Closed" = the sketch produced a REGION. (Never trust TopoDS's
+        // Closed() flag — it's builder-advisory and the region walker doesn't
+        // set it, which mis-filed plain circles as open and refused the loft.)
+        if (!sec.outer.IsNull() && fromRegion) {
+            m_loftSections.push_back(std::move(sec));
+            continue;
+        }
+        // No closed region — take the sketch's longest OPEN chain as a rail.
+        // (buildWires() can't serve here: it prunes every non-cycle edge.)
+        if (auto sk = m_document->getSketch(id)) {
+            TopoDS_Wire open = sk->buildOpenWire();
+            if (!open.IsNull()) {
+                m_loftRails.push_back({id, open});
+                continue;
+            }
+        }
+        std::fprintf(stderr, "[Loft] sketch %d has no usable geometry.\n", id);
+        ++unusable;
+    }
+
+    if (m_loftSections.size() == 1 && !m_loftRails.empty() &&
+        m_loftRails.size() <= 2) {
+        // Guided mode: the single closed profile is the base, the open
+        // sketches are its rails.
+        if (auto sk = m_document->getSketch(m_loftSections[0].sketchId))
+            m_loftBasePlane = sk->getPlane();
+        m_loftRailsMode = true;
+    } else if (m_loftSections.size() >= 2) {
+        // Plain section loft; open sketches (if any) don't participate.
+        if (!m_loftRails.empty())
+            showToast(std::to_string(m_loftRails.size()) +
+                      " open sketch(es) ignored — rails need exactly ONE "
+                      "closed base profile.");
+        m_loftRails.clear();
+    } else {
+        const bool tooManyRails =
+            m_loftSections.size() == 1 && m_loftRails.size() > 2;
+        const int nClosed = static_cast<int>(m_loftSections.size());
+        const int nOpen   = static_cast<int>(m_loftRails.size());
+        m_loftSections.clear();
+        m_loftRails.clear();
+        showToast(tooManyRails
+            ? "Guided loft takes at most two rail curves - deselect the "
+              "extras."
+            : "Selected " + std::to_string(nClosed) + " closed profile(s) + " +
+              std::to_string(nOpen) + " open curve(s). Loft needs 2+ closed "
+              "profiles (sections), or exactly 1 closed + 1-2 open (rails).");
         return;
     }
+    if (unusable > 0)
+        showToast(std::to_string(unusable) + " empty sketch(es) skipped.");
 
     m_loftSolid = true;
     m_loftRuled = false;
-    m_loftReverseB = false;
     m_loftPreviewPushed = false;
     m_loftActive = true;
 
@@ -2608,27 +2676,44 @@ void Application::beginLoft() {
 
 void Application::updateLoft() {
     if (!m_loftActive || !m_history || !m_document) return;
-    if (m_loftWireA.IsNull() || m_loftWireB.IsNull()) return;
+    if (m_loftRailsMode ? m_loftSections.empty() : m_loftSections.size() < 2)
+        return;
 
-    // Undo previous preview so history accumulates exactly one LoftOp.
+    // Undo previous preview so history accumulates exactly one op.
     if (m_loftPreviewPushed && m_history->canUndo()) {
         m_history->undo(*m_document);
         m_loftPreviewPushed = false;
     }
 
+    if (m_loftRailsMode) {
+        auto gop = std::make_unique<GuidedLoftOp>();
+        gop->setBase(m_loftSections[0].outer, m_loftBasePlane);
+        for (const LoftRail& r : m_loftRails) gop->addRail(r.wire);
+        gop->setSolid(m_loftSolid);
+        if (m_history->pushOperation(std::move(gop), *m_document))
+            m_loftPreviewPushed = true;
+        else
+            showToast("Guided loft failed - rails must rise away from the "
+                      "base profile's plane.");
+        m_meshesDirty = true;
+        return;
+    }
+
     auto op = std::make_unique<LoftOp>();
-    op->addProfile(m_loftWireA, m_loftHolesA);
-    // Reverse profile B's wire when requested: this re-orders B's vertices so
-    // they pair differently against A's, which is the standard remedy for
-    // the "apex pinch / pyramid" output when start vertices are misaligned.
-    // Reverse B's hole wires to match, so inner channels pair consistently.
-    if (m_loftReverseB) {
-        std::vector<TopoDS_Wire> holesB;
-        holesB.reserve(m_loftHolesB.size());
-        for (const auto& h : m_loftHolesB) holesB.push_back(TopoDS::Wire(h.Reversed()));
-        op->addProfile(TopoDS::Wire(m_loftWireB.Reversed()), holesB);
-    } else {
-        op->addProfile(m_loftWireB, m_loftHolesB);
+    for (const LoftSection& sec : m_loftSections) {
+        // Flip reverses the wire's vertex order so it pairs differently
+        // against its neighbours — the standard remedy for the "apex pinch /
+        // twist" output when start vertices are misaligned. Holes reverse
+        // with it, so inner channels pair consistently.
+        if (sec.reverse) {
+            std::vector<TopoDS_Wire> holes;
+            holes.reserve(sec.holes.size());
+            for (const auto& h : sec.holes)
+                holes.push_back(TopoDS::Wire(h.Reversed()));
+            op->addProfile(TopoDS::Wire(sec.outer.Reversed()), holes);
+        } else {
+            op->addProfile(sec.outer, sec.holes);
+        }
     }
     op->setSolid(m_loftSolid);
     op->setRuled(m_loftRuled);
@@ -2641,8 +2726,9 @@ void Application::updateLoft() {
 void Application::commitLoft() {
     m_loftActive = false;
     m_loftPreviewPushed = false;
-    m_loftWireA = TopoDS_Wire();
-    m_loftWireB = TopoDS_Wire();
+    m_loftSections.clear();
+    m_loftRails.clear();
+    m_loftRailsMode = false;
     m_meshesDirty = true;
 }
 
@@ -2886,8 +2972,99 @@ void Application::cancelLoft() {
         m_loftPreviewPushed = false;
     }
     m_loftActive = false;
-    m_loftWireA = TopoDS_Wire();
-    m_loftWireB = TopoDS_Wire();
+    m_loftSections.clear();
+    m_loftRails.clear();
+    m_loftRailsMode = false;
+    m_meshesDirty = true;
+}
+
+
+// ─── Boundary Fill (interactive popup) ──────────────────────────────────────
+//
+// BoundaryFillPlugin fires requestInteractiveOp("BoundaryFill") with 2+
+// closed sketches selected. Same live-preview scaffolding as Loft: one
+// BoundaryFillOp is pushed as the preview, re-pushed on toggle, committed on
+// Apply, undone on Cancel.
+
+void Application::beginBoundaryFill() {
+    if (!m_selection || !m_document) return;
+
+    std::vector<int> sketchIds;
+    auto addId = [&](int id) {
+        if (id < 0) return;
+        for (int x : sketchIds) if (x == id) return;
+        sketchIds.push_back(id);
+    };
+    for (const auto& e : m_selection->getSelection()) {
+        if ((e.type == SelectionType::Sketch ||
+             e.type == SelectionType::SketchRegion) && e.sketchId >= 0) {
+            addId(e.sketchId);
+        }
+    }
+
+    m_bfillProfiles.clear();
+    for (int id : sketchIds) {
+        auto sk = m_document->getSketch(id);
+        if (!sk) continue;
+        BFillProfile prof;
+        prof.sketchId = id;
+        bool fromRegion = false;
+        prof.outer = outermostRegionWire(sk.get(), prof.holes, &fromRegion);
+        if (prof.outer.IsNull() || !fromRegion) {
+            std::fprintf(stderr,
+                "[BoundaryFill] sketch %d has no closed region — skipped.\n", id);
+            continue;
+        }
+        prof.plane = sk->getPlane();
+        m_bfillProfiles.push_back(std::move(prof));
+    }
+    if (m_bfillProfiles.size() < 2) {
+        m_bfillProfiles.clear();
+        showToast("Boundary Fill needs at least two sketches with a closed "
+                  "region (e.g. top + front + side silhouettes).");
+        return;
+    }
+
+    m_bfillPreviewPushed = false;
+    m_bfillActive = true;
+    updateBoundaryFill();
+}
+
+void Application::updateBoundaryFill() {
+    if (!m_bfillActive || !m_history || !m_document) return;
+    if (m_bfillProfiles.size() < 2) return;
+
+    if (m_bfillPreviewPushed && m_history->canUndo()) {
+        m_history->undo(*m_document);
+        m_bfillPreviewPushed = false;
+    }
+
+    auto op = std::make_unique<BoundaryFillOp>();
+    for (const BFillProfile& p : m_bfillProfiles)
+        op->addProfile(p.outer, p.holes, p.plane);
+    if (m_history->pushOperation(std::move(op), *m_document)) {
+        m_bfillPreviewPushed = true;
+    } else {
+        showToast("Boundary Fill: the silhouettes don't enclose a common "
+                  "volume - make sure they overlap in space.");
+    }
+    m_meshesDirty = true;
+}
+
+void Application::commitBoundaryFill() {
+    m_bfillActive = false;
+    m_bfillPreviewPushed = false;
+    m_bfillProfiles.clear();
+    m_meshesDirty = true;
+}
+
+void Application::cancelBoundaryFill() {
+    if (m_bfillPreviewPushed && m_history && m_history->canUndo()) {
+        m_history->undo(*m_document);
+        m_bfillPreviewPushed = false;
+    }
+    m_bfillActive = false;
+    m_bfillProfiles.clear();
     m_meshesDirty = true;
 }
 

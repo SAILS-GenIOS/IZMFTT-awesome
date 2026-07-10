@@ -1373,29 +1373,87 @@ private:
     void cancelPattern();      // undo preview if any + clean up state
     void renderPatternPanel(); // ImGui popup contents
 
-    // Interactive Loft popup — two profile wires snapshotted from the selected
-    // sketches at begin time, plus Solid/Shell + Smooth/Ruled + Reverse-B
-    // toggles, all driving a live preview pushed onto history (same pattern
-    // as Linear/Radial Pattern). Reverse-B flips profile B's wire direction
-    // before passing it to LoftOp, which is the usual fix for the "apex
-    // pinch / pyramid" output when the two wires' start vertices don't
-    // line up.
+    // Interactive Loft popup — N profile sections snapshotted from the
+    // selected sketches (in click order) at begin time, plus Solid/Shell +
+    // Smooth/Ruled toggles, all driving a live preview pushed onto history
+    // (same pattern as Linear/Radial Pattern). LoftOp itself has always been
+    // N-capable; this layer feeds it a whole stack of ribs. Each section has
+    // its own Flip toggle — reversing a wire's vertex order re-pairs it
+    // against its neighbours, the usual fix for the "apex pinch / twist"
+    // output when start vertices don't line up — and the panel can reorder
+    // sections, since ThruSections skins them in the order given.
+    struct LoftSection {
+        int sketchId = -1;                // identity for the panel label
+        TopoDS_Wire outer;
+        // Inner (hole) wires, so a ring section lofts into a tube.
+        std::vector<TopoDS_Wire> holes;
+        bool reverse = false;             // flip vertex order when feeding LoftOp
+    };
     bool m_loftActive = false;
-    TopoDS_Wire m_loftWireA;
-    TopoDS_Wire m_loftWireB;
-    // Inner (hole) wires of each profile, so a ring section lofts into a tube.
-    std::vector<TopoDS_Wire> m_loftHolesA;
-    std::vector<TopoDS_Wire> m_loftHolesB;
+    std::vector<LoftSection> m_loftSections;
     bool m_loftSolid = true;
     bool m_loftRuled = false;
-    bool m_loftReverseB = false;
     bool m_loftPreviewPushed = false;
+    // Guided ("rails") mode: selected sketches WITHOUT a closed region are
+    // treated as open rail curves when exactly one closed base profile is also
+    // selected — beginLoft auto-detects and the panel switches to the rails
+    // variant driving a GuidedLoftOp instead of a section LoftOp.
+    bool m_loftRailsMode = false;
+    gp_Pln m_loftBasePlane;
+    struct LoftRail {
+        int sketchId = -1;
+        TopoDS_Wire wire;
+    };
+    std::vector<LoftRail> m_loftRails;
 
     void beginLoft();          // reads selection, snapshots wires, pushes initial preview
     void updateLoft();         // re-push preview with current params
     void commitLoft();
     void cancelLoft();
     void renderLoftPanel();
+
+    // ── Boundary Fill (silhouette intersection) ──
+    // N closed sketches, each treated as a silhouette: every profile is
+    // extruded through the others' extent and the prisms are intersected
+    // (visual hull). Separate feature from Loft by design — no section
+    // ordering, no rails, no formula sensitivity.
+    struct BFillProfile {
+        int sketchId = -1;
+        TopoDS_Wire outer;
+        std::vector<TopoDS_Wire> holes;
+        gp_Pln plane;
+    };
+    bool m_bfillActive = false;
+    std::vector<BFillProfile> m_bfillProfiles;
+    bool m_bfillPreviewPushed = false;
+
+    void beginBoundaryFill();
+    void updateBoundaryFill();
+    void commitBoundaryFill();
+    void cancelBoundaryFill();
+    void renderBoundaryFillPanel();
+
+    // ── Reference image (photo underlay hosted on a construction plane) ──
+    // Import: file dialog → decode/validate → addPlane + setRefImage; the
+    // photo then moves/rotates via the normal plane gizmo and is sketch-on-able
+    // like any plane. The panel (shown while an image-hosting plane is
+    // selected) drives opacity / physical width / the ruler-calibration popup.
+    void beginRefImageImport();
+    void renderRefImagePanel();
+    // Calibration popup state: which plane's image is being calibrated
+    // (-1 = closed), the ImGui preview texture (panel-owned, one at a time),
+    // and up to two picked points in IMAGE-PIXEL coordinates.
+    int          m_refImgCalibPlane = -1;
+    unsigned int m_refImgPreviewTex = 0;
+    int          m_refImgPreviewPlane = -1;
+    int          m_refImgPreviewW = 0, m_refImgPreviewH = 0;
+    int          m_refImgPickCount = 0;
+    float        m_refImgPickPx[2][2] = {{0, 0}, {0, 0}};
+    char         m_refImgDistBuf[32] = "10";
+    // Calibrate preview navigation: scroll-to-zoom (cursor-anchored) +
+    // right-drag pan, so ruler ticks on a big phone photo are pickable.
+    float        m_refImgCalibZoom = 1.0f;
+    float        m_refImgCalibPan[2] = {0, 0};
 
     // Interactive Construction Plane popup. ConstructionPlanePlugin fires
     // requestInteractiveOp("ConstructionPlane"); Application reads the

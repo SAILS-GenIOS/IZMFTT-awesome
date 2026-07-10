@@ -48,6 +48,8 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/SplitBodyOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SketchTransformOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/LoftOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/GuidedLoftOp.cpp
+    ${CMAKE_SOURCE_DIR}/src/modeling/BoundaryFillOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/SweepOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/ConstructionPlaneOp.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/ConstructionAxisOp.cpp
@@ -67,6 +69,7 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/modeling/TopoName.cpp
     ${CMAKE_SOURCE_DIR}/src/modeling/GenerationLedger.cpp
     ${CMAKE_SOURCE_DIR}/src/io/ProjectIO.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/ImageDecode.cpp
     ${CMAKE_SOURCE_DIR}/src/io/StlIO.cpp
     ${CMAKE_SOURCE_DIR}/src/io/MeshDecimate.cpp
     ${CMAKE_SOURCE_DIR}/src/io/ProjectRecovery.cpp

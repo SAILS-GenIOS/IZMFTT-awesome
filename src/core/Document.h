@@ -55,6 +55,21 @@ struct PlaneEntry {
     double halfSize = 50.0;
 };
 
+// Reference image — a photo carried on a construction plane so a real object
+// can be traced without a 3D scanner. 1:1 with a host PlaneEntry (keyed by
+// planeId): the plane contributes pose / selection / visibility / gizmo /
+// sketch-on-plane; this entry carries the raster payload plus physical size
+// and underlay opacity. fileBytes is the ORIGINAL compressed file (png/jpg),
+// persisted verbatim into the project so a .materializr stays self-contained;
+// decode happens at render time (dims are cached here for aspect math).
+struct RefImageEntry {
+    int planeId = -1;
+    std::vector<unsigned char> fileBytes;
+    int pixW = 0, pixH = 0;    // decoded pixel dims (aspect; set at import)
+    double widthMM = 100.0;    // physical width; height follows the aspect
+    float opacity = 0.6f;      // underlay strength for tracing
+};
+
 // Construction axis — a stored ray (origin + unit direction). Used as the
 // rotation axis for Revolve (post-0.6) and any other "around a line"
 // operation. Same plumbing shape as PlaneEntry: id / name / visibility /
@@ -209,6 +224,17 @@ public:
     std::vector<int> getAllPlaneIds() const;
     int planeCount() const;
 
+    // Reference images — raster underlays hosted on construction planes
+    // (see RefImageEntry). Keyed by the host plane's id; changes ride the
+    // Plane*Event stream (the image renderer re-syncs off the same events the
+    // plane renderer does). removePlane() drops the hosted image with it.
+    void setRefImage(int planeId, RefImageEntry entry);   // add or replace
+    const RefImageEntry* getRefImage(int planeId) const;
+    void removeRefImage(int planeId);
+    void setRefImageWidthMM(int planeId, double widthMM);
+    void setRefImageOpacity(int planeId, float opacity);
+    std::vector<int> getAllRefImagePlaneIds() const;
+
     // Construction axes — same shape as construction planes. Used by
     // Revolve and any other op that needs to rotate around a line.
     // Axis* events let the renderer + Items panel react without polling.
@@ -241,6 +267,7 @@ private:
 
     std::vector<BodyEntry> m_bodies;
     std::vector<PlaneEntry> m_planes;
+    std::vector<RefImageEntry> m_refImages;
     std::vector<AxisEntry> m_axes;
     std::vector<SketchEntry> m_sketches;
     // See setCascadeSketchOverride — pinned final sketch states during a

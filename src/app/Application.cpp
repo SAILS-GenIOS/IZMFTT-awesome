@@ -5032,8 +5032,12 @@ void Application::renderSketchRecoveryPrompt() {
     // the Welcome render site in run()). Fires the frame Welcome closes.
     if (m_welcomeScreen && m_welcomeScreen->isVisible()) return;
     ImGui::OpenPopup("Recover Sketch?");
+    // Pin centered EVERY frame (not Appearing): on Android the popup can
+    // first appear on a frame where the surface size isn't final yet, and an
+    // Appearing-anchored centre computed from that degenerate viewport
+    // strands the dialog in the top-left corner for good.
     ImVec2 c = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(c, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(c, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("Recover Sketch?", nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted(
@@ -5123,8 +5127,9 @@ void Application::renderProjectRecoveryPrompt() {
     // sketch-recovery prompt (see renderSketchRecoveryPrompt).
     if (m_welcomeScreen && m_welcomeScreen->isVisible()) return;
     ImGui::OpenPopup("Recover Project?");
+    // Pinned centred every frame — see the Android note on the sketch prompt.
     ImVec2 c = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(c, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(c, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     if (ImGui::BeginPopupModal("Recover Project?", nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
         materializr::ProjectRecoveryMeta meta;
@@ -5670,8 +5675,10 @@ void Application::run() {
                     if      (pending == "LinearPattern") beginPattern(PatternKind::Linear);
                     else if (pending == "RadialPattern") beginPattern(PatternKind::Radial);
                     else if (pending == "Loft")          beginLoft();
+                    else if (pending == "BoundaryFill")  beginBoundaryFill();
                     else if (pending == "LoftPickSecond") m_loftPickHintPending = true;
                     else if (pending == "ConstructionPlane") beginConstructionPlane();
+                    else if (pending == "ImportRefImage")    beginRefImageImport();
                     else if (pending == "ConstructionAxis")  beginConstructionAxis();
                     else if (pending == "Revolve")           beginRevolve();
                     else if (pending == "Midplane")          beginConstructionPlaneMode(4);
@@ -5757,12 +5764,13 @@ void Application::run() {
                         ImGuiWindowFlags_NoFocusOnAppearing |
                         ImGuiWindowFlags_NoNav;
                     bool open = true;
-                    if (ImGui::Begin("Pick a second sketch", &open, flags)) {
+                    if (ImGui::Begin("Pick more sketches", &open, flags)) {
                         ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.35f, 1.0f),
-                                           "Loft needs a second profile.");
-                        ImGui::TextWrapped("Ctrl-click another sketch (or one "
-                                           "of its regions), then click Loft "
-                                           "again to commit.");
+                                           "Loft needs at least two profiles.");
+                        ImGui::TextWrapped("Ctrl-click the other sketches (or "
+                                           "their regions) in loft order — as "
+                                           "many as you like — then click Loft "
+                                           "again.");
                     }
                     ImGui::End();
                     if (!open) m_loftPickHintVisible = false;
@@ -5808,6 +5816,8 @@ void Application::run() {
             renderSvgToolPanel();
             renderMirrorToolPanel();
             renderLoftPanel();
+            renderBoundaryFillPanel();
+            renderRefImagePanel();
             renderConstructionPlanePanel();
             renderConstructionAxisPanel();
             renderPrimitivePopup();

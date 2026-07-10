@@ -201,6 +201,8 @@ add_executable(materializr
     src/plugins/ShellPlugin.cpp
     src/plugins/SplitBodyPlugin.cpp
     src/plugins/ConstructionPlanePlugin.cpp
+    src/plugins/RefImagePlugin.cpp
+    src/plugins/BoundaryFillPlugin.cpp
     src/plugins/ConstructionAxisPlugin.cpp
     src/plugins/RevolvePlugin.cpp
     src/plugins/FilletPlugin.cpp
@@ -250,6 +252,8 @@ add_executable(materializr
     src/modeling/RevolveOp.cpp
     src/modeling/SweepOp.cpp
     src/modeling/LoftOp.cpp
+    src/modeling/GuidedLoftOp.cpp
+    src/modeling/BoundaryFillOp.cpp
     src/modeling/SketchTransformOp.cpp
     src/modeling/ConstructionPlaneOp.cpp
     src/modeling/ConstructionAxisOp.cpp
@@ -275,6 +279,7 @@ add_executable(materializr
     src/viewport/Picker.cpp
     src/viewport/EdgeRenderer.cpp
     src/viewport/PlaneRenderer.cpp
+    src/viewport/RefImageRenderer.cpp
     src/viewport/AxisRenderer.cpp
     src/viewport/BackgroundRenderer.cpp
     src/viewport/Gizmo.cpp
@@ -303,6 +308,7 @@ add_executable(materializr
     src/ui/UpdateChecker.cpp
     src/ui/HelpPanel.cpp
     src/io/ProjectIO.cpp
+    src/io/ImageDecode.cpp
     src/io/SketchRecovery.cpp
     src/io/ProjectRecovery.cpp
     src/io/Settings.cpp

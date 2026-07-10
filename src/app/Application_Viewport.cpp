@@ -435,6 +435,15 @@ void Application::renderViewport() {
                            lightBg ? 1.0f : 0.0f /*lightBg palette*/,
                            m_sketchGridThickness /*sketch grid line width*/);
         };
+        // OUTSIDE sketch mode the world grid draws EARLY — before the plugin
+        // passes — so translucent pass content (reference-image photos,
+        // construction-plane quads) blends OVER it: a photo's opacity then
+        // genuinely reveals the grid/ground beneath instead of fading to the
+        // bare background. Bodies still paint over the early grid opaquely, so
+        // the final image is unchanged for solid geometry. IN sketch mode the
+        // grid stays late (below) so its lines land ON TOP of the photo being
+        // traced.
+        if (!(m_inSketchMode && m_activeSketch)) drawGrid();
         // Plugin-registered render passes (e.g. ConstructionPlanePlugin's
         // plane quads) draw between the grid/background and the body/edge
         // pass. PluginContext receives the same view+proj, and each pass'
@@ -486,11 +495,13 @@ void Application::renderViewport() {
             m_selectionHighlight->render(*m_selection, *m_document, view, proj);
         }
 
-        // Grid drawn here — after bodies/edges/section/highlight — so it blends
-        // over solid geometry and fades cleanly under the opacity slider, rather
-        // than punching grid lines through coplanar faces (the old "grey grid
-        // baked into the face that opacity couldn't remove").
-        drawGrid();
+        // Sketch-mode grid drawn here — after bodies/edges/section/highlight —
+        // so it blends over solid geometry (and the reference photo being
+        // traced) and fades cleanly under the opacity slider, rather than
+        // punching grid lines through coplanar faces (the old "grey grid baked
+        // into the face that opacity couldn't remove"). The non-sketch world
+        // grid already drew EARLY, before the plugin passes (see above).
+        if (m_inSketchMode && m_activeSketch) drawGrid();
 
         // Update gizmo visibility and position based on selection.
         // Suppressed by navigationOnly so a panel pick highlights the body
