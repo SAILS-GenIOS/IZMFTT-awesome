@@ -12,9 +12,13 @@
 #include "../src/io/ThreeMfExport.h"
 #include "../src/modeling/Sketch.h"
 
+#include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepTools.hxx>
+#include <BRep_Builder.hxx>
+#include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
 #include <gp_Ax2.hxx>
 
@@ -83,6 +87,31 @@ TEST(BrepIO, RoundTripsTwoBodiesWithExactVolumes) {
     std::sort(got.begin(), got.end());
     for (size_t i = 0; i < want.size(); ++i)
         EXPECT_NEAR(got[i], want[i], want[i] * 1e-9);
+}
+
+TEST(BrepIO, DiskFileIsZUpPerTheStepConvention) {
+    // A self-round-trip can't see a rotation-sign error (the pair inverts
+    // itself), so read the exported file RAW — no import rotation — and
+    // assert the disk axes: scene box 20(X)×30(Y-up)×40(Z) must land with
+    // its height on disk-Z (extent 30) and scene-Z on disk −Y (extent 40,
+    // span [−40, 0]) — exactly what StepIO/StlExport write. Caught #45.
+    Document doc;
+    doc.addBody(BRepPrimAPI_MakeBox(20.0, 30.0, 40.0).Shape(), "Box");
+    const std::string path = tmpPath("axes.brep");
+    ASSERT_TRUE(BrepIO::exportFile(path, doc).success);
+
+    TopoDS_Shape raw;
+    BRep_Builder bb;
+    ASSERT_TRUE(BRepTools::Read(raw, path.c_str(), bb));
+    Bnd_Box box;
+    BRepBndLib::Add(raw, box);
+    double x0, y0, z0, x1, y1, z1;
+    box.Get(x0, y0, z0, x1, y1, z1);
+    EXPECT_NEAR(x1 - x0, 20.0, 1e-6);
+    EXPECT_NEAR(z1 - z0, 30.0, 1e-6);  // scene Y (up) → disk Z (up)
+    EXPECT_NEAR(z0, 0.0, 1e-6);        // part sits ON the disk floor
+    EXPECT_NEAR(y0, -40.0, 1e-6);      // scene Z → disk −Y
+    EXPECT_NEAR(y1, 0.0, 1e-6);
 }
 
 TEST(BrepIO, SingleBodyExportsBareAndReimports) {

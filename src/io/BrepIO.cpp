@@ -75,7 +75,11 @@ ImportResult BrepIO::import(const std::string& filePath, Document& doc) {
             result.errorMessage = "BREP file contained no shape.";
             return result;
         }
-        shape = rotated(shape, M_PI * 0.5); // disk Z-up → scene Y-up
+        // Disk Z-up → scene Y-up: −90° about +X, matching StepIO/StlIO.
+        // (The signs were briefly inverted — self-consistent, so a round-trip
+        // through our own pair looked fine, but files disagreed with our STEP
+        // exports by 180°. #45.)
+        shape = rotated(shape, -M_PI * 0.5);
 
         // A top-level compound is our own multi-body export (or FreeCAD's) —
         // each child becomes its own body so they stay individually editable.
@@ -135,7 +139,7 @@ ExportResult BrepIO::exportFile(const std::string& filePath, const Document& doc
             result.errorMessage = "No exportable geometry.";
             return result;
         }
-        out = rotated(out, -M_PI * 0.5); // scene Y-up → disk Z-up
+        out = rotated(out, M_PI * 0.5); // scene Y-up → disk Z-up (+90°, see import)
         if (!BRepTools::Write(out, filePath.c_str())) {
             result.errorMessage = "Failed to write BREP file: " + filePath;
             return result;
