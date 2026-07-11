@@ -2851,21 +2851,29 @@ void Application::saveProject() {
         std::filesystem::path p(m_currentProjectPath);
         suggest = p.filename().string();
     }
-    if (suggest.empty()) suggest = "project.materializr";
-    else if (suggest.find(".materializr") == std::string::npos)
-        suggest += ".materializr";
+    // .mzr is the preferred extension; the long-form .materializr stays fully
+    // interchangeable (the loader identifies projects by header, not name), so
+    // a resave keeps whichever extension the file already has.
+    if (suggest.empty()) suggest = "project.mzr";
+    else if (suggest.find(".mzr") == std::string::npos &&
+             suggest.find(".materializr") == std::string::npos)
+        suggest += ".mzr";
     FileDialogs::saveFile("Save Project", suggest,
-        {{"Materializr Project", "*.materializr"}, {"All Files", "*"}},
+        {{"Materializr Project", "*.mzr *.materializr"}, {"All Files", "*"}},
         [this](const std::string& chosenPath) {
             if (chosenPath.empty()) return;
             std::string path = chosenPath;
 #if !defined(MZ_MOBILE)
-            // Keep the .materializr extension. The project file is gzip-
-            // compressed, so without the extension the OS shows it as a generic
-            // "compressed archive" and the open filter can't find it. (On
-            // Android the SAF picker, not this path, names the file.)
-            if (std::filesystem::path(path).extension() != ".materializr")
-                path += ".materializr";
+            // Keep a project extension. The file is gzip-compressed, so
+            // without one the OS shows it as a generic "compressed archive"
+            // and the open filter can't find it. Either spelling is accepted;
+            // a bare name gets the preferred .mzr. (On Android the SAF
+            // picker, not this path, names the file.)
+            {
+                const auto ext = std::filesystem::path(path).extension();
+                if (ext != ".mzr" && ext != ".materializr")
+                    path += ".mzr";
+            }
 #endif
             ProjectHistory hist = captureProjectHistory();
             auto result = ProjectIO::save(path, *m_document, &hist);
@@ -3525,7 +3533,7 @@ void Application::openRecentProject(const AppSettings::RecentProject& r) {
 
 void Application::loadProject() {
     FileDialogs::openFile("Open Project",
-        {{"Materializr Project", "*.materializr"}, {"All Files", "*"}},
+        {{"Materializr Project", "*.mzr *.materializr"}, {"All Files", "*"}},
         [this](const std::string& path) {
             if (path.empty()) return;
             // Guard unsaved changes (the picked path is captured for after the
@@ -5899,6 +5907,7 @@ void Application::run() {
                 if (!m_currentProjectPath.empty()) {
                     pn = projectDisplayName();
                     auto dot = pn.rfind(".materializr");
+                    if (dot == std::string::npos) dot = pn.rfind(".mzr");
                     if (dot != std::string::npos) pn = pn.substr(0, dot);
                 }
                 m_statusBar->setProjectName(pn);
