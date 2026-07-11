@@ -71,6 +71,7 @@ add_library(materializr_core STATIC
     ${CMAKE_SOURCE_DIR}/src/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/io/ImageDecode.cpp
     ${CMAKE_SOURCE_DIR}/src/io/BrepIO.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/IgesIO.cpp
     ${CMAKE_SOURCE_DIR}/src/io/ObjExport.cpp
     ${CMAKE_SOURCE_DIR}/src/io/DxfExport.cpp
     ${CMAKE_SOURCE_DIR}/src/io/ThreeMfExport.cpp
@@ -98,8 +99,10 @@ target_include_directories(materializr_core SYSTEM PUBLIC
 # those even when it leaves the combined OpenCASCADE_VERSION string empty.
 if(OpenCASCADE_MAJOR_VERSION EQUAL 7 AND OpenCASCADE_MINOR_VERSION LESS 8)
     set(OCCT_STL_LIB TKSTL)
+    set(OCCT_IGES_LIB TKIGES)
 else()
     set(OCCT_STL_LIB TKDESTL)
+    set(OCCT_IGES_LIB TKDEIGES)
 endif()
 
 target_link_libraries(materializr_core PUBLIC
@@ -118,6 +121,8 @@ target_link_libraries(materializr_core PUBLIC
     TKBO
     TKBin
     ${OCCT_STL_LIB}  # RWStl (STL read) for StlIO — TKSTL (<7.8) / TKDESTL (>=7.8)
+    ${OCCT_IGES_LIB} # IGESControl for IgesIO (test_exchange_io) — same version gate
+    TKXSBase     # exchange base for the IGES reader/writer
     TKShHealing  # ShapeUpgrade_UnifySameDomain for StlIO
     TKMesh       # BRepMesh_IncrementalMesh for Unfold (curved faces)
     ZLIB::ZLIB

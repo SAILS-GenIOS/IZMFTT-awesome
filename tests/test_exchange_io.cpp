@@ -8,12 +8,15 @@
 #include "../src/core/Document.h"
 #include "../src/io/BrepIO.h"
 #include "../src/io/DxfExport.h"
+#include "../src/io/IgesIO.h"
 #include "../src/io/ObjExport.h"
 #include "../src/io/ThreeMfExport.h"
 #include "../src/modeling/Sketch.h"
 
 #include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
+#include <IFSelect_ReturnStatus.hxx>
+#include <IGESControl_Reader.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepTools.hxx>
@@ -133,6 +136,56 @@ TEST(BrepIO, ImportRejectsGarbage) {
     Document doc;
     EXPECT_FALSE(BrepIO::import(path, doc).success);
     EXPECT_TRUE(doc.getAllBodyIds().empty());
+}
+
+// ── IGES: round-trip + disk convention (axis fix, #46) ──────────────────────
+
+TEST(IgesIO, RoundTripRestoresSceneOrientation) {
+    // IGES translates solids as surface collections by default, so volume is
+    // not a meaningful invariant — the scene-space BOUNDING BOX is: it proves
+    // the export and import rotations compose to identity (the actual #46
+    // fix) and the size survives.
+    Document doc;
+    doc.addBody(BRepPrimAPI_MakeBox(20.0, 30.0, 40.0).Shape(), "Box");
+    const std::string path = tmpPath("exchange.iges");
+    ASSERT_TRUE(IgesIO::exportFile(path, doc).success);
+
+    Document back;
+    auto im = IgesIO::import(path, back);
+    ASSERT_TRUE(im.success) << im.errorMessage;
+    ASSERT_GE(back.getAllBodyIds().size(), 1u);
+
+    Bnd_Box box;
+    for (int id : back.getAllBodyIds()) BRepBndLib::Add(back.getBody(id), box);
+    double x0, y0, z0, x1, y1, z1;
+    box.Get(x0, y0, z0, x1, y1, z1);
+    EXPECT_NEAR(x1 - x0, 20.0, 1e-4);
+    EXPECT_NEAR(y1 - y0, 30.0, 1e-4);  // height back on scene Y
+    EXPECT_NEAR(z1 - z0, 40.0, 1e-4);
+    EXPECT_NEAR(y0, 0.0, 1e-4);        // and sitting on the scene floor
+    EXPECT_NEAR(z0, 0.0, 1e-4);        // (a sign error would put z in [-40,0])
+}
+
+TEST(IgesIO, DiskFileIsZUpPerTheStepConvention) {
+    // Same raw-read pattern as the BREP twin (#45): read the file with the
+    // bare OCCT reader — none of our import rotation — and assert disk axes.
+    Document doc;
+    doc.addBody(BRepPrimAPI_MakeBox(20.0, 30.0, 40.0).Shape(), "Box");
+    const std::string path = tmpPath("axes.iges");
+    ASSERT_TRUE(IgesIO::exportFile(path, doc).success);
+
+    IGESControl_Reader reader;
+    ASSERT_EQ(reader.ReadFile(path.c_str()), IFSelect_RetDone);
+    reader.TransferRoots();
+    TopoDS_Shape raw = reader.OneShape();
+    ASSERT_FALSE(raw.IsNull());
+    Bnd_Box box;
+    BRepBndLib::Add(raw, box);
+    double x0, y0, z0, x1, y1, z1;
+    box.Get(x0, y0, z0, x1, y1, z1);
+    EXPECT_NEAR(x1 - x0, 20.0, 1e-4);
+    EXPECT_NEAR(z1 - z0, 30.0, 1e-4);  // scene Y (up) → disk Z (up)
+    EXPECT_NEAR(y0, -40.0, 1e-4);      // scene Z → disk −Y
 }
 
 // ── OBJ: structural parse of the written mesh ───────────────────────────────
