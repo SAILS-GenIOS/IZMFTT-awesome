@@ -697,7 +697,7 @@ ToolAction Toolbar::renderSketchTools() {
     if (ImGui::Button("Finish Sketch", ImVec2(-1, bh(30))))
         action = ToolAction::FinishSketch;
     tip("Leave sketch mode and return to the 3D viewport. Keeps the sketch.");
-    if (ImGui::Button("Exit Sketch (discard)", ImVec2(-1, bh(30))))
+    if (ImGui::Button("Exit Sketch", ImVec2(-1, bh(30))))
         action = ToolAction::ExitSketchDiscard;
     tip("Discard the current sketch entirely and leave sketch mode. Rewinds "
         "history to before the sketch was entered; the body returns to its "

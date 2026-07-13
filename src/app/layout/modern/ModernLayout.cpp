@@ -123,11 +123,12 @@ void Application::renderModernLayout() {
         // Context-clear labels so nobody discards a whole sketch by reflex: while
         // a draw tool is running the buttons act on its SHAPE (Finish / Cancel);
         // with no tool running (e.g. Select/move) they act on the SKETCH, and say
-        // so — "Finish Sketch" / "Discard Sketch".
+        // so — "Finish Sketch" / "Exit Sketch". (Exit still asks to confirm
+        // before discarding — the warning popup does the "throw away" wording.)
         const bool toolRunning = m_inSketchMode && m_sketchTool &&
                                  m_sketchTool->isPlacing();
         const char* finishLbl = toolRunning ? "Finish" : "Finish Sketch";
-        const char* exitLbl   = toolRunning ? "Cancel" : "Discard Sketch";
+        const char* exitLbl   = toolRunning ? "Cancel" : "Exit Sketch";
         // Inference-level toggle (sketch mode only): a compact two-row button
         // just left of Finish, click-cycles Max->Full->Reduced->Off like the
         // classic toolbar's guides button.
