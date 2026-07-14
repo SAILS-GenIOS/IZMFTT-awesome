@@ -216,8 +216,13 @@ bool ChamferOp::execute(Document& doc) {
                 m_edgeRefs.push_back(materializr::topo::mint(e, mc));
         }
 
-        // Build an edge-face map so we can find a face adjacent to each edge
+        // Everything below re-derives from m_edges, so the whole build is a
+        // retryable unit: if it fails, the caller may RE-RESOLVE the edges
+        // (anchors — the upstream-re-derivation case) and attempt again.
         TopTools_IndexedDataMapOfShapeListOfShape edgeFaceMap;
+        TopoDS_Face sharedRef;
+        auto prepare = [&]() {
+        edgeFaceMap.Clear();
         TopExp::MapShapesAndAncestors(m_previousShape, TopAbs_EDGE, TopAbs_FACE, edgeFaceMap);
 
         // For an asymmetric chamfer across multiple edges, distance 1 must be
@@ -225,7 +230,7 @@ bool ChamferOp::execute(Document& doc) {
         // edge, or A/B would flip from edge to edge. sharedRef is that face when
         // it exists (always, for a single edge); null = no common face, in which
         // case we fall back to each edge's first face (symmetric is unaffected).
-        TopoDS_Face sharedRef;
+        sharedRef = TopoDS_Face();
         if (m_distance2 > 0.0) {
             // Persisted reference id wins (deterministic); guess only without it.
             if (m_refFaceId >= 0) {
@@ -242,6 +247,7 @@ bool ChamferOp::execute(Document& doc) {
             if (sharedRef.IsNull())
                 sharedRef = sharedReferenceFace(m_previousShape, m_edges);
         }
+        };  // prepare()
 
         // Build with (dAlongRef, dOther). Split into a lambda because the
         // asymmetric reference face is NOT persisted: on a replayed body,
@@ -285,13 +291,35 @@ bool ChamferOp::execute(Document& doc) {
         };
 
         const double dB = (m_distance2 > 0.0) ? m_distance2 : m_distance;
-        TopoDS_Shape candidate = tryBuild(m_distance, dB);
-        if (candidate.IsNull() && m_distance2 > 0.0) {
-            candidate = tryBuild(m_distance2, m_distance);
-            if (!candidate.IsNull())
-                std::fprintf(stderr, "[Chamfer] asymmetric reference flipped on "
-                             "this body — rebuilt with distances swapped "
-                             "(d=%.2f/%.2f)\n", m_distance, m_distance2);
+        auto attemptBoth = [&]() -> TopoDS_Shape {
+            prepare();
+            TopoDS_Shape c = tryBuild(m_distance, dB);
+            if (c.IsNull() && m_distance2 > 0.0) {
+                c = tryBuild(m_distance2, m_distance);
+                if (!c.IsNull())
+                    std::fprintf(stderr, "[Chamfer] asymmetric reference "
+                                 "flipped on this body — rebuilt with "
+                                 "distances swapped (d=%.2f/%.2f)\n",
+                                 m_distance, m_distance2);
+            }
+            return c;
+        };
+        TopoDS_Shape candidate = attemptBoth();
+        if (candidate.IsNull() && !edgesResolvedByLineage) {
+            // The edges rebind found carriers, but the chamfer can't BUILD
+            // there — the tell of an upstream PARAMETRIC re-derivation (a
+            // sketch edit changed the body; stale carriers still exist but
+            // the rim moved). Re-find the edges by their sketch features and
+            // try once more — this is what the anchors are for (#52).
+            std::vector<TopoDS_Edge> keepEdges = m_edges;
+            if (resolveAnchors(doc, m_previousShape)) {
+                candidate = attemptBoth();
+                if (!candidate.IsNull())
+                    std::fprintf(stderr, "[Chamfer] edges re-anchored after a "
+                                 "re-derived upstream body (d=%.2f/%.2f)\n",
+                                 m_distance, m_distance2);
+            }
+            if (candidate.IsNull()) m_edges = std::move(keepEdges);
         }
         if (candidate.IsNull()) {
             std::fprintf(stderr, "[Chamfer] MakeChamfer failed (d=%.2f/%.2f)\n",
