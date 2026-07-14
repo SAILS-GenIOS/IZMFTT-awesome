@@ -511,7 +511,11 @@ void FilletOp::refreshGeneratedFaces(const TopoDS_Shape& currentBody) {
 }
 
 bool FilletOp::ownsFace(const TopoDS_Shape& face) const {
-    if (face.IsNull() || face.ShapeType() != TopAbs_FACE) return false;
+    return ownsFaceScore(face) > 0;
+}
+
+int FilletOp::ownsFaceScore(const TopoDS_Shape& face) const {
+    if (face.IsNull() || face.ShapeType() != TopAbs_FACE) return 0;
     // A fillet blend is NEVER a plane (straight edges blend to cylinders,
     // curved/corner cases to tori/spheres/bsplines). Rehydrated generated-face
     // indices can mis-resolve after an old-save reload (ordinal drift) and
@@ -519,18 +523,19 @@ bool FilletOp::ownsFace(const TopoDS_Shape& face) const {
     // fillet editor instead of the face's own properties.
     try {
         BRepAdaptor_Surface bs(TopoDS::Face(face));
-        if (bs.GetType() == GeomAbs_Plane) return false;
+        if (bs.GetType() == GeomAbs_Plane) return 0;
     } catch (...) {}
     for (const auto& f : m_generatedFaces) {
-        if (f.IsSame(face)) return true;
+        if (f.IsSame(face)) return 2;   // exact identity on the live body
     }
     // Geometric fallback for when the body's faces were rebuilt (e.g. after a
-    // replay) and are no longer IsSame to the stored ones.
+    // replay) and are no longer IsSame to the stored ones — a WEAKER match, so
+    // an exact owner elsewhere in history wins over this (#49).
     gp_Pnt q;
-    if (!faceCenter(TopoDS::Face(face), q)) return false;
+    if (!faceCenter(TopoDS::Face(face), q)) return 0;
     for (const auto& f : m_generatedFaces) {
         gp_Pnt p;
-        if (faceCenter(TopoDS::Face(f), p) && p.Distance(q) < 1e-4) return true;
+        if (faceCenter(TopoDS::Face(f), p) && p.Distance(q) < 1e-4) return 1;
     }
-    return false;
+    return 0;
 }

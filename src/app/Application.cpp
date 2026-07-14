@@ -2160,15 +2160,21 @@ void Application::handleToolAction(int action) {
             // Remember which body's face was clicked — the edit path uses it to
             // detect a baked feature (clicked body doesn't change after edit).
             m_edgeOpPickedBodyId = pickedBodyId;
+            // Edit the op that BEST owns the picked face — highest
+            // ownsFaceScore (exact IsSame beats the geometric fallback), latest
+            // on ties. The old first-match loop opened an earlier fuzzy
+            // over-matching fillet instead of the actual chamfer under the
+            // cursor (#49); the Toolbar's button uses the same rule.
             const auto& ops = m_history->operations();
+            int bestI = -1, bestScore = 0;
             for (int i = 0; i < static_cast<int>(ops.size()); ++i) {
                 const auto& op = ops[i];
-                if (op && op->isEnabled() && op->ownsFace(pickedFace) &&
-                    (op->typeId() == "fillet" || op->typeId() == "chamfer")) {
-                    beginInteractiveEdgeOpEdit(i);
-                    break;
-                }
+                if (!op || !op->isEnabled()) continue;
+                if (op->typeId() != "fillet" && op->typeId() != "chamfer") continue;
+                int sc = op->ownsFaceScore(pickedFace);
+                if (sc > 0 && sc >= bestScore) { bestScore = sc; bestI = i; }
             }
+            if (bestI >= 0) beginInteractiveEdgeOpEdit(bestI);
             break;
         }
 

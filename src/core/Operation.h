@@ -38,6 +38,18 @@ public:
     // it so the user can re-edit it. Default: operations own no faces.
     virtual bool ownsFace(const TopoDS_Shape& /*face*/) const { return false; }
 
+    // Match QUALITY for the Edit Fillet/Chamfer picker: 0 = not owned,
+    // 2 = exact (the face IsSame one of this op's generated faces on the live
+    // body), 1 = a post-rebuild geometric-centre fallback match. The picker
+    // prefers the highest score so a fuzzy over-match from an unrelated op
+    // (e.g. a big multi-edge fillet whose blend sits near a later countersink
+    // chamfer) can't steal a face its true owner claims exactly — the old
+    // first-op-in-history-wins loop mis-attributed exactly that case (#49).
+    // Default mirrors ownsFace() so non-fillet/chamfer ops need no override.
+    virtual int ownsFaceScore(const TopoDS_Shape& face) const {
+        return ownsFace(face) ? 1 : 0;
+    }
+
     // Report the body changes this op made, read from its stored undo data.
     // Non-destructive (unlike undo()). Default: no body changes (e.g. a sketch
     // edit). Used to persist the operation history in the project file.

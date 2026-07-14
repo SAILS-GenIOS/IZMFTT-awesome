@@ -44,6 +44,7 @@ public:
     void renderProperties() override;
     std::string typeId() const override { return "fillet"; }
     bool ownsFace(const TopoDS_Shape& face) const override;
+    int ownsFaceScore(const TopoDS_Shape& face) const override;
     OperationDiff captureDiff() const override;
     std::vector<int> plannedBodyIds() const override { return {m_bodyId}; }
     std::string serializeParams() const override;

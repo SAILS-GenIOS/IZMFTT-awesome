@@ -438,15 +438,22 @@ void ChamferOp::refreshGeneratedFaces(const TopoDS_Shape& currentBody) {
 }
 
 bool ChamferOp::ownsFace(const TopoDS_Shape& face) const {
-    if (face.IsNull() || face.ShapeType() != TopAbs_FACE) return false;
+    return ownsFaceScore(face) > 0;
+}
+
+int ChamferOp::ownsFaceScore(const TopoDS_Shape& face) const {
+    if (face.IsNull() || face.ShapeType() != TopAbs_FACE) return 0;
+    // (No plane rejection here, unlike FilletOp: a chamfer bevel IS a flat
+    // plane — rejecting planes would make chamfers un-editable.)
     for (const auto& f : m_generatedFaces) {
-        if (f.IsSame(face)) return true;
+        if (f.IsSame(face)) return 2;   // exact identity on the live body
     }
+    // Weaker geometric fallback (post-rebuild) — an exact owner wins over it (#49).
     gp_Pnt q;
-    if (!faceCenter(TopoDS::Face(face), q)) return false;
+    if (!faceCenter(TopoDS::Face(face), q)) return 0;
     for (const auto& f : m_generatedFaces) {
         gp_Pnt p;
-        if (faceCenter(TopoDS::Face(f), p) && p.Distance(q) < 1e-4) return true;
+        if (faceCenter(TopoDS::Face(f), p) && p.Distance(q) < 1e-4) return 1;
     }
-    return false;
+    return 0;
 }
